@@ -199,12 +199,12 @@ object Terminal:
     final private[uic] case class Props(
         welcomeMessageV: Maybe[TextValue] = Absent,
         promptV: String = "$",
-        commandsSlot: Slot[Seq[TerminalCommand]] = Slot[Seq[TerminalCommand]](),
+        commandsSlot: Controlled[Seq[TerminalCommand]] = Controlled[Seq[TerminalCommand]](),
         handlerF: Maybe[String => String < Async] = Absent,
         access: Accessibility = Accessibility.none
     )
 
     private val commandsName =
-        Slot.Name("Terminal", "the history", "a command", "onCommandsChange", consequence = "the reader's commit reaches nobody")
+        Controlled.Name("Terminal", "the history", "a command", "onCommandsChange", consequence = "the reader's commit reaches nobody")
     def apply(): Terminal = new Terminal(Props())
 end Terminal

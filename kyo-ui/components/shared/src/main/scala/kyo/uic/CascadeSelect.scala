@@ -133,7 +133,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val p: CascadeSelect.Pro
     def onOpenChange(f: Boolean => UI.Action)(using Frame): CascadeSelect[A] = new CascadeSelect(p.copy(openSlot = openSlot.hear(f)))
 
     /** Asks for the panel open or closed: a two-way binding is written, then the change reported. */
-    private def askOpen(open: Slot[Boolean], v: Boolean)(using Frame): UI.Action = open.change(v)
+    private def askOpen(open: Controlled[Boolean], v: Boolean)(using Frame): UI.Action = open.change(v)
 
     /** A panel bound closed by a constant nobody hears: nothing the reader does may open it. */
     private def openFixedShut: Boolean = openSlot.fixedAt(false)
@@ -545,7 +545,7 @@ object CascadeSelect:
         labelF: A => String,
         keyF: Maybe[A => String] = Absent,
         choice: Maybe[SingleChoice[A]] = Absent,
-        openSlot: Slot[Boolean] = Slot(),
+        openSlot: Controlled[Boolean] = Controlled(),
         placeholderV: Maybe[TextValue] = Absent,
         disabledFlag: Boolean = false,
         nameV: Maybe[String] = Absent,
@@ -563,8 +563,8 @@ object CascadeSelect:
         itemSources: List[LiveEntry[CascadeItem[A], Unit]] = Nil
     )
 
-    private val openName      = Slot.Name("CascadeSelect", "the panel", "an open or a close", "onOpenChange")
-    private val selectionName = Slot.Name("CascadeSelect", "the selection", "a pick", "onChange or onPick")
+    private val openName      = Controlled.Name("CascadeSelect", "the panel", "an open or a close", "onOpenChange")
+    private val selectionName = Controlled.Name("CascadeSelect", "the selection", "a pick", "onChange or onPick")
 
     def apply[A](): CascadeSelect[A] = new CascadeSelect[A](Props(Nil, _.toString))
 
@@ -572,7 +572,7 @@ object CascadeSelect:
       * open groups the nested panels ride on, and the keyboard focus path.
       */
     final private[uic] case class Wired(
-        open: Slot[Boolean],
+        open: Controlled[Boolean],
         submenus: Submenus.View,
         focusRef: Anchored.View[List[Int]],
         focus: List[Int],

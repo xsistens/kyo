@@ -314,7 +314,7 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
         // The host reads the selection in its own region; options it hands over are fixed, so this adds no region, and a
         // signal among them is still read rather than dropped.
         validity.follow(OptionItem.reading(optionSources).render(opts =>
-            new Listbox(p.copy(optionsV = opts)).body(sel, query, Slot(), hi, access.id, focused)(validity)
+            new Listbox(p.copy(optionsV = opts)).body(sel, query, Controlled(), hi, access.id, focused)(validity)
         ))
     end resolved
 
@@ -364,7 +364,7 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
 
     /** The selection/query subscriptions around one [[body]] render. */
     private def subscribed(
-        q: Slot[String],
+        q: Controlled[String],
         hiRef: Maybe[SignalRef[Int]],
         idBase: Maybe[String],
         validity: FieldValidity
@@ -376,7 +376,7 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
         val query = ReactiveValue.orElse(shown, "")
         val hi    = ReactiveValue.orElse(hiRef, -1)
         validity.follow(sel.and(query).and(hi).and(OptionItem.reading(optionSources)).render { case (((s, qv), h), opts) =>
-            new Listbox(this.p.copy(optionsV = opts)).body(s, qv, if shown.isDefined then q else Slot(), hiRef, idBase, h)(validity)
+            new Listbox(this.p.copy(optionsV = opts)).body(s, qv, if shown.isDefined then q else Controlled(), hiRef, idBase, h)(validity)
         })
     end subscribed
 
@@ -384,7 +384,7 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
       * subscribe where the switch is a constant `false`. A signal switch is folded in here rather than read in a region
       * of its own, so switching it over an empty query emits nothing and repaints nothing.
       */
-    private def shownQuery(slot: Slot[String])(using Frame): Maybe[Signal[String]] =
+    private def shownQuery(slot: Controlled[String])(using Frame): Maybe[Signal[String]] =
         slot.binding.flatMap { qv =>
             val q = qv.signal
             filterOn match
@@ -397,7 +397,7 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
     private def body(
         sel: Set[K],
         query: String,
-        qSlot: Slot[String],
+        qSlot: Controlled[String],
         hiRef: Maybe[SignalRef[Int]],
         idBase: Maybe[String],
         hi: Int = -1
@@ -618,7 +618,7 @@ object Listbox:
         selectionModeV: SelectionMode = SelectionMode.None,
         metaKeyFlag: Boolean = false,
         selectedRef: Maybe[SetBinding[K]] = Absent,
-        filterQuerySlot: Slot[String] = Slot(),
+        filterQuerySlot: Controlled[String] = Controlled(),
         filterableV: Maybe[BoolValue] = Absent,
         onItemClickF: Maybe[K => UI.Action] = Absent,
         templateF: Maybe[ListItem[K] => UI] = Absent,
@@ -633,8 +633,8 @@ object Listbox:
         hostKeyF: Maybe[UI.KeyboardEvent => Maybe[Listbox.HostKey]] = Absent
     )
 
-    private val selectionName = Slot.Name("Listbox", "the selection", "a click", "onChange")
-    private val queryName     = Slot.Name("Listbox", "the filter query", "the reader type", "onFilterQueryChange")
+    private val selectionName = Controlled.Name("Listbox", "the selection", "a click", "onChange")
+    private val queryName     = Controlled.Name("Listbox", "the filter query", "the reader type", "onFilterQueryChange")
 
     def apply[K](): Listbox[K] = new Listbox[K](Props())
 

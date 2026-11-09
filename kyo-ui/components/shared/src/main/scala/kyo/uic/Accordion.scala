@@ -149,7 +149,7 @@ final class Accordion[K] private[uic] (private[uic] val p: Accordion.Props[K]) e
       */
     @targetName("valueMultiple")
     def value(v: Set[K] | Signal[Set[K]]): MultipleAccordion[K] =
-        new MultipleAccordion(new Accordion(p.copy(singleSlot = Slot[Maybe[K]](), multiSlot = multiSlot.bind(v))))
+        new MultipleAccordion(new Accordion(p.copy(singleSlot = Controlled[Maybe[K]](), multiSlot = multiSlot.bind(v))))
 
     /** Fired with the panel now open (`Absent` once all are closed) after a header click, after a two-way [[value]] is
       * written and before [[onToggle]].
@@ -369,12 +369,12 @@ object Accordion:
         // The panels `body` draws, resolved from `panelSources` by the render.
         panelList: List[AccordionPanel[K]] = Nil,
         panelSources: List[AccordionPanelLiveEntry[K]] = Nil,
-        singleSlot: Slot[Maybe[K]] = Slot[Maybe[K]](),
-        multiSlot: Slot[Set[K]] = Slot[Set[K]](),
+        singleSlot: Controlled[Maybe[K]] = Controlled[Maybe[K]](),
+        multiSlot: Controlled[Set[K]] = Controlled[Set[K]](),
         onToggleF: Maybe[K => UI.Action] = Absent
     )
 
-    private val valueName        = Slot.Name("Accordion", "the open panels", "a click", "onValueChange")
+    private val valueName        = Controlled.Name("Accordion", "the open panels", "a click", "onValueChange")
     def apply[K](): Accordion[K] = new Accordion[K](Props())
 end Accordion
 

@@ -384,7 +384,7 @@ object Galleria:
         // The images `body` draws, resolved from `itemSources` by the render.
         itemList: List[GalleriaItem] = Nil,
         itemSources: List[GalleriaItemLiveEntry] = Nil,
-        activeSlot: Slot[Int] = Slot(),
+        activeSlot: Controlled[Int] = Controlled(),
         itemTemplateF: Maybe[GalleriaItem => UI] = Absent,
         thumbnailTemplateF: Maybe[GalleriaItem => UI] = Absent,
         circularFlag: Boolean = false,
@@ -394,6 +394,6 @@ object Galleria:
         showThumbnailNavigatorsFlag: Boolean = true
     )
 
-    private val activeName = Slot.Name("Galleria", "the active image", "a navigation", "onActiveIndexChange")
+    private val activeName = Controlled.Name("Galleria", "the active image", "a navigation", "onActiveIndexChange")
     def apply(): Galleria  = new Galleria(Props())
 end Galleria

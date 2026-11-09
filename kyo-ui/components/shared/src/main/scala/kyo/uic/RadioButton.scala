@@ -68,7 +68,7 @@ final class RadioButton private[uic] (private[uic] val p: RadioButton.Props) ext
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(validityV)
         // Unbound, the box keeps its own state, which starts off: a ref it owns for as long as it is shown.
-        val field = validity.follow(Slot.owning(
+        val field = validity.follow(Controlled.owning(
             checkedSlot,
             start = false
         )(s => new RadioButton(this.p.copy(checkedSlot = s)).drawn(validity)))
@@ -83,7 +83,7 @@ final class RadioButton private[uic] (private[uic] val p: RadioButton.Props) ext
       * readable, with nothing to toggle.
       */
     private def drawn(validity: FieldValidity)(using Frame): UI =
-        Slot.drawField(checkedSlot, unbound = false)(f =>
+        Controlled.drawField(checkedSlot, unbound = false)(f =>
             (if f.fixed then new RadioButton(p.copy(readonlyFlag = Present(true))) else this).body(f.value, f.native, f.edit, validity)
         )
 
@@ -147,7 +147,7 @@ object RadioButton:
     final private[uic] case class Props(
         labelText: Maybe[String] = Absent,
         groupName: Maybe[String] = Absent,
-        checkedSlot: Slot[Boolean] = Slot(),
+        checkedSlot: Controlled[Boolean] = Controlled(),
         disabledFlag: Maybe[BoolValue] = Absent,
         readonlyFlag: Maybe[Boolean] = Absent,
         requiredFlag: Maybe[Boolean] = Absent,
@@ -159,7 +159,7 @@ object RadioButton:
         onBlurF: Maybe[Boolean => UI.Action] = Absent
     )
 
-    private val checkedName = Slot.Name("RadioButton", "checked", "a change", "onChange")
+    private val checkedName = Controlled.Name("RadioButton", "checked", "a change", "onChange")
 
     def apply(): RadioButton             = new RadioButton(Props())
     def apply(text: String): RadioButton = new RadioButton(Props(labelText = Present(text)))

@@ -105,7 +105,7 @@ object SplitButton:
         disabledFlag: Prop[Boolean] = false,
         dropdownIconV: Maybe[IconGlyph] = Absent,
         entriesV: List[MenuItemLiveEntry] = Nil,
-        openSlot: Slot[Boolean] = Slot(start = Present(false)),
+        openSlot: Controlled[Boolean] = Controlled(start = Present(false)),
         onClickEff: Maybe[UI.Action] = Absent
     ) derives CanEqual
 
@@ -117,7 +117,7 @@ object SplitButton:
     /** An empty split button; add an icon and items via the setters. */
     def apply(): SplitButton = new SplitButton(Props())
 
-    private val openName = Slot.Name("SplitButton", "the menu", "a toggle or a pick", "onOpenChange")
+    private val openName = Controlled.Name("SplitButton", "the menu", "a toggle or a pick", "onOpenChange")
 
     /** What of the props builds the two segments and has no channel of its own, read as one value: no hearer and no click is in
       * it, so a run that only brings new ones leaves it equal and draws nothing again.

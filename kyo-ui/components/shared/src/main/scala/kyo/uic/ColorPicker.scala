@@ -111,7 +111,7 @@ final class ColorPicker private[uic] (private[uic] val p: ColorPicker.Props) ext
     // that holds it. An overlay picker keeps its panel state in the same mount.
     private[uic] def render(using Frame): UI =
         if inlineFlag then
-            Slot.owningFrom(valueSlot, unbound = ColorPicker.DefaultHex, on = BoolValue.Const(interactive))(s =>
+            Controlled.owningFrom(valueSlot, unbound = ColorPicker.DefaultHex, on = BoolValue.Const(interactive))(s =>
                 new ColorPicker(this.p.copy(valueSlot = s)).resolved
             )
         else
@@ -440,7 +440,7 @@ end ColorPicker
 
 object ColorPicker:
     final private[uic] case class Props(
-        valueSlot: Slot[String] = Slot(),
+        valueSlot: Controlled[String] = Controlled(),
         // An overlay picker's open state, which the mount around it allocates beside the value.
         panelV: Maybe[Panel] = Absent,
         inlineFlag: Boolean = false,
@@ -451,7 +451,7 @@ object ColorPicker:
         onBlurF: Maybe[String => UI.Action] = Absent
     )
 
-    private val valueName = Slot.Name("ColorPicker", "value", "a change", "onChange")
+    private val valueName = Controlled.Name("ColorPicker", "value", "a change", "onChange")
 
     /** The two refs an overlay picker owns: whether the panel is open, and the colour it opened
       * with, which is what Escape puts back. They travel together because the confirm/cancel pair
@@ -460,7 +460,7 @@ object ColorPicker:
     final private[uic] case class Panel(open: SignalRef[Boolean], opened: SignalRef[String])
 
     /** A color picker whose hex value binds two-way to `ref`. */
-    def apply(ref: SignalRef[String]): ColorPicker = new ColorPicker(Props(valueSlot = Slot().bind(ref)))
+    def apply(ref: SignalRef[String]): ColorPicker = new ColorPicker(Props(valueSlot = Controlled().bind(ref)))
 
     /** An unbound color picker; set the value via [[ColorPicker.value]]. */
     def apply(): ColorPicker = new ColorPicker(Props())

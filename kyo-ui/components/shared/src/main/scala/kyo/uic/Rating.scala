@@ -154,7 +154,7 @@ final class Rating private[uic] (private[uic] val p: Rating.Props) extends Node,
     // Bound one way the native radios follow the signal, so kyo-ui puts back a star the owner does not take; the visual layer is
     // drawn from it. A constant somebody hears is the same, and a constant nobody hears is fixed (drawn read-only).
     private def renderResolved(validity: FieldValidity)(using Frame): UI =
-        Slot.drawField(valueSlot, unbound = 0)(f => body(f.value, validity, f.native))
+        Controlled.drawField(valueSlot, unbound = 0)(f => body(f.value, validity, f.native))
 
     private def body(value: Int, validity: FieldValidity, native: Int | Signal[Int])(using Frame): UI =
         // The radio a Tab lands on, which is where the caller's id goes: the group itself takes no
@@ -180,7 +180,7 @@ final class Rating private[uic] (private[uic] val p: Rating.Props) extends Node,
             // press on the visible star reaches only the option, since the radio is clipped away),
             // so it is the one that acts.
             var hidden = radio
-                .checked(Slot.mapNative[Int, Boolean](native)(_ == i))
+                .checked(Controlled.mapNative[Int, Boolean](native)(_ == i))
                 .jsProp("value", i.toString)
                 .aria("label", if i == 1 then "1 star" else s"$i stars")
             // Unnamed (the page as first rendered, before the mount mints a name), the browser does not
@@ -234,7 +234,7 @@ end Rating
 
 object Rating:
     final private[uic] case class Props(
-        valueSlot: Slot[Int] = Slot(),
+        valueSlot: Controlled[Int] = Controlled(),
         starsV: Int = 5,
         readonlyFlag: Boolean = false,
         disabledFlag: Maybe[BoolValue] = Absent,
@@ -251,5 +251,5 @@ object Rating:
     /** The whole stars of the number family's `Double`. */
     private def stars(d: Double): Int = math.rint(d).toInt
 
-    private val valueName = Slot.Name("Rating", "value", "a change", "onChange")
+    private val valueName = Controlled.Name("Rating", "value", "a change", "onChange")
 end Rating

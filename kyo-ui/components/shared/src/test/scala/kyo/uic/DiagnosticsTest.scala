@@ -86,7 +86,7 @@ class DiagnosticsTest extends UicTest:
     }
 
     "the diagnoses" - {
-        val name = Slot.Name("X", "the thing", "a press", "onThing")
+        val name = Controlled.Name("X", "the thing", "a press", "onThing")
 
         "the template names the subject, the gesture and the event" in {
             assert(name.advice ==
@@ -98,12 +98,12 @@ class DiagnosticsTest extends UicTest:
         }
 
         "unheard fires for a signal nobody hears, while the switch is on, and only then" in {
-            val deaf = Slot[Int]().bind(Signal.initConst(1))
+            val deaf = Controlled[Int]().bind(Signal.initConst(1))
             assert(Diagnostic.unheard(deaf, name).when)
             assert(!Diagnostic.unheard(deaf, name, on = false).when)
             assert(!Diagnostic.unheard(deaf.heardToo, name).when)
             assert(!Diagnostic.unheard(deaf.quieted, name).when)
-            assert(!Diagnostic.unheard(Slot[Int]().bind(1), name).when)
+            assert(!Diagnostic.unheard(Controlled[Int]().bind(1), name).when)
         }
 
         "naming fires when there is something to name" in {

@@ -83,7 +83,7 @@ object ToggleButton:
       * `onBlur` and `content` are written by hand, and the fields marked `@noSetter` by hosts and the shared traits.
       */
     final private[uic] case class Props(
-        checked: Slot[Boolean] = Slot(start = Present(false)),
+        checked: Controlled[Boolean] = Controlled(start = Present(false)),
         /** Label while checked (Prime default "Yes"). A signal patches the label in place. */
         onLabel: Opt[Prop[String]] = "Yes",
         /** Label while unchecked (Prime default "No"). A signal patches the label in place. */
@@ -113,7 +113,7 @@ object ToggleButton:
 
     def apply(): ToggleButton = new ToggleButton(Props())
 
-    private val checkedName = Slot.Name("ToggleButton", "checked", "a change", "onChange")
+    private val checkedName = Controlled.Name("ToggleButton", "checked", "a change", "onChange")
 
     /** What of the props builds the button and has no channel of its own, read as one value: no hearer is in it, so a run
       * that only brings new hearers leaves it equal and draws nothing again.

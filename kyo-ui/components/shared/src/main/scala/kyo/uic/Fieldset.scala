@@ -66,7 +66,7 @@ final class Fieldset private[uic] (private[uic] val p: Fieldset.Props) extends N
 
     private[uic] def render(using Frame): UI =
         // Unbound, a toggleable fieldset keeps its collapse state itself, starting expanded.
-        Slot.draw(collapsedSlot, Fieldset.collapsedName, start = false, on = toggleOn)(s =>
+        Controlled.draw(collapsedSlot, Fieldset.collapsedName, start = false, on = toggleOn)(s =>
             new Fieldset(this.p.copy(collapsedSlot = s)).body
         )
 
@@ -162,12 +162,12 @@ object Fieldset:
     final private[uic] case class Props(
         legendV: Maybe[TextValue] = Absent,
         toggleableV: Maybe[BoolValue] = Absent,
-        collapsedSlot: Slot[Boolean] = Slot(),
+        collapsedSlot: Controlled[Boolean] = Controlled(),
         access: Accessibility = Accessibility.none,
         kids: List[UI] = Nil
     )
 
     def apply(): Fieldset = new Fieldset(Props())
 
-    private val collapsedName = Slot.Name("Fieldset", "the collapse state", "a press", "onCollapsedChange")
+    private val collapsedName = Controlled.Name("Fieldset", "the collapse state", "a press", "onCollapsedChange")
 end Fieldset

@@ -128,7 +128,7 @@ end InputMask
 object InputMask:
     final private[uic] case class Props(
         maskV: String,
-        valueSlot: Slot[String] = Slot(),
+        valueSlot: Controlled[String] = Controlled(),
         placeholderText: Maybe[TextValue] = Absent,
         disabledFlag: Maybe[BoolValue] = Absent,
         readonlyFlag: Maybe[BoolValue] = Absent,

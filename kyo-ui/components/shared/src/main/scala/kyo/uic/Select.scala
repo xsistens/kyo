@@ -321,7 +321,7 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
     /** Clears the query for a new open while the filter is on. While it is off the query is not the panel's to touch,
       * so switching the filter back on finds it as it was.
       */
-    private def freshQuery(q: Slot[String])(using Frame): UI.Action =
+    private def freshQuery(q: Controlled[String])(using Frame): UI.Action =
         val fresh: UI.Action = q.change("")
         filterOn match
             case BoolValue.Dyn(on)     => on.current.map(isOn => if isOn then fresh else (): UI.Action)
@@ -334,11 +334,11 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
 
     /** The wired interaction state, allocated per mount. */
     final private case class Wired(
-        open: Slot[Boolean],
+        open: Controlled[Boolean],
         isOpen: Boolean,
         hi: SignalRef[Int],
         hiV: Int,
-        q: Slot[String],
+        q: Controlled[String],
         qV: String,
         /** Whether the filter is on. Read only while the panel is open: closed, `false` stands in for a switch that
           * is not subscribed, and the trigger's role follows the switch itself.
@@ -403,7 +403,7 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
     /** [[wired]] over the panel and query state however they are bound. */
     private def wiredOver(
         hi: SignalRef[Int],
-        q: Slot[String],
+        q: Controlled[String],
         base: Maybe[String]
     )(using Frame): UI =
         val validity = FieldValidity(validityV)
@@ -825,11 +825,11 @@ object Select:
         optionDisabledF: Maybe[A => Boolean] = Absent,
         choice: Maybe[SingleChoice[A]] = Absent,
         itemTemplateF: Maybe[A => UI] = Absent,
-        openSlot: Slot[Boolean] = Slot(),
+        openSlot: Controlled[Boolean] = Controlled(),
         placeholderV: Maybe[TextValue] = Absent,
         filterableV: Maybe[BoolValue] = Absent,
         filterF: Maybe[(A, String) => Boolean] = Absent,
-        filterQuerySlot: Slot[String] = Slot(),
+        filterQuerySlot: Controlled[String] = Controlled(),
         showClearFlag: Boolean = false,
         checkmarkFlag: Boolean = false,
         emptyContentV: Maybe[EmptyContent] = Absent,
@@ -855,9 +855,9 @@ object Select:
         optionSources: List[OptionSource[A]] = Nil
     )
 
-    private val openName      = Slot.Name("Select", "the panel", "an open or a close", "onOpenChange")
-    private val queryName     = Slot.Name("Select", "the filter query", "the reader type", "onFilterQueryChange")
-    private val selectionName = Slot.Name("Select", "the selection", "a pick", "onChange or onPick")
+    private val openName      = Controlled.Name("Select", "the panel", "an open or a close", "onOpenChange")
+    private val queryName     = Controlled.Name("Select", "the filter query", "the reader type", "onFilterQueryChange")
+    private val selectionName = Controlled.Name("Select", "the selection", "a pick", "onChange or onPick")
 
     def apply[A](): Select[A] = new Select[A](Props(Nil, _.toString))
 end Select

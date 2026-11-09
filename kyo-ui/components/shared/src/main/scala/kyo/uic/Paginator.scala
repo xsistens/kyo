@@ -63,7 +63,7 @@ final class Paginator private[uic] (private[uic] val p: Paginator.Props) extends
     /** Package-internal: a host that owns the page size hands a constant one, dropping any binding a caller made, since
       * a dropdown writing a ref the host does not page by would page a list nobody is looking at.
       */
-    private[uic] def fixedRows(n: Int): Paginator = new Paginator(p.copy(rows = Slot[Int]().bind(math.max(1, n))))
+    private[uic] def fixedRows(n: Int): Paginator = new Paginator(p.copy(rows = Controlled[Int]().bind(math.max(1, n))))
 
     /** The 0-based page index (clamped at render).
       *
@@ -143,11 +143,11 @@ final class Paginator private[uic] (private[uic] val p: Paginator.Props) extends
       * event the caller set on the paginator itself stays where the host has none.
       */
     private[uic] def hostPage(v: ReactiveValue[Int], report: Maybe[Int => UI.Action]): Paginator =
-        new Paginator(p.copy(page = Slot(Present(v.bound), report.orElse(p.page.hearer))))
+        new Paginator(p.copy(page = Controlled(Present(v.bound), report.orElse(p.page.hearer))))
 
     /** Package-internal: a host that owns the page size hands its binding over, with its own event and that event's name. */
     private[uic] def hostRows(v: ReactiveValue[Int], report: Maybe[Int => UI.Action], eventName: String): Paginator =
-        new Paginator(p.copy(rows = Slot(Present(v.bound), report.orElse(p.rows.hearer)), rowsEventName = eventName))
+        new Paginator(p.copy(rows = Controlled(Present(v.bound), report.orElse(p.rows.hearer)), rowsEventName = eventName))
 
     /** What the rows-per-page dropdown runs on a pick of `n`. */
     private[uic] def rowsPicked(n: Int)(using Frame): UI.Action = Paginator.rowsPicked(p, n)
@@ -172,8 +172,8 @@ end Paginator
 object Paginator:
     final private[uic] case class Props(
         total: Prop[Int] = 0,
-        rows: Slot[Int] = Slot(start = Present(1)),
-        page: Slot[Int] = Slot(start = Present(0)),
+        rows: Controlled[Int] = Controlled(start = Present(1)),
+        page: Controlled[Int] = Controlled(start = Present(0)),
         currentPage: Maybe[Int] = Absent,
         pageLinkSize: Prop[Int] = 5,
         rowsPerPageOptions: List[Int] = Nil,
@@ -185,7 +185,7 @@ object Paginator:
         rowsEventName: String = "onRowsChange"
     ) derives CanEqual
 
-    private val pageName   = Slot.Name("Paginator", "page", "a click", "onPageChange")
+    private val pageName   = Controlled.Name("Paginator", "page", "a click", "onPageChange")
     def apply(): Paginator = new Paginator(Props())
 
     private def totalPages(total: Int, rows: Int): Int = math.max(1, (total + rows - 1) / rows)
@@ -425,7 +425,7 @@ object Paginator:
                 Diagnostic(!b.hosted && b.pageDeaf, pageName.advice),
                 Diagnostic(
                     b.options.nonEmpty && layout.contains(PaginatorElement.RowsPerPageDropdown) && b.rowsDeaf,
-                    Slot.Name("Paginator", "rows", "a pick", b.rowsEventName).advice
+                    Controlled.Name("Paginator", "rows", "a pick", b.rowsEventName).advice
                 )
             ).toList
 

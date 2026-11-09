@@ -116,7 +116,7 @@ final class Knob private[uic] (private[uic] val p: Knob.Props) extends Node, Num
     private[uic] def render(using Frame): UI =
         // A constant nobody hears is fixed: drawn read-only. Unbound, the knob keeps where the reader turns it itself.
         if valueSlot.fixed && !readonlyFlag then new Knob(p.copy(readonlyFlag = true)).render
-        else Slot.owning(valueSlot, start = minV)(s => new Knob(this.p.copy(valueSlot = s)).renderLive)
+        else Controlled.owning(valueSlot, start = minV)(s => new Knob(this.p.copy(valueSlot = s)).renderLive)
 
     private def renderLive(using Frame): UI =
         val validity = FieldValidity(validityV)
@@ -233,7 +233,7 @@ end Knob
 
 object Knob:
     final private[uic] case class Props(
-        valueSlot: Slot[Double] = Slot(),
+        valueSlot: Controlled[Double] = Controlled(),
         minV: Double = 0.0,
         maxV: Double = 100.0,
         stepV: Double = 1.0,
@@ -254,7 +254,7 @@ object Knob:
 
     def apply(): Knob = new Knob(Props())
 
-    private val valueName = Slot.Name("Knob", "value", "a change", "onChange")
+    private val valueName = Controlled.Name("Knob", "value", "a change", "onChange")
 
     // === Prime's dial math (pure) =============================================
     // 240° sweep: zero at 4π/3 (lower left), full at −π/3 (lower right), radius
