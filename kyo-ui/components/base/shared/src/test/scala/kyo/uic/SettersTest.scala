@@ -66,6 +66,12 @@ class SettersTest extends kyo.test.Test[Any]:
         )
     }
 
+    "a generated setter's type keeps the names Prop and UI.Action, as the IDE and a compile error show it" in {
+        typeCheckFailure("""val s: Int = kyo.uic.SettersTest.Thing().count""")("Prop[Int] =>")
+        typeCheckFailure("""val s: Int = kyo.uic.SettersTest.Thing().onCountChange""")("Int => kyo.UI.Action")
+        typeCheckFailure("""val s: Int = kyo.uic.SettersTest.Thing().onPick""")("Int => kyo.UI.Action")
+    }
+
     "an event setter takes only a function of its field's value" in {
         typeCheckFailure("""kyo.uic.SettersTest.Thing().onCountChange((s: String) => kyo.Kyo.unit)""")
     }
