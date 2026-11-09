@@ -23,8 +23,8 @@ class FormControlTest extends UicTest:
     }
 
     "no setter of that name, or of another type, is no HasSetter" in {
-        typeCheckFailure("""summon[kyo.HasSetter[kyo.uic.ToggleButton, "nope", kyo.UI.Prop[Boolean]]]""")
-        typeCheckFailure("""summon[kyo.HasSetter[kyo.uic.ToggleButton, "checked", kyo.UI.Prop[String]]]""")
+        typeCheckFailure("""summon[kyo.uic.HasSetter[kyo.uic.ToggleButton, "nope", kyo.UI.Prop[Boolean]]]""")
+        typeCheckFailure("""summon[kyo.uic.HasSetter[kyo.uic.ToggleButton, "checked", kyo.UI.Prop[String]]]""")
     }
 
 end FormControlTest
