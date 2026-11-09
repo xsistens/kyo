@@ -274,7 +274,14 @@ class PasswordTest extends ReactiveValueContract:
         for
             tick <- Signal.initRef(0)
             ui = UI.div(tick.render(n => UI.div(uic.Password().feedback(true).placeholder(s"run $n"))))
-            after <- publishedAfterReady(ui, _ => true, until = t => elementsWithClass(t, "p-password-input").map(_.nonEmpty))(
+            // What the instance draws again after the host's run holds the field and the meter; a tree holding only the field
+            // (the field's own unit can publish first) says nothing about the meter yet.
+            drawnWhole = (t: UI) =>
+                for
+                    field <- elementsWithClass(t, "p-password-input")
+                    meter <- elementsWithClass(t, "p-password-meter-text")
+                yield field.nonEmpty && meter.nonEmpty
+            after <- publishedAfterReady(ui, _ => true, until = drawnWhole)(
                 t => textField(t, "p-password-input").map(typed(_, "abcDEF12", commit = false)),
                 _ => setSettled(tick, 1)
             )
