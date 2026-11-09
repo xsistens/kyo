@@ -203,10 +203,10 @@ object Password:
         val shown: Prop[String] = b.text.getOrElse("")
         val eye                 = if b.toggleMask then reveal else Absent
 
-        // === the field (Input carries the shared text-field contract) ===========
-        // The wrapper's `p-inputwrapper-filled` follows the text the field holds: kyo-ui's client toggles it as the reader
-        // types (the static render cannot reach the wrapper, so the class below stamps the starting text).
-        var in = Input()
+        // The field carries the shared text-field contract. The wrapper's `p-inputwrapper-filled` follows the text the field holds:
+        // kyo-ui's client toggles it as the reader types (the static render cannot reach the wrapper, so the wrapper stamps the
+        // starting text). Each hearer is read when its event comes, so it is the latest run's.
+        val in = Input()
             .extraClass("p-password-input")
             .filledOn("p-inputwrapper-filled", ".p-password")
             .size(b.size)
@@ -214,53 +214,48 @@ object Password:
             .fluid(b.fluid)
             .invalid(validity.red)
             .unheardAs("Password", "onInput or onChange")
-        in = eye match
-            case Present(r) => in.inputType(r.map(on => if on then UI.TextType.Text else UI.TextType.Password))
-            case Absent     => in.inputType(InputType.Password)
-        b.text.foreach(t => in = in.value(t))
-        // Each hearer is read when its event comes, so it is the latest run's.
-        if b.hearsInput then in = in.onInput(s => live.call(_.value.hearer).map(_.fold(Kyo.unit: UI.Action)(_(s))))
-        if b.hearsChange then in = in.onChange(s => live.call(_.onChange).map(_.fold(Kyo.unit: UI.Action)(_(s))))
-        if b.hearsBlur then in = in.onBlur(s => live.call(_.onBlur).map(_.fold(Kyo.unit: UI.Action)(_(s))))
-        in = in.withPlaceholder(b.placeholder)
-        if b.disabled then in = in.disabled(true)
-        in = in.readonly(b.readonly)
-        if b.required then in = in.required(true)
-        b.name.foreach(v => in = in.name(v))
-        b.maxLength.foreach(n => in = in.maxLength(n))
-        b.access.name.foreach(v => in = in.accessibleName(v))
-        b.access.id.foreach(v => in = in.id(v))
+            .inputType(eye.fold[InputType | Signal[UI.TextType]](InputType.Password)(
+                _.map(on => if on then UI.TextType.Text else UI.TextType.Password)
+            ))
+            .when(b.text)(_.value(_))
+            .when(b.hearsInput)(_.onInput(s => live.call(_.value.hearer).map(_.fold(Kyo.unit: UI.Action)(_(s)))))
+            .when(b.hearsChange)(_.onChange(s => live.call(_.onChange).map(_.fold(Kyo.unit: UI.Action)(_(s)))))
+            .when(b.hearsBlur)(_.onBlur(s => live.call(_.onBlur).map(_.fold(Kyo.unit: UI.Action)(_(s)))))
+            .withPlaceholder(b.placeholder)
+            .when(b.disabled)(_.disabled(true))
+            .readonly(b.readonly)
+            .when(b.required)(_.required(true))
+            .when(b.name)(_.name(_))
+            .when(b.maxLength)(_.maxLength(_))
+            .withAccessibility(b.access)
 
-        // === the eye toggle, its state classes and label channels over the reveal ==
+        // The eye: its state classes and its label are channels over the reveal. Disabled, it is silent.
         val toggle: Maybe[UI] = eye.map { r =>
-            var t = span
+            val flip: UI.Action = r.getAndUpdate(!_).unit
+            span
                 .cssClass("p-password-toggle-mask-icon")
                 .cssClass("p-password-mask-icon", r)
                 .cssClass("p-password-unmask-icon", r.map(!_))
                 .role("button")
                 .tabIndex(0)
                 .aria("label", r.map(on => if on then "Hide password" else "Show password"))
-            if !b.disabled then
-                val flip: UI.Action = r.getAndUpdate(!_).unit
-                t = t.onClick(flip).onKeyDown { e =>
+                .silent(b.disabled)
+                .onClick(flip)
+                .onKeyDown { e =>
                     e.key match
                         case Keyboard.Enter | Keyboard.Space => flip
                         case _                               => ()
-                }
-            end if
-            t(GlyphSvg(r.map(on => if on then Icons.eyeSlash else Icons.eye), "p-icon"))
+                }(GlyphSvg(r.map(on => if on then Icons.eyeSlash else Icons.eye), "p-icon"))
         }
 
-        // === wrapper root =======================================================
-        var el = div
+        val root = div
             .cssClass("p-password")
             .cssClass("p-component")
             .cssClass("p-inputwrapper")
             .cssClass("p-inputwrapper-filled", UI.reactive(shown.read.nonEmpty))
-        if b.fluid then el = el.cssClass("p-password-fluid")
-        val root = el(UI.children(in: UI, toggle)*)
+            .when(b.fluid)(_.cssClass("p-password-fluid"))(UI.children(in: UI, toggle)*)
 
-        // === inline strength meter (see the class doc for the deviation), the one region, over the text ==
+        // The inline strength meter (see the class doc for the deviation): the one region, over the text, beside the field.
         val body = if b.feedback then fragment(root, UI.reactive(meter(live, shown.read))) else root
         validity.follow(body)
     end built
@@ -294,4 +289,13 @@ object Password:
             if classes == 3 && v.length >= 8 then 3
             else if classes >= 2 && v.length >= 6 then 2
             else 1
+
+    /** The chain kyo-ui's `Element.when` gives an element, for the field Password builds from a uic [[Input]], a builder and no
+      * element: `in` with `f` applied where `cond` holds, or to the value where `v` holds one, and as it is where not. Local to
+      * Password: a `when` on [[Node]] would shadow kyo-ui's `UI.when` in the body of every component.
+      */
+    extension (in: Input)
+        private def when(cond: Boolean)(f: Input => Input): Input       = if cond then f(in) else in
+        private def when[A](v: Maybe[A])(f: (Input, A) => Input): Input = v.fold(in)(f(in, _))
+    end extension
 end Password
