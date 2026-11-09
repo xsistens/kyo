@@ -788,7 +788,6 @@ private[kyo] object HtmlRenderer:
         val pathStr     = pathAttr(path)
         val idAttr      = if baseId.nonEmpty then s""" id="${esc(baseId)}"""" else ""
         val ddAttr      = if baseId.nonEmpty then s""" data-kyo-dropdown="${esc(baseId)}"""" else " data-kyo-dropdown"
-        val disAttr     = if dd.disabled.getOrElse(false) then " data-kyo-disabled" else ""
         val evAttr      = if listens then s""" data-kyo-ev="$dropdownEvents"""" else ""
         val hidAttr     = if dd.attrs.hidden.getOrElse(false) then " hidden" else ""
         val tabAttr     = dd.attrs.tabIndex.map(n => s""" tabindex="$n"""").getOrElse("")
@@ -813,7 +812,7 @@ private[kyo] object HtmlRenderer:
         // Wrapper div
         w(
             sb,
-            s"""<div data-kyo-path="$pathStr"$idAttr$clsStr$ddAttr$evAttr$hidAttr$disAttr$tabAttr$styleStr>"""
+            s"""<div data-kyo-path="$pathStr"$idAttr$clsStr$ddAttr$evAttr$hidAttr$tabAttr$styleStr>"""
         )
         // Trigger button
         w(sb, s"""<button$triggerId type="button"$triggerDdAttr tabindex="0">$triggerLabel</button>""")
@@ -2583,12 +2582,13 @@ private[kyo] object HtmlRenderer:
            |    // not toggle under the pointer either. The click still posts, since the component has already
            |    // dropped the handler that would have acted on it.
            |    if(e.target&&e.target.closest&&e.target.closest('[data-kyo-inert]'))e.preventDefault();
-           |    // Dropdown trigger click: open/close the option list.
+           |    // Dropdown trigger click: open/close the option list. A silent dropdown (it lists no change) does not open.
            |    // Skip isTrusted=false synthetic clicks (e.g. from runSpaceClickSynthesis after Space keydown).
            |    if(e.isTrusted!==false&&e.target&&e.target.getAttribute('data-kyo-dropdown-trigger')){
            |      var did=e.target.getAttribute('data-kyo-dropdown-trigger');
            |      var opts=document.querySelector('[data-kyo-dropdown-options="'+did+'"]');
-           |      if(opts){
+           |      var twrap=e.target.closest('[data-kyo-dropdown]');
+           |      if(opts&&twrap&&__kyoListens(twrap,"change")){
            |        var opening=opts.hidden;
            |        kyoCloseDropdown(opening?did:null);
            |        opts.hidden=!opening;
@@ -2804,6 +2804,7 @@ private[kyo] object HtmlRenderer:
            |      var isOpen=opts2&&!opts2.hidden;
            |      var isSpaceKey=(e.key===' '||e.key==='Space'||e.keyCode===32||e.which===32);
            |      if(isSpaceKey&&!isOpen){
+           |        if(!__kyoListens(ddWrap,"change")){e.preventDefault();return;}
            |        kyoCloseDropdown(did2);opts2.hidden=false;
            |        var first2=opts2.querySelector('[data-kyo-dropdown-opt]');if(first2)first2.setAttribute('data-kyo-dropdown-hl','true');
            |        e.preventDefault();return;

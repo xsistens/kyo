@@ -410,11 +410,11 @@ class AttrsTest extends UITest:
             assert(quiet == heard.replace(dropdownEv, ""), s"$quiet / $heard")
             assert(follows == quiet, s"$follows / $quiet")
             assert(listens == heard, s"$listens / $heard")
-            assert(!disabled.contains("data-kyo-ev") && disabled.contains("data-kyo-disabled"), disabled)
+            assert(!disabled.contains("data-kyo-ev") && !disabled.contains("data-kyo-disabled"), disabled)
         end for
     }
 
-    "a silent dropdown's client sends no option pick, by a click or by Enter, and a listening one's does" in {
+    "a dropdown that turns silent while its list is open sends no option pick, by a click or by Enter, and a listening one's does" in {
         // Every message the page sends over its socket, recorded, so what the client forwards is seen apart from what the server
         // would do with it.
         val record =
@@ -424,8 +424,14 @@ class AttrsTest extends UITest:
             for
                 quiet <- Signal.initRef("a")
                 heard <- Signal.initRef("a")
+                mute  <- Signal.initRef(false)
             yield UI.div(
-                UI.dropdown("Alpha" -> "a", "Beta" -> "b").id("q").value(quiet).silent(true),
+                // Silent through a signal that turns on once the list is open: a silent dropdown does not open, so this is the
+                // way a pick can still be made on one.
+                UI.dropdown("Alpha" -> "a", "Beta" -> "b").id("q").value(quiet).silent(mute: Signal[Boolean]),
+                UI.button("mute").id("m").onClick(mute.set(true)),
+                UI.button("unmute").id("u").onClick(mute.set(false)),
+                mute.map(v => UI.span(s"muted:$v").id("mv")),
                 UI.dropdown("Alpha" -> "a", "Beta" -> "b").id("h").value(heard),
                 heard.map(v => UI.span(s"heard:$v").id("hv"))
             )
@@ -433,8 +439,15 @@ class AttrsTest extends UITest:
             for
                 _      <- Browser.evalDiscard(record)
                 _      <- Browser.click(Selector.id("q-trigger"))
+                _      <- Browser.click(Selector.id("m"))
+                _      <- Browser.assertText(Selector.id("mv"), "muted:true")
                 _      <- Browser.click(Selector.css("#q-options [data-kyo-dropdown-opt='1']"))
-                _      <- Browser.press(Selector.id("q-trigger"), Key.Space)
+                _      <- Browser.click(Selector.id("u"))
+                _      <- Browser.assertText(Selector.id("mv"), "muted:false")
+                _      <- Browser.click(Selector.id("q-trigger"))
+                _      <- Browser.click(Selector.id("m"))
+                _      <- Browser.assertText(Selector.id("mv"), "muted:true")
+                muted  <- Browser.evalJson[Boolean]("""!document.getElementById("q").hasAttribute("data-kyo-ev")""")
                 _      <- Browser.press(Selector.id("q-trigger"), Key.ArrowDown)
                 _      <- Browser.press(Selector.id("q-trigger"), Key.Enter)
                 silent <- changes
@@ -442,7 +455,43 @@ class AttrsTest extends UITest:
                 _      <- Browser.click(Selector.css("#h-options [data-kyo-dropdown-opt='1']"))
                 _      <- Browser.assertText(Selector.id("hv"), "heard:b")
                 heard  <- changes
-            yield assert(silent == 0 && heard == 1, s"Change messages: silent dropdown $silent, listening one ${heard - silent}")
+            yield assert(
+                muted && silent == 0 && heard == 1,
+                s"muted wrapper lists no events: $muted; Change messages: silent dropdown $silent, listening one ${heard - silent}"
+            )
+        }
+    }
+
+    "a silent or disabled dropdown's list does not open, by a click or by Space, and a listening one's does" in {
+        def shown(id: String)(using Frame) =
+            Browser.evalJson[Boolean](s"""!document.getElementById("$id-options").hidden""")
+        val app: UI < Async =
+            for
+                quiet <- Signal.initRef("a")
+                heard <- Signal.initRef("a")
+                gate  <- Signal.initRef(true)
+            yield UI.div(
+                UI.dropdown("Alpha" -> "a", "Beta" -> "b").id("q").value(quiet).silent(true),
+                UI.dropdown("Alpha" -> "a", "Beta" -> "b").id("d").value(quiet).disabled(true),
+                UI.dropdown("Alpha" -> "a", "Beta" -> "b").id("s").value(quiet).silent(gate: Signal[Boolean]),
+                UI.dropdown("Alpha" -> "a", "Beta" -> "b").id("h").value(heard)
+            )
+        withUI(app) {
+            for
+                _      <- Browser.click(Selector.id("q-trigger"))
+                qClick <- shown("q")
+                _      <- Browser.press(Selector.id("q-trigger"), Key.Space)
+                qSpace <- shown("q")
+                _      <- Browser.click(Selector.id("d-trigger"))
+                dClick <- shown("d")
+                _      <- Browser.click(Selector.id("s-trigger"))
+                sClick <- shown("s")
+                _      <- Browser.click(Selector.id("h-trigger"))
+                hClick <- shown("h")
+            yield assert(
+                !qClick && !qSpace && !dClick && !sClick && hClick,
+                s"open after: silent click $qClick, silent Space $qSpace, disabled click $dClick, signal-silent click $sClick, listening click $hClick"
+            )
         }
     }
 
