@@ -296,7 +296,7 @@ private[kyo] object EventDispatch:
                 case _             => false
         )
 
-    /** A TARGET that is inert (disabled, hidden, read-only) ignores its own handler but still lets the event
+    /** A TARGET that is inert (hidden, read-only) ignores its own handler but still lets the event
       * bubble, so this yields `true` (keep bubbling) without running `body`. Only the target is guarded: an
       * ancestor on the bubble path is not inert just because the target was.
       */
@@ -527,6 +527,10 @@ private[kyo] object EventDispatch:
       *
       * `selfPath` is this element's own path, needed because a keydown records where its activation
       * click belongs rather than acting on it here.
+      *
+      * A silent element (see [[isSilent]]) runs none of its handlers, as the target or as an element the event
+      * bubbles through, and lets the event go on as an element with no handler does. An attach is no event
+      * handler: it starts the element's lifecycle hook, which a silent element keeps.
       */
     private def dispatchToElement(
         elem: Element,
@@ -540,11 +544,43 @@ private[kyo] object EventDispatch:
     )(
         using Frame
     ): Boolean < (Async & Abort[Any]) =
+        def run = runHandlers(elem, event, isTarget, selfPath, disabledTarget, submitOrigin, enterSubmits, controlTarget)
+        event match
+            case _: UIEvent.Attach => run
+            case _                 => isSilent(elem).map(silent => if silent then true else run)
+    end dispatchToElement
+
+    /** Whether `elem` is silent right now: disabled (see [[isDisabled]]) or `silent`, each read from its channel where one is
+      * bound, else from the constant (UI.Element.silent). Read when the event arrives, so an event the client sent before the patch
+      * that silenced the element reached it finds the element silent.
+      */
+    private def isSilent(elem: Element)(using Frame): Boolean < Sync =
+        isDisabled(elem).map(off =>
+            if off then true
+            else
+                elem.attrs.silentSignal match
+                    case Present(sig) => sig.current
+                    case Absent       => elem.attrs.silent
+        )
+
+    /** [[dispatchToElement]] for an element that is not silent: runs its handlers for `event`. */
+    private def runHandlers(
+        elem: Element,
+        event: UIEvent,
+        isTarget: Boolean,
+        selfPath: Seq[String],
+        disabledTarget: Boolean,
+        submitOrigin: Boolean,
+        enterSubmits: Boolean,
+        controlTarget: Boolean
+    )(
+        using Frame
+    ): Boolean < (Async & Abort[Any]) =
         val attrs = elem.attrs
         event match
             case ev: UIEvent.Click =>
-                // Disabled or hidden elements ignore their own click handler, but allow bubbling
-                unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isHidden(elem))) {
+                // A hidden element ignores its own click handler, but allows bubbling (a disabled one is silent, see above).
+                unlessInert(isTarget, isHidden(elem)) {
                     val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position, controlTarget)
                     // The target element is the nearest one that carries a path, so `isTarget` alone would also hold
                     // for a click on a plain descendant; `self` is the client's word that it was this element.
@@ -575,8 +611,8 @@ private[kyo] object EventDispatch:
                         .andThen(keepBubbling(elem, declared))
                 }
             case ev: UIEvent.ContextMenu =>
-                // Mirrors Click: a disabled or hidden target skips its own handler but still bubbles.
-                unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isHidden(elem))) {
+                // Mirrors Click: a hidden target skips its own handler but still bubbles.
+                unlessInert(isTarget, isHidden(elem)) {
                     val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
                     invoke(attrs.onContextMenu)
                         .andThen(invokeWith(attrs.onContextMenuEvt, mouse))
@@ -613,76 +649,74 @@ private[kyo] object EventDispatch:
                     invoke(attrs.onBlur).andThen(invokeWith(attrs.onBlurEvt, mouse)).andThen(text).andThen(true)
                 else true
             case e: UIEvent.KeyDown =>
-                unlessInert(isTarget, isDisabled(elem)) {
-                    val kbEvent = UI.KeyboardEvent(
-                        key = Keyboard.fromString(e.keyboard.key),
-                        modifiers = e.keyboard.modifiers,
-                        targetId = e.keyboard.targetId
-                    )
-                    // The self handler runs first, as onClickSelf does, and only for a key on this element itself.
-                    val onSelf     = isTarget && e.keyboard.self
-                    val selfKey    = if onSelf then invokeWith(attrs.onKeyDownSelf, kbEvent) else Kyo.lift(())
-                    val keyHandler = selfKey.andThen(invokeWith(attrs.onKeyDown, kbEvent))
-                    // Keyboard activation, emulated here so a component behaves the same where no browser
-                    // runs it (the TUI, the pure tests). The browser's own activation is suppressed by
-                    // KeyPolicy.doubleActivates, so exactly one of the two reaches the handler.
-                    //
-                    // A button takes Enter and Space; an anchor takes Enter alone. That is not a
-                    // simplification of the browser but the browser: Space with a link focused scrolls
-                    // the page, it does not follow the link, and the ARIA link pattern says the same.
-                    val activateClick = if isTarget && KeyPolicy.activatesButton(e.keyboard.key) then
+                val kbEvent = UI.KeyboardEvent(
+                    key = Keyboard.fromString(e.keyboard.key),
+                    modifiers = e.keyboard.modifiers,
+                    targetId = e.keyboard.targetId
+                )
+                // The self handler runs first, as onClickSelf does, and only for a key on this element itself.
+                val onSelf     = isTarget && e.keyboard.self
+                val selfKey    = if onSelf then invokeWith(attrs.onKeyDownSelf, kbEvent) else Kyo.lift(())
+                val keyHandler = selfKey.andThen(invokeWith(attrs.onKeyDown, kbEvent))
+                // Keyboard activation, emulated here so a component behaves the same where no browser
+                // runs it (the TUI, the pure tests). The browser's own activation is suppressed by
+                // KeyPolicy.doubleActivates, so exactly one of the two reaches the handler.
+                //
+                // A button takes Enter and Space; an anchor takes Enter alone. That is not a
+                // simplification of the browser but the browser: Space with a link focused scrolls
+                // the page, it does not follow the link, and the ARIA link pattern says the same.
+                val activateClick = if isTarget && KeyPolicy.activatesButton(e.keyboard.key) then
+                    elem match
+                        case _: Button                                            => recordActivation(selfPath)
+                        case _: Anchor if KeyPolicy.activatesLink(e.keyboard.key) => recordActivation(selfPath)
+                        case _                                                    => Kyo.lift(())
+                else Kyo.lift(())
+                // Enter/Space on checkbox/radio triggers onChange. Space is the browser's; Enter is
+                // kyo's own, kept deliberately so a checkbox answers the same key in the TUI, where
+                // Enter is the one activation key a terminal reliably delivers. The client shim
+                // synthesizes the same Enter click for browser parity (see HtmlRenderer's keydown
+                // branch), so both transports agree.
+                val activateToggle = if isTarget && (e.keyboard.key == "Enter" || e.keyboard.key == " ") then
+                    elem match
+                        case cb: Checkbox =>
+                            toggleChecked(cb.checked).map(newVal => invokeWith(cb.onChange, newVal))
+                        case rb: Radio =>
+                            val autoSet = rb.checked match
+                                case Present(Bound.Ref(ref)) => ref.set(true)
+                                case _                       => Kyo.lift(())
+                            autoSet.andThen(invokeWith(rb.onChange, true))
+                        case _ => Kyo.lift(())
+                else Kyo.lift(())
+                // ArrowDown/ArrowUp/Space/Enter on Select cycles through options (browser behavior)
+                val selectCycle =
+                    if isTarget &&
+                        (e.keyboard.key == "ArrowDown" || e.keyboard.key == "ArrowUp" || e.keyboard.key == " " ||
+                            e.keyboard.key == "Enter")
+                    then
                         elem match
-                            case _: Button                                            => recordActivation(selfPath)
-                            case _: Anchor if KeyPolicy.activatesLink(e.keyboard.key) => recordActivation(selfPath)
-                            case _                                                    => Kyo.lift(())
+                            case sel: Select => cycleSelectOption(sel, forward = e.keyboard.key != "ArrowUp")
+                            case _           => Kyo.lift(())
                     else Kyo.lift(())
-                    // Enter/Space on checkbox/radio triggers onChange. Space is the browser's; Enter is
-                    // kyo's own, kept deliberately so a checkbox answers the same key in the TUI, where
-                    // Enter is the one activation key a terminal reliably delivers. The client shim
-                    // synthesizes the same Enter click for browser parity (see HtmlRenderer's keydown
-                    // branch), so both transports agree.
-                    val activateToggle = if isTarget && (e.keyboard.key == "Enter" || e.keyboard.key == " ") then
+                // Implicit submission: HTML's rule for Enter in a field, and the only thing a keydown
+                // does about submitting. The specification fires a click at the form's default
+                // button, so that is what gets recorded; the form's own onSubmit runs from that
+                // click, through the same `submitOrigin` a mouse click uses. A form with no
+                // reachable submit button has no click to fire, and HTML submits it directly.
+                //
+                // Nothing is recorded when the target already recorded its own activation (a
+                // button's Enter is that button's click, not the form's implicit submission), and
+                // only a target that submits on Enter submits at all (see `enterSubmits` at the dispatch site).
+                val formSubmit =
+                    if !isTarget && KeyPolicy.submitsImplicitly(e.keyboard.key) && enterSubmits then
                         elem match
-                            case cb: Checkbox =>
-                                toggleChecked(cb.checked).map(newVal => invokeWith(cb.onChange, newVal))
-                            case rb: Radio =>
-                                val autoSet = rb.checked match
-                                    case Present(Bound.Ref(ref)) => ref.set(true)
-                                    case _                       => Kyo.lift(())
-                                autoSet.andThen(invokeWith(rb.onChange, true))
+                            case f: Form =>
+                                defaultSubmitButton(f, selfPath) match
+                                    case Present(buttonPath) => recordActivation(buttonPath)
+                                    case Absent              => submitDirectly(f)
                             case _ => Kyo.lift(())
                     else Kyo.lift(())
-                    // ArrowDown/ArrowUp/Space/Enter on Select cycles through options (browser behavior)
-                    val selectCycle =
-                        if isTarget &&
-                            (e.keyboard.key == "ArrowDown" || e.keyboard.key == "ArrowUp" || e.keyboard.key == " " ||
-                                e.keyboard.key == "Enter")
-                        then
-                            elem match
-                                case sel: Select => cycleSelectOption(sel, forward = e.keyboard.key != "ArrowUp")
-                                case _           => Kyo.lift(())
-                        else Kyo.lift(())
-                    // Implicit submission: HTML's rule for Enter in a field, and the only thing a keydown
-                    // does about submitting. The specification fires a click at the form's default
-                    // button, so that is what gets recorded; the form's own onSubmit runs from that
-                    // click, through the same `submitOrigin` a mouse click uses. A form with no
-                    // reachable submit button has no click to fire, and HTML submits it directly.
-                    //
-                    // Nothing is recorded when the target already recorded its own activation (a
-                    // button's Enter is that button's click, not the form's implicit submission), and
-                    // only a target that submits on Enter submits at all (see `enterSubmits` at the dispatch site).
-                    val formSubmit =
-                        if !isTarget && KeyPolicy.submitsImplicitly(e.keyboard.key) && enterSubmits then
-                            elem match
-                                case f: Form =>
-                                    defaultSubmitButton(f, selfPath) match
-                                        case Present(buttonPath) => recordActivation(buttonPath)
-                                        case Absent              => submitDirectly(f)
-                                case _ => Kyo.lift(())
-                        else Kyo.lift(())
-                    keyHandler.andThen(activateClick).andThen(activateToggle).andThen(selectCycle).andThen(formSubmit)
-                        .andThen(keepBubbling(elem, attrs.onKeyDown.nonEmpty || (onSelf && attrs.onKeyDownSelf.nonEmpty)))
-                }
+                keyHandler.andThen(activateClick).andThen(activateToggle).andThen(selectCycle).andThen(formSubmit)
+                    .andThen(keepBubbling(elem, attrs.onKeyDown.nonEmpty || (onSelf && attrs.onKeyDownSelf.nonEmpty)))
             case e: UIEvent.KeyUp =>
                 val kbEvent = UI.KeyboardEvent(
                     key = Keyboard.fromString(e.keyboard.key),
@@ -691,7 +725,7 @@ private[kyo] object EventDispatch:
                 )
                 invokeWith(attrs.onKeyUp, kbEvent).andThen(keepBubbling(elem, attrs.onKeyUp.nonEmpty))
             case e: UIEvent.Input =>
-                unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isReadOnly(elem))) {
+                unlessInert(isTarget, isReadOnly(elem)) {
                     recordEdit(elem, e, isTarget, selfPath).andThen(elem match
                         case ti: TextInput =>
                             val autoSet = ti.value match
@@ -701,7 +735,7 @@ private[kyo] object EventDispatch:
                         case _ => true)
                 }
             case e: UIEvent.Change =>
-                unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isReadOnly(elem))) {
+                unlessInert(isTarget, isReadOnly(elem)) {
                     recordEdit(elem, e, isTarget, selfPath).andThen(elem match
                         case ti: TextInput =>
                             val autoSet = ti.value match
@@ -723,34 +757,28 @@ private[kyo] object EventDispatch:
                 }
             case e: UIEvent.FileSelect =>
                 // Bubbles like Change: the files ride the payload, nothing is read from the element here.
-                unlessInert(isTarget, isDisabled(elem)) {
-                    invokeWith(attrs.onFileSelect, e.files).andThen(keepBubbling(elem, attrs.onFileSelect.nonEmpty))
-                }
+                invokeWith(attrs.onFileSelect, e.files).andThen(keepBubbling(elem, attrs.onFileSelect.nonEmpty))
             case e: UIEvent.ChangeChecked =>
-                unlessInert(isTarget, isDisabled(elem)) {
-                    recordEdit(elem, e, isTarget, selfPath).andThen(elem match
-                        case bi: BooleanInput =>
-                            val autoSet = bi.checked match
-                                case Present(Bound.Ref(ref)) => ref.set(e.checked)
-                                case _                       => Kyo.lift(())
-                            autoSet.andThen(invokeWith(bi.onChange, e.checked)).andThen(true)
-                        case _ => true)
-                }
+                recordEdit(elem, e, isTarget, selfPath).andThen(elem match
+                    case bi: BooleanInput =>
+                        val autoSet = bi.checked match
+                            case Present(Bound.Ref(ref)) => ref.set(e.checked)
+                            case _                       => Kyo.lift(())
+                        autoSet.andThen(invokeWith(bi.onChange, e.checked)).andThen(true)
+                    case _ => true)
             case e: UIEvent.ChangeNumeric =>
-                unlessInert(isTarget, isDisabled(elem)) {
-                    recordEdit(elem, e, isTarget, selfPath).andThen(elem match
-                        case ni: NumberInput =>
-                            val autoSet = ni.value match
-                                case Present(Bound.Ref(ref)) => ref.set(formatDouble(e.value))
-                                case _                       => Kyo.lift(())
-                            autoSet.andThen(invokeWith(ni.onChangeNumeric, e.value)).andThen(true)
-                        case ri: RangeInput =>
-                            val autoSet = ri.value match
-                                case Present(Bound.Ref(ref)) => ref.set(e.value)
-                                case _                       => Kyo.lift(())
-                            autoSet.andThen(invokeWith(ri.onChange, e.value)).andThen(true)
-                        case _ => true)
-                }
+                recordEdit(elem, e, isTarget, selfPath).andThen(elem match
+                    case ni: NumberInput =>
+                        val autoSet = ni.value match
+                            case Present(Bound.Ref(ref)) => ref.set(formatDouble(e.value))
+                            case _                       => Kyo.lift(())
+                        autoSet.andThen(invokeWith(ni.onChangeNumeric, e.value)).andThen(true)
+                    case ri: RangeInput =>
+                        val autoSet = ri.value match
+                            case Present(Bound.Ref(ref)) => ref.set(e.value)
+                            case _                       => Kyo.lift(())
+                        autoSet.andThen(invokeWith(ri.onChange, e.value)).andThen(true)
+                    case _ => true)
             case ev: UIEvent.Submit =>
                 elem match
                     case f: Form =>
@@ -819,7 +847,7 @@ private[kyo] object EventDispatch:
                     .andThen(keepBubbling(elem, attrs.onScrollPos.nonEmpty))
             case _ => true
         end match
-    end dispatchToElement
+    end runHandlers
 
     private def invokeDrag(action: Maybe[UI.Action], typed: Maybe[UI.Action])(using Frame): Unit < Async =
         def safe(handler: Maybe[UI.Action]): Unit < Async =

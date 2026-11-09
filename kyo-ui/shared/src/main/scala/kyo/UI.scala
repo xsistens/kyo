@@ -1942,6 +1942,23 @@ object UI:
                 case s: Signal[Boolean] @unchecked => withReactiveBoolAttr("hidden", s)
                 case b: Boolean                    => withAttrs(attrs.copy(hidden = Present(b)))
 
+            /** Silences the element: while it holds, the element forwards no event to the server and none of its handlers runs, so an
+              * event on it goes on to the nearest ancestor that takes it, exactly as if the element declared no handler. An element is
+              * also silent while it is `disabled`, so a disabled control needs nothing more; the descendants of a silent element are not
+              * silenced by it.
+              *
+              * A `Boolean` decides it at render: a silent element writes no `data-kyo-ev` at all, the bytes of the same element with no
+              * handler. A `Signal[Boolean]` writes the attribute for the signal's current value and patches it IN PLACE on emission,
+              * removing it while silent and putting it back while not, with nothing drawn again. Dispatch reads the value when an event
+              * arrives, so an event sent before the patch reached the page reaches nothing.
+              *
+              * The handlers stay on the element and run again once it is no longer silent. Where a signal is bound it is the value, in
+              * either setter order, as for `disabled`. An `onAttached` hook is no event handler and still starts.
+              */
+            def silent(v: Boolean | Signal[Boolean]): Self = v match
+                case s: Signal[Boolean] @unchecked => withAttrs(attrs.copy(silentSignal = Present(s)))
+                case b: Boolean                    => withAttrs(attrs.copy(silent = b))
+
             // Visual
             def style(v: Style): Self               = withAttrs(attrs.copy(uiStyle = attrs.uiStyle ++ v))
             def style(f: Style.type => Style): Self = style(f(Style))
@@ -2790,13 +2807,17 @@ object UI:
             reactiveClassNames: Chunk[Signal[Maybe[String]]] = Chunk.empty,
             // The inline-style channel (inlineStyle(sig)): its declarations are written inline at render and patched with
             // HtmlOp.SetStyleByPath on emission.
-            reactiveStyle: Maybe[Signal[Style]] = Absent
+            reactiveStyle: Maybe[Signal[Style]] = Absent,
+            // Element.silent: no event forwarded and no handler run while it holds. A signal is the channel of `data-kyo-ev` (see
+            // kyo.internal.Channels.of); where it is bound the constant is not consulted.
+            silent: Boolean = false,
+            silentSignal: Maybe[Signal[Boolean]] = Absent
         ):
             /** Whether any reactive channel is bound here. Every element of a render asks, so it allocates nothing; [[kyo.internal.Channels.of]] is the channels themselves. */
             def hasChannels: Boolean =
                 reactiveAttrs.nonEmpty || reactiveMaybeAttrs.nonEmpty || reactiveBoolAttrs.nonEmpty || reactiveClasses.nonEmpty ||
                     reactiveClassNames.nonEmpty ||
-                    reactiveStyle.nonEmpty
+                    reactiveStyle.nonEmpty || silentSignal.nonEmpty
         end Attrs
 
         // ---- Non-element AST cases ----

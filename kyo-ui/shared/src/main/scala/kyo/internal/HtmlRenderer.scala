@@ -769,7 +769,7 @@ private[kyo] object HtmlRenderer:
             case Present(Bound.Ref(ref)) => SignalNow(ref)
             case Present(Bound.Const(s)) => s
             case _                       => ""
-        renderDropdownWithValue(sb, dd, path, baseId, currentVal, cssRules, ddStyle)
+        renderDropdownWithValue(sb, dd, path, baseId, currentVal, cssRules, ddStyle, listens = !silentNow(dd))
     end renderDropdown
 
     private def renderDropdownWithValue(
@@ -779,7 +779,9 @@ private[kyo] object HtmlRenderer:
         baseId: String,
         currentVal: String,
         cssRules: Maybe[CssCollector],
-        channelStyle: Seq[(String, String)] = Nil
+        channelStyle: Seq[(String, String)],
+        // Whether the wrapper lists its events: not while the dropdown is silent (UI.Element.silent).
+        listens: Boolean
     )(using
         Frame
     ): Unit =
@@ -787,6 +789,7 @@ private[kyo] object HtmlRenderer:
         val idAttr      = if baseId.nonEmpty then s""" id="${esc(baseId)}"""" else ""
         val ddAttr      = if baseId.nonEmpty then s""" data-kyo-dropdown="${esc(baseId)}"""" else " data-kyo-dropdown"
         val disAttr     = if dd.disabled.getOrElse(false) then " data-kyo-disabled" else ""
+        val evAttr      = if listens then s""" data-kyo-ev="$dropdownEvents"""" else ""
         val hidAttr     = if dd.attrs.hidden.getOrElse(false) then " hidden" else ""
         val tabAttr     = dd.attrs.tabIndex.map(n => s""" tabindex="$n"""").getOrElse("")
         val pseudoClass = registerPseudoClass(cssRules, dd.attrs.uiStyle)
@@ -810,7 +813,7 @@ private[kyo] object HtmlRenderer:
         // Wrapper div
         w(
             sb,
-            s"""<div data-kyo-path="$pathStr"$idAttr$clsStr$ddAttr data-kyo-ev="click,keydown,change"$hidAttr$disAttr$tabAttr$styleStr>"""
+            s"""<div data-kyo-path="$pathStr"$idAttr$clsStr$ddAttr$evAttr$hidAttr$disAttr$tabAttr$styleStr>"""
         )
         // Trigger button
         w(sb, s"""<button$triggerId type="button"$triggerDdAttr tabindex="0">$triggerLabel</button>""")
@@ -1330,15 +1333,61 @@ private[kyo] object HtmlRenderer:
         case _                                             => false
 
     /** Writes `data-kyo-ev` with every event the element's handlers and bindings make the client forward, and
-      * answers whether there was one.
+      * answers whether there was one. A silent element (see UI.Element.silent) writes none: the bytes of the
+      * same element with no handler.
       */
-    private def renderEventAttr(sb: StringBuilder, elem: Element): Boolean =
-        // Written as they are found: the attribute opens with the first event and closes at the end, so a
-        // plain element allocates nothing here.
-        var first                   = true
-        def add(name: String): Unit =
-            discard(sb.append(if first then " data-kyo-ev=\"" else ",").append(name))
-            first = false
+    private def renderEventAttr(sb: StringBuilder, elem: Element)(using AllowUnsafe, Frame, SignalNow.Locals): Boolean =
+        if silentNow(elem) then false
+        else
+            // Written as they are found: the attribute opens with the first event and closes at the end, so a
+            // plain element allocates nothing here.
+            var first = true
+            declaredEvents(elem) { name =>
+                discard(sb.append(if first then " data-kyo-ev=\"" else ",").append(name))
+                first = false
+            }
+            if !first then sb.append('"')
+            !first
+    end renderEventAttr
+
+    /** The events the Dropdown wrapper forwards: its trigger's click, the keys it is driven by, and the pick. */
+    private val dropdownEvents = "click,keydown,change"
+
+    /** The value `data-kyo-ev` carries for `elem` while it is not silent, empty where it declares no event. The
+      * channel of an element silent through a signal (Channels.of) puts it back with this.
+      */
+    private[kyo] def eventList(elem: Element): String =
+        elem match
+            case _: Dropdown => dropdownEvents
+            case _           =>
+                val sb = new StringBuilder
+                declaredEvents(elem) { name =>
+                    if sb.nonEmpty then discard(sb.append(','))
+                    discard(sb.append(name))
+                }
+                sb.toString
+
+    /** Whether `elem` is silent as it renders: `disabled` (on an element that has it) or `silent`, each read from
+      * its channel where one is bound, else from the constant. Allocates nothing for an element that binds neither.
+      */
+    private def silentNow(elem: Element)(using AllowUnsafe, Frame, SignalNow.Locals): Boolean =
+        val attrs = elem.attrs
+        val off   = attrs.reactiveBoolAttrs.get("disabled") match
+            case Some(sig) => SignalNow(sig)
+            case None      =>
+                elem match
+                    case hd: HasDisabled => hd.disabled.getOrElse(false)
+                    case _               => false
+        off ||
+        (attrs.silentSignal match
+            case Present(sig) => SignalNow(sig)
+            case Absent       => attrs.silent)
+    end silentNow
+
+    /** Calls `add` with every event the element's handlers and bindings make the client forward, in the order
+      * `data-kyo-ev` lists them. Inline, so the one writer above appends straight into the render's builder.
+      */
+    private inline def declaredEvents(elem: Element)(inline add: String => Unit): Unit =
         val attrs = elem.attrs
         if attrs.onClick.nonEmpty || attrs.onClickEvt.nonEmpty ||
             attrs.onClickSelf.nonEmpty || attrs.onClickSelfEvt.nonEmpty
@@ -1388,9 +1437,7 @@ private[kyo] object HtmlRenderer:
         if attrs.onPointerUp.nonEmpty then add("pointerup")
         // fileselect marker so the client's change branch reads all files instead of only the first.
         if attrs.onFileSelect.nonEmpty then add("fileselect")
-        if !first then sb.append('"')
-        !first
-    end renderEventAttr
+    end declaredEvents
 
     /** Whether an element renders its `data-kyo-path`.
       *
@@ -2506,6 +2553,9 @@ private[kyo] object HtmlRenderer:
            |["input","change"].forEach(function(t){document.body.addEventListener(t,function(e){var f=e.target;if(f&&f.getAttribute&&(f.getAttribute("${FilledClass.classAttr}")||f.getAttribute("${FilledClass.upAttr}")))__kyoFilled(f);},true);});
            |// Portal adopt for the initial paint: a portal element present at load re-homes immediately.
            |__kyoAdoptPortals(document.body);__kyoRetireOrphanTwins();
+           |// Whether the dropdown wrapper `w` itself lists event `t` in data-kyo-ev. A silent dropdown lists none, so a pick on it is
+           |// sent nowhere (UI.Element.silent); the pick is the wrapper's own, so no ancestor stands in for it.
+           |function __kyoListens(w,t){var ev=w.getAttribute("data-kyo-ev");return !!(ev&&ev.split(",").indexOf(t)>=0);}
            |// Dropdown helpers: close all dropdowns except the given id
            |function kyoCloseDropdown(exceptId){
            |  var all=document.querySelectorAll('[data-kyo-dropdown-options]');
@@ -2557,7 +2607,7 @@ private[kyo] object HtmlRenderer:
            |        var dOpts=document.querySelector('[data-kyo-dropdown-options="'+wrap.getAttribute('data-kyo-dropdown')+'"]');
            |        if(dOpts)dOpts.hidden=true;
            |        var wp=pa(wrap);
-           |        post({Change:{path:wp,value:val}});
+           |        if(__kyoListens(wrap,"change"))post({Change:{path:wp,value:val}});
            |      }
            |      return;
            |    }
@@ -2776,7 +2826,7 @@ private[kyo] object HtmlRenderer:
            |          if(hlEl2){
            |            var val2=hlEl2.getAttribute('data-kyo-dropdown-val');
            |            opts2.hidden=true;
-           |            post({Change:{path:pa(ddWrap),value:val2}});
+           |            if(__kyoListens(ddWrap,"change"))post({Change:{path:pa(ddWrap),value:val2}});
            |          }
            |          e.preventDefault();return;
            |        }
