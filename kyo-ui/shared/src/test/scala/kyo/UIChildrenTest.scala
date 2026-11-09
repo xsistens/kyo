@@ -39,6 +39,32 @@ class UIChildrenTest extends kyo.test.Test[Any]:
         HtmlRenderer.render(div(UI.children(rows)*), Seq.empty).map(html => assert(html.contains("<span")))
     }
 
+    "single children, optional ones and lists mix, in order, and render as the same children written out" in {
+        val label: Maybe[UI.Ast.SpanElement] = Present(span("b"))
+        val none: Maybe[UI.Ast.SpanElement]  = Absent
+        for
+            spliced <- HtmlRenderer.render(div(UI.children(span("a"), label, none, List(span("c"), span("d")))*), Seq.empty)
+            literal <- HtmlRenderer.render(div(span("a"), span("b"), span("c"), span("d")), Seq.empty)
+        yield assert(spliced == literal)
+        end for
+    }
+
+    "children a helper hands back are one part of another list" in {
+        def icons(using Frame): UI.Children = UI.children(span("a"), span("b"))
+        for
+            spliced <- HtmlRenderer.render(div(UI.children(icons, span("c"))*), Seq.empty)
+            literal <- HtmlRenderer.render(div(span("a"), span("b"), span("c")), Seq.empty)
+        yield assert(spliced == literal)
+        end for
+    }
+
+    "rejects an optional SVG node" in {
+        typeCheckFailure("""
+            import kyo.*
+            UI.div(UI.children(Maybe(Svg.circle))*)
+        """)
+    }
+
     "rejects a list of SVG nodes" in {
         typeCheckFailure("""
             import kyo.*
