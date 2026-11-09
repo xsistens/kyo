@@ -106,7 +106,7 @@ class ReadonlyTest extends UicTest:
             assert(!btn.disabled.contains(true), "not natively disabled, or the reader could not read it")
             assert(btn.attrs.ariaAttrs.get("disabled").contains("true"), "role=button has no readonly state")
             assert(btn.attrs.ariaAttrs.get("readonly").isEmpty, "so it does not claim one")
-            assert(btn.attrs.onClick.isEmpty)
+            assert(!declaresClick(btn), "it answers no click: readonly makes it silent")
     }
 
 end ReadonlyTest

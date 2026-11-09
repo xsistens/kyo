@@ -111,7 +111,7 @@ A prop over a closed set of cases that picks one class (a severity, a variant, a
 
 Flags that may be a constant or a signal (`disabled`, `aria-disabled`, `loading`) are read with `.read` inside one
 `UI.reactive` block and used as plain values: combined with `&&` and `||`, handed to the setters that take a `Prop`
-(`disabled`, `cssClass(name, on)`, `ariaFlag`), and used in a handler as they are. Never a match on `Boolean` against
+(`disabled`, `silent`, `cssClass(name, on)`, `ariaFlag`). A handler never checks a flag: a locked element is silent. Never a match on `Boolean` against
 `Signal` at the place a flag is used, never a `var` set in its arms, never `Prop.zip`/`Prop.map` by hand for what the block
 can say.
 
@@ -127,12 +127,17 @@ UI.reactive {
     val off  = busy || disabled.read
     val says = ariaDisabled.read && !off
     renderButton(busy).disabled(off)
-        .when(p.onClick)((e, click) => e.onClick(if off then Kyo.unit else click))
+        .when(p.onClick)(_.onClick(_))
         .ariaFlag("disabled", says)
         .cssClass("p-uic-aria-disabled", says)(...)
 }
 ```
 
+- **A locked element is silent, never a handler that checks the flag.** `disabled(off)` silences the element by itself;
+  a lock that is not native `disabled` (readonly, a fixed value) says `silent(locked)`. A silent element lists no event in
+  `data-kyo-ev` and runs no handler, as target or ancestor, and a signal patches that in place, so the handler only does its
+  job (`onClick(toggle)`) and the element draws nothing again. A click that has to stay while the element looks locked
+  (Button's `ariaDisabled`, which routes the press to a form submit) is simply not silenced.
 - An attribute that a constant writes only while true (`aria-disabled`, `aria-busy`) is `ariaFlag`; one where `"false"` says
   something (`aria-pressed`) is `aria(name, on.toString)`.
 - A setter beside its union with a plain overload (`disabled(Boolean)` once) keeps a `Boolean` off the channel: kyo-ui has one
