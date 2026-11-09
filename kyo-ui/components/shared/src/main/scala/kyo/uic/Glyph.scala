@@ -22,8 +22,11 @@ private[uic] object GlyphSvg:
     import kyo.*
     import kyo.UI.*
 
-    def apply(glyph: IconGlyph, classes: String*)(using Frame): UI =
-        build(span.aria("hidden", "true"), glyph, classes)
+    /** The glyph in its span. A constant draws once with no region; a signal draws in a region of its own, so a host that
+      * hands over a prop never says which it holds.
+      */
+    def apply(glyph: Prop[IconGlyph], classes: String*)(using Frame): UI =
+        Prop.render(glyph)(g => build(span.aria("hidden", "true"), g, classes))
 
     /** Variant with an inline style on the wrapping span (MeterGroup colors its
       * label icons with the meter color, as Prime does via an inline style).

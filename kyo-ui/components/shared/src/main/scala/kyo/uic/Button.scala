@@ -191,26 +191,12 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
         end match
     end render
 
-    private def iconOnly(loading: Boolean): Boolean =
-        p.label.isEmpty && p.extraChildren.isEmpty && (p.icon.isDefined || loading)
-
     /** The `.p-button` class chain, shared by the button and anchor renderings: a constant is a class, a signal a class channel. */
     private def classed[E <: UI.Ast.Element { type Self = E }](el: E, loading: Boolean)(using Frame): E =
         p.extraClasses.foldLeft(el.cssClass("p-button").cssClass("p-component"))(_.cssClass(_))
-            .classFor(p.severity)(s => if s == Severity.Primary then Absent else Present(s"p-button-${s.token}"))
-            .classFor(p.variant) {
-                case ButtonVariant.Filled   => Absent
-                case ButtonVariant.Outlined => Present("p-button-outlined")
-                case ButtonVariant.Text     => Present("p-button-text")
-                case ButtonVariant.Link     => Present("p-button-link")
-            }
-            .classFor(p.size) {
-                case Size.Small  => Present("p-button-sm")
-                case Size.Large  => Present("p-button-lg")
-                case Size.Normal => Absent
-            }
+            .classFor(p.severity)(_.cls("p-button")).classFor(p.variant)(_.cls).classFor(p.size)(_.cls("p-button"))
             .cssClass("p-button-rounded", p.rounded).cssClass("p-button-raised", p.raised).cssClass("p-button-fluid", p.fluid)
-            .cssClass("p-button-icon-only", iconOnly(loading))
+            .cssClass("p-button-icon-only", p.label.isEmpty && p.extraChildren.isEmpty && (p.icon.isDefined || loading))
     end classed
 
     /** What the button and the link share, on either element: the class chain, the id, the host's aria, the accessible name and
@@ -253,14 +239,14 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
     end renderAnchor
 
     private def contentChildren(loading: Boolean)(using Frame): List[UI] =
-        val leading: List[UI] =
-            if loading then
-                List(GlyphSvg(Icons.spinner, "p-button-icon", "p-button-icon-left", "p-button-loading-icon", "p-icon-spin"))
-            else p.icon.toList.map(g => Prop.render(g)(GlyphSvg(_, "p-button-icon", "p-button-icon-left")))
-        val textChild: List[UI]    = p.label.toList.map(l => span.cssClass("p-button-label")(l))
-        val endIconChild: List[UI] =
-            p.endIcon.toList.map(g => Prop.render(g)(GlyphSvg(_, "p-button-icon", "p-button-icon-right")))
-        leading ++ textChild ++ endIconChild ++ p.extraChildren
+        val leading: Maybe[UI] =
+            if loading then Present(GlyphSvg(Icons.spinner, "p-button-icon", "p-button-icon-left", "p-button-loading-icon", "p-icon-spin"))
+            else p.icon.map(GlyphSvg(_, "p-button-icon", "p-button-icon-left"))
+        List(
+            leading,
+            p.label.map(l => span.cssClass("p-button-label")(l)),
+            p.endIcon.map(GlyphSvg(_, "p-button-icon", "p-button-icon-right"))
+        ).flatMap(_.toList) ++ p.extraChildren
     end contentChildren
 end Button
 

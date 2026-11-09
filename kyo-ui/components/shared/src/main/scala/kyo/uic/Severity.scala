@@ -1,5 +1,7 @@
 package kyo.uic
 
+import kyo.*
+
 /** The harmonized cross-component vocabulary (PrimeOne semantics). One coherent
   * user-facing set; each component maps cases to its own `.p-*` CSS suffix
   * privately, absorbing Prime's internal inconsistencies (button `danger` vs
@@ -22,11 +24,20 @@ enum Severity derives CanEqual:
         case Severity.Danger    => "danger"
         case Severity.Help      => "help"
         case Severity.Contrast  => "contrast"
+
+    /** The class `.<prefix>-<token>`, none for `Primary`, which is the unsuffixed default. */
+    private[uic] def cls(prefix: String): Maybe[String] =
+        if this == Severity.Primary then Absent else Present(s"$prefix-$token")
 end Severity
 
 /** Button rendering variant (`.p-button-outlined` / `-text` / `-link`). */
 enum ButtonVariant derives CanEqual:
     case Filled, Outlined, Text, Link
+
+    /** The class `.p-button-<variant>`, none for `Filled`, the default look. */
+    private[uic] def cls: Maybe[String] =
+        if this == ButtonVariant.Filled then Absent else Present(s"p-button-${toString.toLowerCase}")
+end ButtonVariant
 
 /** Form-field fill variant (`.p-variant-filled`). */
 enum FieldVariant derives CanEqual:
@@ -37,7 +48,15 @@ enum FieldVariant derives CanEqual:
   * `-xl` rule accept it, which today is Avatar (`.p-avatar-xl`) and Badge
   * (`.p-badge-xl`).
   */
-sealed trait ExtendedSize derives CanEqual
+sealed trait ExtendedSize derives CanEqual:
+
+    /** The class `.<prefix>-sm`, `-lg` or `-xl`, none for `Normal`, the default size. */
+    private[uic] def cls(prefix: String): Maybe[String] = this match
+        case Size.Small  => Present(s"$prefix-sm")
+        case Size.Large  => Present(s"$prefix-lg")
+        case Size.XLarge => Present(s"$prefix-xl")
+        case Size.Normal => Absent
+end ExtendedSize
 
 /** Component size (`.p-*-sm` / default / `.p-*-lg`).
   *

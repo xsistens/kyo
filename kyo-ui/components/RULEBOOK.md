@@ -94,16 +94,14 @@ A prop over a closed set of cases that picks one class (a severity, a variant, a
 
 - **Why:** a constant then adds its one class, and a signal becomes one class-name channel (kyo-ui's
   `cssClass(Signal[Maybe[String]])`), so a change takes the old class off and puts the new one on in place and nothing is
-  drawn again; the component writes only its mapping from case to class, and no list of cases. Inside a `UI.reactive` block the
-  same fold would not stay a channel: a read a lambda uses makes the block a region.
+  drawn again; the component writes only its mapping from case to class, and no list of cases.
+- **The mapping lives on the type** when the classes follow one pattern across components: `Size.cls(prefix)` (`-sm`, `-lg`,
+  `-xl`, none for Normal), `Severity.cls(prefix)` (none for Primary), `ButtonVariant.cls`. A component writes its own cases only
+  where its classes break the pattern (Message's `error` for Danger).
 - **Shape:**
 
 ```scala
-.classFor(p.size) {
-    case Size.Small  => Present("p-button-sm")
-    case Size.Large  => Present("p-button-lg")
-    case Size.Normal => Absent
-}
+.classFor(p.severity)(_.cls("p-button")).classFor(p.variant)(_.cls).classFor(p.size)(_.cls("p-button"))
 ```
 
 - Never one `cssClass(name, sig.map(_ == case))` per case (Tag, Badge and Message still do, until their wave): that is N
@@ -169,3 +167,14 @@ value at once (`getOrElse(false)`), it is a default.
 - **Why:** a `Maybe` that every reader unwraps to one value is a second spelling of that value, and each reader has to repeat it.
 - **Order:** the class holds its setters, then the draw with a scaladoc saying what it reads where (no `//` block above it), then
   the private helpers. The companion holds `Props` (a case class that `derives CanEqual`), then the constructors.
+
+## 10. A leaf that draws a value takes the value's prop
+
+A shared building block that draws one value (`GlyphSvg` for an icon) takes `Prop[A]` and draws a signal with `Prop.render`
+itself, so the caller hands the prop over: `p.icon.map(GlyphSvg(_, "p-button-icon", "p-button-icon-left"))`, never
+`Prop.render(g)(GlyphSvg(_, ...))` at the call site.
+
+- **Why:** the question constant or signal is answered once, where the value is drawn, as kyo-ui's text leaf takes a
+  `Signal[String]`. A constant still draws with no region, so callers that hand a plain value see no difference.
+- A list of optional children is one list of `Maybe`s, flattened (`List(leading, label, end).flatMap(_.toList)`): kyo-ui takes
+  no `Maybe[UI]` as a child, since a child is one value.
