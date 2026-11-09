@@ -77,6 +77,14 @@ final private[uic] case class Controlled[A](
       */
     def deaf: Boolean = !quiet && !heard && binding.exists(_.dyn.isDefined)
 
+    /** Whether the value shown is the instance's own, as [[ownedFrom]] has it: nothing bound, or a constant, which is only where
+      * the instance's own value starts. A signal, one way or two, is the value shown.
+      */
+    def startsOwn: Boolean = binding.forall(_.const.isDefined)
+
+    /** Where the instance's own value starts, as [[ownedFrom]] has it: a bound constant, else `unbound`. */
+    def startOr(unbound: A): A = binding.flatMap(_.const).getOrElse(unbound)
+
     /** A reader's change to `next`: a two-way binding is written first, then the hearer told, whatever the binding is. */
     def change(next: A)(using Frame): UI.Action = ReactiveValue.change(binding, next, hearer)
 
@@ -108,10 +116,7 @@ final private[uic] case class Controlled[A](
 
     /** [[owned]] where a constant is only where the slot starts: a text the reader goes on editing. */
     def ownedFrom(unbound: A)(using CanEqual[A, A], Frame): Controlled[A] < Sync =
-        binding match
-            case Present(ReactiveValue.Const(a)) => mintFrom(a)
-            case Present(_)                      => copy()
-            case _                               => mintFrom(unbound)
+        if startsOwn then mintFrom(startOr(unbound)) else copy()
 
     private def mintFrom(a: A)(using CanEqual[A, A], Frame): Controlled[A] < Sync =
         Signal.initRef(a).map(ref => copy(bound = Present(ref)))

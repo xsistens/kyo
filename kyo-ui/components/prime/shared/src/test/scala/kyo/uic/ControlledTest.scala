@@ -16,7 +16,7 @@ class ControlledTest extends UicTest:
     private val hearerF: Int => UI.Action = _ => ()
 
     "the truth table" - {
-        "of heard, fixed and deaf over nothing, a constant and a signal, by hearer, by another event and by quiet" in {
+        "of heard, fixed, deaf, startsOwn and startOr over nothing, a constant and a signal, by hearer, by another event and by quiet" in {
             for
                 (name, binding, writable, constant, signal) <- bindings
                 hearer                                      <- Seq(false, true)
@@ -29,16 +29,20 @@ class ControlledTest extends UicTest:
                 assert(s.heard == heard, s"heard: $where")
                 assert(s.fixed == (constant && !heard), s"fixed: $where")
                 assert(s.deaf == (signal && !heard && !quiet), s"deaf: $where")
+                assert(s.startsOwn == !signal, s"startsOwn: $where")
+                assert(s.startOr(9) == (if constant then 1 else 9), s"startOr: $where")
             end for
             succeed
         }
 
-        "a ref is heard by itself, is never fixed and never deaf" in {
+        "a ref is heard by itself, is never fixed and never deaf, and is the value shown, not where an own value starts" in {
             Signal.initRef(1).map { ref =>
                 val s = Controlled[Int]().bind(ref)
                 assert(s.heard)
                 assert(!s.fixed)
                 assert(!s.deaf)
+                assert(!s.startsOwn)
+                assert(s.startOr(9) == 9)
             }
         }
 
