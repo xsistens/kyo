@@ -518,7 +518,8 @@ lazy val kyoJVM: Project = project
         `kyo-discord`.jvm,
         `kyo-teams`.jvm,
         `kyo-ui`.jvm,
-        `kyo-ui-components`.jvm,
+        `kyo-ui-components-base`.jvm,
+        `kyo-ui-components-prime`.jvm,
         `kyo-ui-components-gen`,
         `kyo-ui-devtools`.jvm,
         `kyo-apollo`.jvm,
@@ -626,7 +627,8 @@ lazy val kyoJS = project
         `kyo-discord`.js,
         `kyo-teams`.js,
         `kyo-ui`.js,
-        `kyo-ui-components`.js,
+        `kyo-ui-components-base`.js,
+        `kyo-ui-components-prime`.js,
         `kyo-ui-devtools`.js,
         `kyo-apollo`.js,
         `kyo-apollo-testing`.js,
@@ -720,7 +722,8 @@ lazy val kyoNative = project
         `kyo-discord`.native,
         `kyo-teams`.native,
         `kyo-ui`.native,
-        `kyo-ui-components`.native,
+        `kyo-ui-components-base`.native,
+        `kyo-ui-components-prime`.native,
         `kyo-ui-devtools`.native,
         `kyo-apollo`.native,
         `kyo-apollo-ui`.native,
@@ -811,7 +814,8 @@ lazy val kyoWasm = project
         `kyo-discord`.wasm,
         `kyo-teams`.wasm,
         `kyo-ui`.wasm,
-        `kyo-ui-components`.wasm,
+        `kyo-ui-components-base`.wasm,
+        `kyo-ui-components-prime`.wasm,
         `kyo-ui-devtools`.wasm,
         `kyo-apollo`.wasm,
         `kyo-apollo-ui`.wasm,
@@ -4303,10 +4307,33 @@ lazy val `kyo-ui` =
             libraryDependencies += "org.scala-js" %%% "scalajs-dom" % "2.8.1"
         )
 
-// The component library for kyo-ui: ready-made controls (inputs, overlays, menus, tables) built
-// from kyo-ui primitives, plus the generated design tokens, icon set, and component CSS.
+// What a component library for kyo-ui is built from: the setters generated from a component's props
+// (`Setters`, `Component`), optional props (`Opt`), and the reactive block and prop operations a
+// component's draw reads its props with. It depends on kyo-ui and kyo-ui on nothing of it, so kyo-ui
+// stays the foundation and this module the first layer on it.
+lazy val `kyo-ui-components-base` =
+    crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
+        .crossType(CrossType.Full)
+        .in(file("kyo-ui/components/base"))
+        .dependsOn(`kyo-ui`)
+        .withKyoTest
+        .settings(`kyo-settings`)
+        .jvmSettings(mimaCheck(false))
+        // As in kyo-ui: kyo-net's bundled TLS shim compiles into THIS binary, and nativeConfig does not
+        // cross a project dependency, so the test link needs the system OpenSSL flags.
+        .nativeSettings(`native-settings`, `openssl-native-settings`)
+        .jsSettings(
+            `js-settings`,
+            scalaJSLinkerConfig ~= { _.withModuleKind(ModuleKind.CommonJSModule) }
+        )
+        // No ModuleKind here: the Wasm backend requires ESModule, which WasmPlatform pins.
+        .wasmSettings(`wasm-settings`)
+
+// The component library for kyo-ui: ready-made controls (inputs, overlays, menus, tables) built on
+// kyo-ui-components-base, plus the generated design tokens, icon set, and component CSS. Its own
+// build of Prime's anatomy (the `.p-*` markup Prime's stylesheets target), not PrimeTek's code.
 //
-// Nested under kyo-ui/ rather than sitting at the repo root: it is one member of the kyo-ui family,
+// Nested under kyo-ui/components/ rather than sitting at the repo root: it is one member of the kyo-ui family,
 // and the directory tree says so (same shape as kyo-ffi/it, kyo-test/api, kyo-compat/test, whose
 // project ids likewise stay flat and hyphenated).
 //
@@ -4315,11 +4342,11 @@ lazy val `kyo-ui` =
 // is the real target and gets a row per linker backend (the Wasm row is that same source linked to
 // WasmGC); the JVM and Native rows carry server-side rendering for the server-push transport, so a
 // server on either can render the same components a browser mounts.
-lazy val `kyo-ui-components` =
+lazy val `kyo-ui-components-prime` =
     crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
         .crossType(CrossType.Full)
-        .in(file("kyo-ui/components"))
-        .dependsOn(`kyo-ui`)
+        .in(file("kyo-ui/components/prime"))
+        .dependsOn(`kyo-ui-components-base`)
         .withKyoTest
         .settings(`kyo-settings`)
         .jvmSettings(mimaCheck(false))
@@ -4348,7 +4375,7 @@ lazy val `kyo-ui-devtools` =
         .withKyoTest
         .settings(`kyo-settings`)
         .jvmSettings(mimaCheck(false))
-        // As in kyo-ui and kyo-ui-components: kyo-net's bundled TLS shim compiles into THIS binary and
+        // As in kyo-ui and kyo-ui-components-prime: kyo-net's bundled TLS shim compiles into THIS binary and
         // nativeConfig does not cross a project dependency, so the test link needs the system OpenSSL flags.
         .nativeSettings(`native-settings`, `openssl-native-settings`)
         .jsSettings(
@@ -4358,13 +4385,13 @@ lazy val `kyo-ui-devtools` =
         // No ModuleKind here: the Wasm backend requires ESModule, which WasmPlatform pins.
         .wasmSettings(`wasm-settings`)
 
-// The code generator behind kyo-ui-components' `kyo.uic.generated` sources: parses pinned npm
+// The code generator behind kyo-ui-components-prime's `kyo.uic.generated` sources: parses pinned npm
 // inputs and emits per-icon defs (one per glyph, so Scala.js method-level DCE strips the path
 // strings of unused icons from downstream bundles), design tokens, and component CSS. Plain JVM,
 // never published, run by hand when the pinned inputs move. Lives in-tree so the committed
 // generated sources keep a reproducible provenance (same rationale as kyo-ffi-codegen).
 lazy val `kyo-ui-components-gen` = project
-    .in(file("kyo-ui/components/gen"))
+    .in(file("kyo-ui/components/prime/gen"))
     .settings(
         `kyo-settings`,
         publish / skip := true,
