@@ -5,6 +5,28 @@ every component. `CLAUDE.md` says what a component must do (the Solid model, slo
 how its code looks. Each rule names the reason and shows the shape, from `ToggleButton` and `Button`, which follow all of
 them.
 
+## Migrating a component (read before the first edit)
+
+A migrated component has ToggleButton's shape (Button's, where it keeps no state), not only the rules below applied line by line.
+The target is the template in `CLAUDE.md` ("The template is `ToggleButton`") as much as this file, and a migration is judged by
+comparing the result with ToggleButton, aspect by aspect.
+
+- **Compare first, against the reference, and write the comparison down.** Before any edit, for each aspect say how the component
+  does it and how ToggleButton does it: its own state (a `Controlled` with a `start` the engine binds, never a ref the component
+  mints for a value), one `render = UI.mountedWith(p)(drawn)` (or Button's direct read where it keeps nothing), a `Base` that holds
+  only what decides the structure (never a value that can be a channel), every field a `Prop` unless it decides the structure,
+  text slots `Prop[String]`, setters generated, handlers reading the run when their event comes, no bridge read (`binding`,
+  `ReactiveValue`, `.const`) in the component. Every aspect that differs is a finding, including those no numbered rule names.
+- **Nothing is left out in silence.** Every finding ends applied, or stopped on as a question with the reason. "Kept because the
+  bytes would change" and "kept because another component has to change first" are questions, never decisions.
+- **Stop and ask when the clean result needs another component changed first** (its builder takes no `Prop`, has no `when`, holds
+  a type this component should not): say what the other component lacks, what the clean result would be, and what the
+  alternatives cost. Never work around it locally without the principal's answer.
+- **Stop and ask when an output stops being byte-equal or a region count changes.** Show the diff of the rendered output and the
+  region counts before and after, say why the new output is or is not correct, and wait. Byte equality is the check that nothing
+  changed by accident, never a reason to keep a shape the rules replace.
+- **The report names, per aspect of the comparison, what was applied, what is a question, and why.**
+
 ## 1. Props fields have plain names, and the body reads them through `p`
 
 A field is named for what it holds (`size`, `disabled`, `onClick`), with no `V`, `Flag`, `Eff` or `F` suffix, and the class
