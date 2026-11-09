@@ -142,7 +142,7 @@ end HasPlaceholder
   * traits exist.
   */
 private[uic] trait HasTooltip extends Node:
-    /** Stores the resolved tooltip slot. Implemented as `new Button(p.copy(tooltip = v))`. */
+    /** Stores the resolved tooltip slot. Implemented as a copy of the component with the slot set. */
     private[uic] def withTooltip(v: Maybe[Prop[String]]): Self
 
     /** Native tooltip (the `title` attribute). A `Signal[String]` patches `title` IN PLACE via

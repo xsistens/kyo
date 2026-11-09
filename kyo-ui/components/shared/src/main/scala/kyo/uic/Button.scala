@@ -27,8 +27,8 @@ end ButtonAccessibleRole
   * action); `variant` switches Filled/Outlined/Text/Link; while `loading` the
   * button shows a spinning glyph and is non-clickable like a disabled button.
   */
-final class Button private[uic] (private[uic] val p: Button.Props) extends Node, HasElementId, HasTooltip, HasAccessibleNameRef,
-      HasAccessibleDescription, PopupTrigger, HasProps:
+final class Button private[uic] (private[uic] val p: Button.Props) extends Component(Setters.derive[Button.Props, Button]), Node,
+      HasElementId, HasTooltip, HasAccessibleNameRef, HasAccessibleDescription, PopupTrigger:
     type Self = Button
 
     /** Package-internal class hook: hosts (SplitButton, SpeedDial) stamp Prime's
@@ -66,43 +66,12 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
     private[uic] def tabIndexRaw(v: Int): Button      = new Button(p.copy(tabIndex = Present(v)))
     private[uic] def focusSeedRaw(v: Boolean): Button = new Button(p.copy(focusSeed = v))
 
-    private[uic] def onKeyDownRaw(f: KeyboardEvent => UI.Action): Button =
-        new Button(p.copy(onKeyDown = Present(f)))
+    private[uic] def onKeyDownRaw(f: KeyboardEvent => UI.Action): Button = new Button(p.copy(onKeyDown = Present(f)))
 
-    /** Semantic accent (`.p-button-<severity>`); `Primary` is the unsuffixed default. A
-      * `Signal[Severity]` swaps the `.p-button-<token>` class IN PLACE via kyo-ui's class channel on
-      * emission (no re-render), e.g. a save button going neutral to success.
-      */
-    def severity(v: Prop[Severity]): Button = new Button(p.copy(severity = v))
-
-    /** Rendering variant: `Filled` (default), `Outlined`, `Text`, or `Link`. A signal swaps the variant's class in place. */
-    def variant(v: Prop[ButtonVariant]): Button = new Button(p.copy(variant = v))
-
-    /** Size: `Small` / `Normal` (default) / `Large`. A signal swaps the size's class in place. */
-    def size(v: Prop[Size]): Button = new Button(p.copy(size = v))
-
-    /** Fully rounded corners (`.p-button-rounded`), a signal toggling the class in place. */
-    def rounded(v: Prop[Boolean]): Button = new Button(p.copy(rounded = v))
-
-    /** Adds a shadow to indicate elevation (`.p-button-raised`), a signal toggling the class in place. */
-    def raised(v: Prop[Boolean]): Button = new Button(p.copy(raised = v))
-
-    /** Spans the full width of its container (`.p-button-fluid`), a signal toggling the class in place. */
-    def fluid(v: Prop[Boolean]): Button = new Button(p.copy(fluid = v))
-
-    /** Icon rendered before the label. A signal swaps the glyph in its own region, below the button. */
-    def icon(glyph: Prop[IconGlyph]): Button = new Button(p.copy(icon = Present(glyph)))
-
-    /** Icon rendered after the label. A signal swaps the glyph in its own region, below the button. */
-    def endIcon(glyph: Prop[IconGlyph]): Button = new Button(p.copy(endIcon = Present(glyph)))
-
-    private[uic] def accessibility: Accessibility              = p.access
-    private[uic] def withAccessibility(v: Accessibility): Self = new Button(p.copy(access = v))
-
-    /** Disables the button. A `Signal[Boolean]` enables/disables it in place on emission (e.g. a
-      * mutation-in-flight signal), and a click reads it when it comes.
-      */
-    def disabled(v: Prop[Boolean]): Button = new Button(p.copy(disabled = v))
+    private[uic] def accessibility: Accessibility                              = p.access
+    private[uic] def withAccessibility(v: Accessibility): Self                 = new Button(p.copy(access = v))
+    private[uic] def withAccessibleDescription(v: Maybe[Prop[String]]): Button = new Button(p.copy(description = v))
+    private[uic] def withTooltip(v: Maybe[Prop[String]]): Button               = new Button(p.copy(tooltip = v))
 
     /** Accessible-disabled: unlike the native `disabled` attribute (which removes the button
       * from the tab order and drops its click), this keeps the button focusable and IN the tab
@@ -116,52 +85,18 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
     def ariaDisabled(v: Prop[Boolean]): Button = new Button(p.copy(ariaDisabled = v))
 
     /** Binds a form's submit gate. [[SubmitGate]] is a distinct type from `Signal[Boolean]`
-      * precisely so it fits HERE and not on [[disabled]]: a natively disabled submit button
+      * precisely so it fits HERE and not on `disabled`: a natively disabled submit button
       * leaves the tab order and the re-enable lands a tick late, which is the focus trap
       * [[ariaDisabled]] exists to avoid. `uic.Button("Save").ariaDisabled(gate)` is therefore
       * the whole binding, with no accessibility decision left to make.
       */
     def ariaDisabled(gate: SubmitGate): Button = ariaDisabled(gate.signal)
 
-    /** Busy state: shows a spinning glyph and blocks clicks (like disabled). Bind a `Signal[Boolean]`
-      * to an in-flight request; the button is drawn again on emission, its one region, because loading
-      * shapes the spinner, aria-busy, icon-only layout and the effective disabled state rather than
-      * patching a single attribute.
-      */
-    def loading(v: Prop[Boolean]): Button = new Button(p.copy(loading = v))
-
-    /** Form behaviour (native `type` attribute): `Button` (default, non-submitting),
-      * `Submit`, or `Reset`.
-      */
-    def buttonType(v: ButtonType): Button = new Button(p.copy(buttonType = v))
-
-    /** ARIA role override: `Link` renders `role="link"` on the native button. */
-    def accessibleRole(v: ButtonAccessibleRole): Button = new Button(p.copy(accessibleRole = v))
-
-    private[uic] def withAccessibleDescription(v: Maybe[Prop[String]]): Button = new Button(p.copy(description = v))
-
-    /** Renders the button as a client-routed navigation anchor (`<a>` with kyo-ui's
-      * SPA `Href.Path`) that keeps the full button skin (Prime's Button link mode).
-      * Link semantics (native anchor role, focus) with button styling; form `type`
-      * does not apply.
-      */
-    def href(v: String): Button = new Button(p.copy(href = Present(v)))
-
-    private[uic] def withTooltip(v: Maybe[Prop[String]]): Button = new Button(p.copy(tooltip = v))
-
-    /** ID of the `<form>` to associate with. kyo-ui 1.0.0-RC5 exposes no `form`
-      * attribute setter and the DOM `form` property is read-only, so this is
-      * surfaced as `data-uic-form`: an association hint, not a native browser
-      * form association.
-      */
-    def form(v: String): Button = new Button(p.copy(form = Present(v)))
-
     /** Runs `action` when the button is pressed. Mirrors kyo-ui's native event effect
       * (`Async`): a handler that can fail handles its own failure, the way a native
       * `onClick` does.
       */
-    def onClick(action: => UI.Action)(using Frame): Button =
-        new Button(p.copy(onClick = Present(Callback(action))))
+    def onClick(action: => UI.Action)(using Frame): Button = new Button(p.copy(onClick = Present(Callback(action))))
 
     /** Adds arbitrary extra children (e.g. a custom badge) after the label/icon. */
     def apply(cs: UI*): Button = new Button(p.copy(extraChildren = p.extraChildren ++ cs))
@@ -252,40 +187,67 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
 end Button
 
 object Button:
+    /** What a button holds. Each field is a setter of its name (`uic.Button("Save").size(Size.Small)`), which takes a constant or
+      * a signal where the field is a `Prop` and the value itself where it is an `Opt`; `Button` writes the setters of `onClick` and
+      * `ariaDisabled` itself, and the fields marked `@noSetter` are written by hosts and the shared traits.
+      */
     final private[uic] case class Props(
-        label: Maybe[Prop[String]] = Absent,
+        /** The label. A signal re-renders the label in place on emission (e.g. a locale-driven `I18n.t` leaf). */
+        label: Opt[Prop[String]] = Opt.unset,
+        /** Semantic accent (`.p-button-<severity>`); `Primary` is the unsuffixed default. A signal swaps the class in place,
+          * e.g. a save button going neutral to success.
+          */
         severity: Prop[Severity] = Severity.Primary,
+        /** Rendering variant: `Filled` (default), `Outlined`, `Text`, or `Link`. A signal swaps the variant's class in place. */
         variant: Prop[ButtonVariant] = ButtonVariant.Filled,
+        /** Size: `Small` / `Normal` (default) / `Large`. A signal swaps the size's class in place. */
         size: Prop[Size] = Size.Normal,
+        /** Fully rounded corners (`.p-button-rounded`), a signal toggling the class in place. */
         rounded: Prop[Boolean] = false,
+        /** Adds a shadow to indicate elevation (`.p-button-raised`), a signal toggling the class in place. */
         raised: Prop[Boolean] = false,
+        /** Spans the full width of its container (`.p-button-fluid`), a signal toggling the class in place. */
         fluid: Prop[Boolean] = false,
-        icon: Maybe[Prop[IconGlyph]] = Absent,
-        endIcon: Maybe[Prop[IconGlyph]] = Absent,
-        access: Accessibility = Accessibility.none,
-        href: Maybe[String] = Absent,
+        /** Icon rendered before the label. A signal swaps the glyph in its own region, below the button. */
+        icon: Opt[Prop[IconGlyph]] = Opt.unset,
+        /** Icon rendered after the label. A signal swaps the glyph in its own region, below the button. */
+        endIcon: Opt[Prop[IconGlyph]] = Opt.unset,
+        /** Renders the button as a client-routed navigation anchor (`<a>` with kyo-ui's SPA `Href.Path`) that keeps the full
+          * button skin (Prime's Button link mode): link semantics with button styling; form `type` does not apply.
+          */
+        href: Opt[String] = Opt.unset,
+        /** Disables the button. A signal enables and disables it in place on emission (e.g. a mutation-in-flight signal), and a
+          * click reads it when it comes.
+          */
         disabled: Prop[Boolean] = false,
         ariaDisabled: Prop[Boolean] = false,
+        /** Busy state: shows a spinning glyph and blocks clicks (like disabled). A signal is the button's one region, because
+          * loading shapes the spinner, aria-busy, the icon-only layout and the effective disabled state.
+          */
         loading: Prop[Boolean] = false,
+        /** Form behaviour (native `type` attribute): `Button` (default, non-submitting), `Submit`, or `Reset`. */
         buttonType: ButtonType = ButtonType.Button,
+        /** ARIA role override: `Link` renders `role="link"` on the native button. */
         accessibleRole: ButtonAccessibleRole = ButtonAccessibleRole.Button,
-        description: Maybe[Prop[String]] = Absent,
-        tooltip: Maybe[Prop[String]] = Absent,
-        form: Maybe[String] = Absent,
+        /** ID of the `<form>` to associate with, surfaced as `data-uic-form`: an association hint, not a native browser form
+          * association (the DOM `form` property is read-only).
+          */
+        form: Opt[String] = Opt.unset,
         onClick: Maybe[UI.Action] = Absent,
-        onKeyDown: Maybe[KeyboardEvent => UI.Action] = Absent,
-        extraChildren: List[UI] = Nil,
-        extraClasses: List[String] = Nil,
-        extraArias: List[(String, Prop[String])] = Nil,
-        role: Maybe[String] = Absent,
-        tabIndex: Maybe[Int] = Absent,
-        focusSeed: Boolean = false
+        @noSetter access: Accessibility = Accessibility.none,
+        @noSetter description: Maybe[Prop[String]] = Absent,
+        @noSetter tooltip: Maybe[Prop[String]] = Absent,
+        @noSetter onKeyDown: Maybe[KeyboardEvent => UI.Action] = Absent,
+        @noSetter extraChildren: List[UI] = Nil,
+        @noSetter extraClasses: List[String] = Nil,
+        @noSetter extraArias: List[(String, Prop[String])] = Nil,
+        @noSetter role: Maybe[String] = Absent,
+        @noSetter tabIndex: Maybe[Int] = Absent,
+        @noSetter focusSeed: Boolean = false
     ) derives CanEqual
 
-    /** A button labelled `label`. A `Signal[String]` re-renders the label in place on emission (e.g. a
-      * locale-driven `I18n.t` leaf).
-      */
-    def apply(label: Prop[String]): Button = new Button(Props(label = Present(label)))
+    /** A button labelled `label`. */
+    def apply(label: Prop[String]): Button = new Button(Props(label = label))
 
     /** An empty button; add an icon and/or children via the setters. */
     def apply(): Button = new Button(Props())
