@@ -18,7 +18,7 @@ import kyo.UI.*
   * `Boolean` form field like CheckBox through its generated `checked` and `onBlur`, so `uic.ToggleButton().bind(field)`
   * wires value, validity, message and the blur trigger in one call.
   */
-final class ToggleButton private[uic] (private[uic] val p: ToggleButton.Props)
+final class ToggleButton private[uic] (private[kyo] val p: ToggleButton.Props)
     extends Component(Setters[ToggleButton.Props, ToggleButton]), Node, FormControl, HasAccessibleNameRef:
 
     type Self = ToggleButton

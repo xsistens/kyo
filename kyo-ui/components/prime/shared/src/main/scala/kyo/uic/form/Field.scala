@@ -4,7 +4,6 @@ import kyo.*
 import kyo.uic.ChoiceFormControl
 import kyo.uic.FileFormControl
 import kyo.uic.FormControl
-import kyo.uic.HasSetter
 import kyo.uic.MultiChoiceFormControl
 import kyo.uic.NumberFormControl
 import kyo.uic.OptionalFormControl
