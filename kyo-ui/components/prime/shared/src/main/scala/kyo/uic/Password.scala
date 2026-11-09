@@ -149,7 +149,7 @@ object Password:
         def of(q: Props, own: Maybe[SignalRef[String]]): Base =
             // The instance's own text where the text is the field's to keep and the caller bound nothing or only where it starts.
             val text: Maybe[Prop[String]] =
-                own.filter(_ => keepsOwnText(q) && q.value.binding.forall(_.const.isDefined)).orElse(q.value.bound)
+                own.filter(_ => keepsOwnText(q) && q.value.startsOwn).orElse(q.value.bound)
             Base(
                 q.toggleMask,
                 q.feedback,
@@ -181,13 +181,11 @@ object Password:
     /** Whether the text the reader types is the field's to keep: with the meter even unbound, and from a constant. */
     private def keepsOwnText(q: Props): Boolean = keepsText(q) && (q.feedback || q.value.bound.isDefined)
 
-    /** Where the field's own text starts: a constant the caller gave, else empty. */
-    private def startText(q: Props): String = q.value.binding.flatMap(_.const).getOrElse("")
-
     /** The instance's state, minted once: its own text and its reveal (the one handed in, for the golden seam). */
     private def instance(live: UI.Live[Props], revealed: Maybe[SignalRef[Boolean]])(using Frame): UI < Sync =
         for
-            start  <- live.call(startText)
+            // Where the field's own text starts: a constant the caller gave, else empty.
+            start  <- live.call(_.value.startOr(""))
             own    <- Signal.initRef(start)
             reveal <- revealed match
                 case Present(r) => Kyo.lift(r)
