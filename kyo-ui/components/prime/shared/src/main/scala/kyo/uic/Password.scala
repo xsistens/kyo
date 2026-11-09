@@ -232,11 +232,7 @@ object Password:
         if b.hearsInput then in = in.onInput(s => live.call(_.value.hearer).map(_.fold(Kyo.unit: UI.Action)(_(s))))
         if b.hearsChange then in = in.onChange(s => live.call(_.onChange).map(_.fold(Kyo.unit: UI.Action)(_(s))))
         if b.hearsBlur then in = in.onBlur(s => live.call(_.onBlur).map(_.fold(Kyo.unit: UI.Action)(_(s))))
-        b.placeholder match
-            case Present(TextValue.Const(v)) => in = in.placeholder(v)
-            case Present(TextValue.Dyn(sig)) => in = in.placeholder(sig)
-            case Absent                      => ()
-        end match
+        in = in.withPlaceholder(b.placeholder)
         if b.disabled then in = in.disabled(true)
         in = in.readonly(b.readonly)
         if b.required then in = in.required(true)
