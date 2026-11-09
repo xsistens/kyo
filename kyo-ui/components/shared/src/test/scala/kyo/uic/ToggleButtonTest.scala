@@ -162,21 +162,26 @@ class ToggleButtonTest extends ReactiveValueContract:
         end for
     }
 
-    "readonly from a signal: on, the button says so and takes no click; off again, it does" in {
-        def wiredAs(ro: Boolean)(t: UI): Boolean < Sync =
-            Abort.run[AssertionError](Abort.catching[AssertionError](elementWithClass(t, "p-togglebutton"))).map(_.toMaybe.exists(b =>
-                b.attrs.ariaAttrs.get("disabled").contains("true") == ro && b.attrs.onClick.isDefined != ro
-            ))
+    "readonly from a signal: on, the button says so and is silent; off again, it answers; nothing is drawn again" in {
         for
-            onRef  <- Signal.initRef(false)
-            offRef <- Signal.initRef(true)
-            on     <- publishedAfterReady(uic.ToggleButton().readonly(onRef).render, wiredAs(false), until = wiredAs(true))(_ =>
-                setSettled(onRef, true)
-            )
-            off <- publishedAfterReady(uic.ToggleButton().readonly(offRef).render, wiredAs(true), until = wiredAs(false))(_ =>
-                setSettled(offRef, false)
-            )
-        yield assert(on.isDefined && off.isDefined)
+            ro <- Signal.initRef(false)
+            ui = uic.ToggleButton().readonly(ro).render
+            (every, since, prior) <- paintedAround(
+                ui,
+                t => elementsWithClass(t, "p-togglebutton").map(_.nonEmpty),
+                t => elementWithClass(t, "p-togglebutton").map(silentNow)
+            )(_ => setSettled(ro, true))
+            b        <- elementWithClass(every, "p-togglebutton")
+            onQuiet  <- silentNow(b)
+            onAria   <- ariaNow(b, "disabled")
+            _        <- setSettled(ro, false)
+            offQuiet <- silentNow(b)
+            offAria  <- ariaNow(b, "disabled")
+            redrawn  <- drawnAgain(since, prior, "p-togglebutton")
+        yield assert(
+            onQuiet && onAria.contains("true") && !offQuiet && !offAria.contains("true") && redrawn.isEmpty,
+            s"on: silent $onQuiet aria $onAria; off: silent $offQuiet aria $offAria; drawn again at ${redrawn.mkString(", ")}"
+        )
         end for
     }
 

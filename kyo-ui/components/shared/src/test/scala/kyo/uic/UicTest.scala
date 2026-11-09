@@ -741,12 +741,17 @@ abstract class UicTest extends kyo.test.Test[Any]:
       * lands inert, which is the trap the module documents.
       */
     private[uic] def click(el: UI.Ast.Element)(using Frame): Any < Async =
-        el.attrs.onClick match
-            case Present(eff) => handled(eff)
-            case Absent       =>
-                el.attrs.onClickEvt match
-                    case Present(f) => handled(f(UI.MouseEvent(el.attrs.identifier, UI.Modifiers.none)))
-                    case Absent     => throw new AssertionError("the element declares no click handler")
+        // A silent element runs no handler, as the dispatch does: the click reaches nothing.
+        silentNow(el).map { quiet =>
+            if quiet then ()
+            else
+                el.attrs.onClick match
+                    case Present(eff) => handled(eff)
+                    case Absent       =>
+                        el.attrs.onClickEvt match
+                            case Present(f) => handled(f(UI.MouseEvent(el.attrs.identifier, UI.Modifiers.none)))
+                            case Absent     => throw new AssertionError("the element declares no click handler")
+        }
 
     /** The reader typing `text` into `field`, the way the transport dispatches an input event: a field bound to a ref has
       * it written first, then `onInput` is told. A field that has neither sends nothing at all, since the browser keeps
@@ -814,9 +819,6 @@ abstract class UicTest extends kyo.test.Test[Any]:
                         case Present(ui) => chains(ui, above)
                         case Absent      => Chunk.empty
                 case _ => Chunk.empty
-        def disabled(e: UI.Ast.Element): Boolean = e match
-            case d: UI.Ast.HasDisabled => d.disabled.getOrElse(false)
-            case _                     => false
         def run(eff: Maybe[UI.Action]): Any < Async = eff match
             case Present(a) => handled(a)
             case Absent     => ()
@@ -825,18 +827,23 @@ abstract class UicTest extends kyo.test.Test[Any]:
             case Absent     => ()
         def walk(chain: List[UI.Ast.Element], isTarget: Boolean): Any < Async =
             chain match
-                case Nil                                  => ()
-                case e :: rest if isTarget && disabled(e) => walk(rest, isTarget = false)
-                case e :: rest                            =>
-                    val a        = e.attrs
-                    val declared = a.onClick.nonEmpty || a.onClickEvt.nonEmpty ||
-                        (isTarget && (a.onClickSelf.nonEmpty || a.onClickSelfEvt.nonEmpty))
-                    val self: Any < Async =
-                        if isTarget then run(a.onClickSelf).andThen(runWith(a.onClickSelfEvt, e)) else ()
-                    self
-                        .andThen(runWith(a.onClickEvt, e))
-                        .andThen(run(a.onClick))
-                        .andThen(if declared && a.stopPropagation.getOrElse(false) then () else walk(rest, isTarget = false))
+                case Nil       => ()
+                case e :: rest =>
+                    // A silent element, target or ancestor, runs no handler: the event goes on as if it had none.
+                    silentNow(e).map { quiet =>
+                        if quiet then walk(rest, isTarget = false)
+                        else
+                            val a        = e.attrs
+                            val declared = a.onClick.nonEmpty || a.onClickEvt.nonEmpty ||
+                                (isTarget && (a.onClickSelf.nonEmpty || a.onClickSelfEvt.nonEmpty))
+                            val self: Any < Async =
+                                if isTarget then run(a.onClickSelf).andThen(runWith(a.onClickSelfEvt, e)) else ()
+                            self
+                                .andThen(runWith(a.onClickEvt, e))
+                                .andThen(run(a.onClick))
+                                .andThen(if declared && a.stopPropagation.getOrElse(false) then () else walk(rest, isTarget = false))
+                        end if
+                    }
         chains(root, Nil).map { all =>
             all.find(c => target(c.head)) match
                 case Some(chain) => walk(chain, isTarget = true)
@@ -866,10 +873,28 @@ abstract class UicTest extends kyo.test.Test[Any]:
         if raw.isEmpty then Seq.empty else raw.split('.').toSeq
     end pathOf
 
-    /** Whether `el` declares any click handler, the self-only one included. */
+    /** Whether `el` answers a click: it declares a handler, the self-only one included, and is not silent by a constant
+      * (`silent(true)` or `disabled(true)`), since a silent element lists no event and its handlers never run.
+      */
     private[uic] def declaresClick(el: UI.Ast.Element): Boolean =
         val a = el.attrs
-        a.onClick.nonEmpty || a.onClickEvt.nonEmpty || a.onClickSelf.nonEmpty || a.onClickSelfEvt.nonEmpty
+        !silentConst(el) && (a.onClick.nonEmpty || a.onClickEvt.nonEmpty || a.onClickSelf.nonEmpty || a.onClickSelfEvt.nonEmpty)
+
+    /** Whether `el` is silent by its constants: `silent(true)`, or `disabled(true)` on an element that has it. */
+    private[uic] def silentConst(el: UI.Ast.Element): Boolean =
+        el.attrs.silent ||
+            (el match
+                case d: UI.Ast.HasDisabled => d.disabled.contains(true)
+                case _                     => false)
+
+    /** Whether `el` is silent now, reading the `disabled` and `silent` channels where they are bound, as the dispatch does. */
+    private[uic] def silentNow(el: UI.Ast.Element)(using Frame): Boolean < Sync =
+        val off: Boolean < Sync = el.attrs.reactiveBoolAttrs.get("disabled").fold(Kyo.lift(el match
+            case d: UI.Ast.HasDisabled => d.disabled.contains(true)
+            case _                     => false))(_.current)
+        val quiet: Boolean < Sync = el.attrs.silentSignal.fold(Kyo.lift(el.attrs.silent))(_.current)
+        off.map(o => quiet.map(o || _))
+    end silentNow
 
     /** The same, for a click that reached `el` THROUGH a control of the reader's own: an anchor in
       * a cell, a button in a row. Only the typed handler can be told, since the flag rides
