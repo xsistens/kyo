@@ -194,10 +194,21 @@ object Password:
                 case Absent     => Signal.initRef(false)
         yield drawn(live, Present(own), Present(reveal))
 
+    /** The field, drawn over `live`: by an instance with its own text and reveal, or with neither where the field keeps nothing.
+      *
+      * What builds the field and has no channel (the [[Base]]) is the one read of a `reactive` block, drawn again only when a run
+      * changes it. Inside it each place reads what it shows: the text reaches the field as its value channel and the wrapper's
+      * filled class as a class channel, `readonly` and the validity reach the field through their channels, the reveal reaches the
+      * field's type and the eye's classes and label as channels and its glyph as a region, and the meter is a region over the text
+      * beside the field, whose label is the latest run's. The field's hearers read the run when their event comes.
+      */
     private def drawn(live: UI.Live[Props], own: Maybe[SignalRef[String]], reveal: Maybe[SignalRef[Boolean]])(using Frame): UI =
         val base = live(Base.of(_, own))
         UI.reactive(built(live, base.read, reveal))
 
+    /** The field of one [[Base]]: the input, the eye where the mask toggle is on, the wrapper, the meter where the feedback is on,
+      * and the validity row after them.
+      */
     private def built(live: UI.Live[Props], b: Base, reveal: Maybe[SignalRef[Boolean]])(using Frame): UI =
         val validity            = FieldValidity(b.validity)
         val shown: Prop[String] = b.text.getOrElse("")
