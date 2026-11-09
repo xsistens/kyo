@@ -276,7 +276,7 @@ class SelectButtonTest extends ReactiveValueContract:
             })
         )
 
-    private def presses(c: UI.Ast.Element): Boolean = declaresClick(c) || c.attrs.onKeyDown.nonEmpty
+    private def presses(c: UI.Ast.Element): Boolean = declaresClick(c) || (!silentConst(c) && c.attrs.onKeyDown.nonEmpty)
 
     private def answering(t: UI)(using Frame): Boolean < Sync = options(t).map(_.exists(declaresClick))
 

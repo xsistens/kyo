@@ -16,7 +16,7 @@ object Opt:
     implicit def set[A](a: A): Opt[A] = Present(a)
 end Opt
 
-/** A component over its props `P`: `final class Button(val p: Props) extends Component(Setters.derive[Props, Button])`.
+/** A component over its props `P`: `final class Button(val p: Props) extends Component(Setters[Props, Button])`.
   *
   * Every field of `P` is a setter of its name, `uic.Button("Save").size(Size.Small)`, typed against the field and completed by the
   * IDE as a selectable field. A setter the component writes itself takes its field's place, so an author who wants the setter's

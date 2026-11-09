@@ -27,7 +27,7 @@ end ButtonAccessibleRole
   * action); `variant` switches Filled/Outlined/Text/Link; while `loading` the
   * button shows a spinning glyph and is non-clickable like a disabled button.
   */
-final class Button private[uic] (private[uic] val p: Button.Props) extends Component(Setters.derive[Button.Props, Button]), Node,
+final class Button private[uic] (private[uic] val p: Button.Props) extends Component(Setters[Button.Props, Button]), Node,
       HasElementId, HasTooltip, HasAccessibleNameRef, HasAccessibleDescription, PopupTrigger:
     type Self = Button
 
@@ -119,7 +119,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
                     // form.submit to focus-first-invalid); it says so only while the button is not natively disabled.
                     val says = p.ariaDisabled.read && !off
                     renderButton(busy).disabled(off)
-                        .when(p.onClick)((e, click) => e.onClick(if off then Kyo.unit else click))
+                        .when(p.onClick)(_.onClick(_))
                         .ariaFlag("disabled", says)
                         .cssClass("p-uic-aria-disabled", says)(contentChildren(busy)*)
                 }
