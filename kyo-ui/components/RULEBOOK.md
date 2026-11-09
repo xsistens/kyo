@@ -181,6 +181,9 @@ UI.reactive {
   `data-kyo-ev` and runs no handler, as target or ancestor, and a signal patches that in place, so the handler only does its
   job (`onClick(toggle)`) and the element draws nothing again. A click that has to stay while the element looks locked
   (Button's `ariaDisabled`, which routes the press to a form submit) is simply not silenced.
+- **A text field's native `readonly` is not silenced either** (Input). The browser already refuses the edit, and the field
+  stays a place the reader reaches and leaves: `silent` would drop its blur too, and the form layer's `Blur` trigger listens
+  there. So `readOnly(locked)` alone says it, and the handlers stay.
 - An attribute that a constant writes only while true (`aria-disabled`, `aria-busy`) is `ariaFlag`; one where `"false"` says
   something (`aria-pressed`) is `aria(name, on.toString)`.
 - A setter beside its union with a plain overload (`disabled(Boolean)` once) keeps a `Boolean` off the channel: kyo-ui has one

@@ -173,7 +173,7 @@ final class InputOtp private[uic] (private[uic] val p: InputOtp.Props) extends N
                     cell = cell.onBlur(_ => valueSlot.current(current).map(f))
                 }
             end if
-            cell.render
+            cell.renderInPlace
         }
 
         var el = div.cssClass("p-inputotp").cssClass("p-component")

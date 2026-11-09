@@ -2,6 +2,7 @@ package kyo.uic.form
 
 import kyo.*
 import kyo.uic.ChoiceFormControl
+import kyo.uic.Component
 import kyo.uic.FileFormControl
 import kyo.uic.FormControl
 import kyo.uic.HasSetter
@@ -809,6 +810,28 @@ extension [C <: TextFormControl { type Self <: C }](control: C)
         b = b.onBlur(_ => field.blurred)
         b
     end bindControlOnly
+end extension
+
+/** A `String` field binds to a component whose setters are generated ([[kyo.uic.Component]]) through its `value` and `onBlur`
+  * ([[HasSetter]]). The receiver is narrower than the `Boolean` binding's below, as a [[TextFormControl]] is, so a field of a type
+  * no binding takes is reported against the `String` field a text control expects, not as an ambiguous overload.
+  */
+extension [C <: Component[?, ?, ?] & FormControl { type Self <: C }](control: C)
+    @targetName("bindGeneratedText")
+    def bind(field: FormField[String])(using
+        value: HasSetter[C, "value", UI.Prop[String]],
+        blur: HasSetter[C, "onBlur", String => UI.Action],
+        frame: Frame
+    ): C =
+        blur(stampId(value(control, field.valueRef), field).invalidMessage(field.message), _ => field.blurred)
+
+    @targetName("bindControlOnlyGeneratedText")
+    def bindControlOnly(field: FormField[String])(using
+        value: HasSetter[C, "value", UI.Prop[String]],
+        blur: HasSetter[C, "onBlur", String => UI.Action],
+        frame: Frame
+    ): C =
+        blur(stampId(value(control, field.valueRef), field).invalid(field.visibleError.map(_.isDefined)), _ => field.blurred)
 end extension
 
 /** A `Boolean` field binds to any control with a `checked` and an `onBlur` setter, generated or written by hand ([[HasSetter]]). */

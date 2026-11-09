@@ -29,16 +29,27 @@ import kyo.UI.*
   * @param start
   *   where the instance's own value starts, for a slot the component holds itself where the caller binds nothing (a
   *   [[kyo.UI.Ownable]] prop the engine binds to the instance's own ref); `Absent` where it holds none
+  * @param constantStarts
+  *   a constant handed to [[bind]] is where the instance's own value starts rather than a binding: a text field's starting
+  *   text, which the reader goes on editing
   */
 final private[uic] case class Controlled[A](
     bound: Maybe[Prop[A]] = Absent,
     hearer: Maybe[A => UI.Action] = Absent,
     heardElsewhere: Boolean = false,
     quiet: Boolean = false,
-    start: Maybe[A] = Absent
+    start: Maybe[A] = Absent,
+    constantStarts: Boolean = false
 ) extends UI.Ownable[A]:
-    /** The slot bound as the caller says: a ref two way, a signal one way, anything else a constant. */
-    def bind(v: Prop[A]): Controlled[A] = copy(bound = Present(v))
+    /** The slot bound as the caller says: a ref two way, a signal one way, anything else a constant; where a constant only
+      * starts the slot ([[constantStarts]]), a constant is its start and a signal binds with no start of its own.
+      */
+    def bind(v: Prop[A]): Controlled[A] =
+        if !constantStarts then copy(bound = Present(v))
+        else
+            v match
+                case s: Signal[A] @unchecked => copy(bound = Present(s), start = Absent)
+                case a: A @unchecked         => copy(bound = Absent, start = Present(a))
 
     /** The slot with nothing bound: the component's own. */
     def unbound: Controlled[A] = copy(bound = Absent)

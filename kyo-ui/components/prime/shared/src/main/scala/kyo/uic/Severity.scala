@@ -43,6 +43,10 @@ end ButtonVariant
 enum FieldVariant derives CanEqual:
     case Outlined, Filled
 
+    /** The class `.p-variant-filled`, none for `Outlined`, the default look. */
+    private[uic] def cls: Maybe[String] = if this == FieldVariant.Filled then Present("p-variant-filled") else Absent
+end FieldVariant
+
 /** The widest size scale in the design system: the standard [[Size]] plus
   * [[Size.XLarge]]. Only the components whose PrimeOne stylesheet ships an
   * `-xl` rule accept it, which today is Avatar (`.p-avatar-xl`) and Badge
