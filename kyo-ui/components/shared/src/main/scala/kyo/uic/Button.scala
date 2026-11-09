@@ -73,7 +73,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
       * `Signal[Severity]` swaps the `.p-button-<token>` class IN PLACE via kyo-ui's class channel on
       * emission (no re-render), e.g. a save button going neutral to success.
       */
-    def severity(v: Severity | Signal[Severity]): Button = new Button(p.copy(severity = v))
+    def severity(v: Prop[Severity]): Button = new Button(p.copy(severity = v))
 
     /** Rendering variant: `Filled` (default), `Outlined`, `Text`, or `Link`. A signal swaps the variant's class in place. */
     def variant(v: Prop[ButtonVariant]): Button = new Button(p.copy(variant = v))
@@ -90,10 +90,11 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
     /** Spans the full width of its container (`.p-button-fluid`), a signal toggling the class in place. */
     def fluid(v: Prop[Boolean]): Button = new Button(p.copy(fluid = v))
 
-    def icon(glyph: IconGlyph): Button = new Button(p.copy(icon = Present(glyph)))
+    /** Icon rendered before the label. A signal swaps the glyph in its own region, below the button. */
+    def icon(glyph: Prop[IconGlyph]): Button = new Button(p.copy(icon = Present(glyph)))
 
-    /** Icon rendered after the label. */
-    def endIcon(glyph: IconGlyph): Button = new Button(p.copy(endIcon = Present(glyph)))
+    /** Icon rendered after the label. A signal swaps the glyph in its own region, below the button. */
+    def endIcon(glyph: Prop[IconGlyph]): Button = new Button(p.copy(endIcon = Present(glyph)))
 
     private[uic] def accessibility: Accessibility              = p.access
     private[uic] def withAccessibility(v: Accessibility): Self = new Button(p.copy(access = v))
@@ -101,7 +102,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
     /** Disables the button. A `Signal[Boolean]` enables/disables it in place on emission (e.g. a
       * mutation-in-flight signal), and a click reads it when it comes.
       */
-    def disabled(v: Boolean | Signal[Boolean]): Button = new Button(p.copy(disabled = Present(v)))
+    def disabled(v: Prop[Boolean]): Button = new Button(p.copy(disabled = Present(v)))
 
     /** Accessible-disabled: unlike the native `disabled` attribute (which removes the button
       * from the tab order and drops its click), this keeps the button focusable and IN the tab
@@ -112,7 +113,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
       * Tab keypress, so focus jumps PAST the button to the next control. With `aria-disabled` the
       * button never leaves the tab order, so the race disappears.
       */
-    def ariaDisabled(v: Boolean | Signal[Boolean]): Button = new Button(p.copy(ariaDisabled = Present(v)))
+    def ariaDisabled(v: Prop[Boolean]): Button = new Button(p.copy(ariaDisabled = Present(v)))
 
     /** Binds a form's submit gate. [[SubmitGate]] is a distinct type from `Signal[Boolean]`
       * precisely so it fits HERE and not on [[disabled]]: a natively disabled submit button
@@ -127,7 +128,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
       * shapes the spinner, aria-busy, icon-only layout and the effective disabled state rather than
       * patching a single attribute.
       */
-    def loading(v: Boolean | Signal[Boolean]): Button = new Button(p.copy(loading = Present(v)))
+    def loading(v: Prop[Boolean]): Button = new Button(p.copy(loading = Present(v)))
 
     /** Form behaviour (native `type` attribute): `Button` (default, non-submitting),
       * `Submit`, or `Reset`.
@@ -257,10 +258,10 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
         val leading: List[UI] =
             if loading then
                 List(GlyphSvg(Icons.spinner, "p-button-icon", "p-button-icon-left", "p-button-loading-icon", "p-icon-spin"))
-            else p.icon.toList.map(g => GlyphSvg(g, "p-button-icon", "p-button-icon-left"))
+            else p.icon.toList.map(g => Prop.render(g)(GlyphSvg(_, "p-button-icon", "p-button-icon-left")))
         val textChild: List[UI]    = p.label.toList.map(l => span.cssClass("p-button-label")(l))
         val endIconChild: List[UI] =
-            p.endIcon.toList.map(g => GlyphSvg(g, "p-button-icon", "p-button-icon-right"))
+            p.endIcon.toList.map(g => Prop.render(g)(GlyphSvg(_, "p-button-icon", "p-button-icon-right")))
         leading ++ textChild ++ endIconChild ++ p.extraChildren
     end contentChildren
 end Button
@@ -274,8 +275,8 @@ object Button:
         rounded: Prop[Boolean] = false,
         raised: Prop[Boolean] = false,
         fluid: Prop[Boolean] = false,
-        icon: Maybe[IconGlyph] = Absent,
-        endIcon: Maybe[IconGlyph] = Absent,
+        icon: Maybe[Prop[IconGlyph]] = Absent,
+        endIcon: Maybe[Prop[IconGlyph]] = Absent,
         access: Accessibility = Accessibility.none,
         href: Maybe[String] = Absent,
         disabled: Maybe[Prop[Boolean]] = Absent,
@@ -299,7 +300,7 @@ object Button:
     /** A button labelled `label`. A `Signal[String]` re-renders the label in place on emission (e.g. a
       * locale-driven `I18n.t` leaf).
       */
-    def apply(label: String | Signal[String]): Button = new Button(Props(label = Present(label)))
+    def apply(label: Prop[String]): Button = new Button(Props(label = Present(label)))
 
     /** An empty button; add an icon and/or children via the setters. */
     def apply(): Button = new Button(Props())
