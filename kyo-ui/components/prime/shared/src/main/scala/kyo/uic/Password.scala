@@ -64,7 +64,7 @@ final class Password private[uic] (private[uic] val p: Password.Props) extends N
     /** Native `readonly`, so the field is focusable but not editable. A `Signal[Boolean]` toggles it IN
       * PLACE via kyo-ui's boolean attribute channel (no re-render).
       */
-    def readonly(v: Prop[Boolean]): Password = new Password(p.copy(readonlyFlag = Present(v)))
+    def readonly(v: Prop[Boolean]): Password = new Password(p.copy(readonlyFlag = v))
 
     /** Marks the field required (native constraint + `aria-required`). */
     def required(v: Boolean): Password = new Password(p.copy(requiredFlag = v))
@@ -130,7 +130,7 @@ object Password:
         strongLabelV: Prop[String] = "Strong",
         placeholderText: Maybe[TextValue] = Absent,
         disabledFlag: Boolean = false,
-        readonlyFlag: Maybe[Prop[Boolean]] = Absent,
+        readonlyFlag: Prop[Boolean] = false,
         requiredFlag: Boolean = false,
         nameV: Maybe[String] = Absent,
         maxLengthV: Maybe[Int] = Absent,
@@ -153,7 +153,7 @@ object Password:
         toggleMask: Boolean,
         feedback: Boolean,
         disabled: Boolean,
-        readonly: Maybe[Prop[Boolean]],
+        readonly: Prop[Boolean],
         required: Boolean,
         name: Maybe[String],
         maxLength: Maybe[Int],
@@ -199,10 +199,11 @@ object Password:
     /** Whether the field draws something from its text after the page is shown (the meter, or the reveal) that the reader can
       * change.
       */
-    private def keepsText(q: Props): Boolean = (q.feedbackFlag || q.toggleMaskFlag) && !q.disabledFlag && !q.readonlyFlag.exists {
-        case on: Boolean => on
-        case _           => false
-    }
+    private def keepsText(q: Props): Boolean = (q.feedbackFlag || q.toggleMaskFlag) && !q.disabledFlag &&
+        !(q.readonlyFlag match
+            case on: Boolean => on
+            case _           => false
+        )
 
     /** Whether the text the reader types is the field's to keep: with the meter even unbound, and from a constant. */
     private def keepsOwnText(q: Props): Boolean = keepsText(q) && (q.feedbackFlag || q.valueSlot.bound.isDefined)
@@ -261,7 +262,7 @@ object Password:
             case Absent                      => ()
         end match
         if b.disabled then in = in.disabled(true)
-        b.readonly.foreach(r => in = in.readonly(r))
+        in = in.readonly(b.readonly)
         if b.required then in = in.required(true)
         b.name.foreach(v => in = in.name(v))
         b.maxLength.foreach(n => in = in.maxLength(n))
