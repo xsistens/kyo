@@ -1,14 +1,14 @@
 # kyo-ui-components-gen: the extraction and codegen pipeline
 
-Paths in the sections below are relative to this directory (`kyo-ui/components/gen`). The inputs
+Paths in the sections below are relative to this directory (`kyo-ui/components/prime/gen`). The inputs
 (`input/`, `work/`, `npm/node_modules/`) are pinned and gitignored; the generated Scala is
-committed under `kyo-ui/components/shared/src/main/scala/kyo/uic/generated`. Rerun from
+committed under `kyo-ui/components/prime/shared/src/main/scala/kyo/uic/generated`. Rerun from
 the repo root (needs `bun` and network access):
 
 ```
-kyo-ui/components/gen/fetch.sh   # bun install (npm/, frozen lockfile) + extract.mjs + fiori icons download
+kyo-ui/components/prime/gen/fetch.sh   # bun install (npm/, frozen lockfile) + extract.mjs + fiori icons download
 sbt kyo-ui-components-gen/run    # FioriIconsGen, PrimeIconsGen, TokensGen, ComponentCssGen
-sbt kyo-ui-componentsJVM/compile # formats the generated sources
+sbt kyo-ui-components-primeJVM/compile # formats the generated sources
 ```
 
 The generator locates the repo root as the nearest ancestor of its working directory that

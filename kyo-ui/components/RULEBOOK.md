@@ -1,6 +1,6 @@
 # uic rulebook: how a component's code is written
 
-The rules a component in `shared/src/main/scala/kyo/uic/` is written by, so its code is compact, tidy and reads the same in
+The rules a component in `prime/shared/src/main/scala/kyo/uic/` is written by, so its code is compact, tidy and reads the same in
 every component. `CLAUDE.md` says what a component must do (the Solid model, slots, diagnostics, the contract); this file says
 how its code looks. Each rule names the reason and shows the shape, from `ToggleButton` and `Button`, which follow all of
 them.
