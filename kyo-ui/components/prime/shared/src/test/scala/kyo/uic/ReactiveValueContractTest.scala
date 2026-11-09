@@ -149,16 +149,16 @@ abstract class ReactiveValueContract extends UicTest:
             if mountDraws then live(ui) else Kyo.lift(ui)
 
         /** Whether `t` is a tree a gesture acts on: ready, and with a control that answers. A tree the control is not in yet
-          * is not ready: the first tree a mount publishes can be empty, and a lookup that fails there must wait for the next
-          * one rather than end the wait.
+          * is not ready: the first tree a mount publishes can be empty, and a lookup that fails there, in `ready` as in
+          * `control`, must wait for the next one rather than end the wait.
           */
         def wired(t: UI)(using Frame): Boolean < Sync =
-            ready.fold(Kyo.lift(true))(r => r(t)).map(mounted =>
-                if !mounted then Kyo.lift(false)
-                else
-                    Abort.run[AssertionError](Abort.catching[AssertionError](control(t).map(answers)))
-                        .map(_.getOrElse(false))
+            def notYet(found: => Boolean < Sync): Boolean < Sync =
+                Abort.run[AssertionError](Abort.catching[AssertionError](found)).map(_.getOrElse(false))
+            notYet(ready.fold(Kyo.lift(true))(r => r(t))).map(mounted =>
+                if !mounted then Kyo.lift(false) else notYet(control(t).map(answers))
             )
+        end wired
 
         /** Every step of the reader asking for `next`: the gesture, then [[after]]. */
         def steps(using Frame): Seq[UI => Any < Async] = ((t: UI) => ask(t)) +: after.map(f => (t: UI) => f(t))
