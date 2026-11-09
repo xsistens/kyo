@@ -102,6 +102,15 @@ class ButtonTest extends UicTest:
         end for
     }
 
+    "an icon from a signal is its own region below the button, and the button draws no region for it" in {
+        for
+            glyph <- Signal.initRef[IconGlyph](Icons.check)
+            ui = button.icon(glyph).endIcon(glyph).render
+            above  <- regionsAbove(ui, "p-button")
+            onIcon <- regionsAbove(ui, "p-button-icon-left")
+        yield assert(above == 0 && onIcon == 1, s"above the button $above, above the icon $onIcon")
+    }
+
     "constants draw no region" in {
         regions(button.disabled(true).ariaDisabled(false).loading(false)).map(n => assert(n == 0, s"$n regions"))
     }

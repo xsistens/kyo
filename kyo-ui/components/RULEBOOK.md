@@ -149,3 +149,12 @@ its signal.
 
 - **Why:** the setter already tells the forms apart (rule 4), so the fold is one line in the chain, and a host can hand over a
   constant or a signal without the component knowing which.
+
+## 8. A setter that takes a constant or a signal says `Prop[A]`
+
+Every setter and every field that takes either form is typed `Prop[A]` (`disabled(v: Prop[Boolean])`, `apply(label: Prop[String])`,
+`icon(glyph: Prop[IconGlyph])`), never the spelled-out `A | Signal[A]`, and a slot that may stay unset is `Maybe[Prop[A]]`.
+
+- **Why:** one name for one idea, so a reader sees at a glance which setters follow a signal, and a field and its setter say the
+  same type. A slot that was constant only because nobody needed more (Button's icons) becomes a `Prop` too, drawn with
+  `Prop.render`: a constant draws once with no region, a signal in a region of its own, below the component.
