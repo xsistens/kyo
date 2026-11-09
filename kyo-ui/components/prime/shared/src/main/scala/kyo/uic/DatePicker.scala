@@ -118,7 +118,7 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
       */
     def today(v: A): DatePicker[A] = new DatePicker(p.copy(todayV = Present(v)))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): DatePicker[A] = new DatePicker(p.copy(placeholderText = v))
+    private[uic] def withPlaceholder(v: Maybe[Prop[String]]): DatePicker[A] = new DatePicker(p.copy(placeholderText = v))
 
     def disabled(v: Boolean): DatePicker[A] = new DatePicker(p.copy(disabledFlag = v))
 
@@ -394,10 +394,7 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
         if variantV == FieldVariant.Filled then i = i.cssClass("p-variant-filled")
         i = validity.markAria(i)
         i = i.value(text)
-        i = placeholderText match
-            case Present(TextValue.Const(v)) => i.placeholder(v)
-            case Present(TextValue.Dyn(sig)) => i.placeholder(sig)
-            case Absent                      => i
+        i = i.placeholder(placeholderText)
         if disabledFlag then i = i.disabled(true)
         if readonlyFlag || !editable then i = i.readOnly(true)
         if requiredFlag then i = i.aria("required", "true").jsProp("required", "true")
@@ -1347,7 +1344,7 @@ object DatePicker:
         hourFormatV: HourFormat = HourFormat.H24,
         showButtonBarFlag: Boolean = false,
         todayV: Maybe[A] = Absent,
-        placeholderText: Maybe[TextValue] = Absent,
+        placeholderText: Maybe[Prop[String]] = Absent,
         disabledFlag: Boolean = false,
         readonlyFlag: Boolean = false,
         requiredFlag: Boolean = false,
@@ -1880,7 +1877,7 @@ final class MultiDatePicker[A] private[uic] (private[uic] val picker: DatePicker
     private[uic] def accessibility: Accessibility              = picker.accessibility
     private[uic] def withAccessibility(v: Accessibility): Self = on(picker.withAccessibility(v))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): Self = on(picker.withPlaceholder(v))
+    private[uic] def withPlaceholder(v: Maybe[Prop[String]]): Self = on(picker.withPlaceholder(v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = picker.validitySlots
     private[uic] def withValidity(v: FieldValidity.Slots): Self = on(picker.withValidity(v))
@@ -1980,7 +1977,7 @@ final class RangeDatePicker[A] private[uic] (private[uic] val picker: DatePicker
     private[uic] def accessibility: Accessibility              = picker.accessibility
     private[uic] def withAccessibility(v: Accessibility): Self = on(picker.withAccessibility(v))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): Self = on(picker.withPlaceholder(v))
+    private[uic] def withPlaceholder(v: Maybe[Prop[String]]): Self = on(picker.withPlaceholder(v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = picker.validitySlots
     private[uic] def withValidity(v: FieldValidity.Slots): Self = on(picker.withValidity(v))

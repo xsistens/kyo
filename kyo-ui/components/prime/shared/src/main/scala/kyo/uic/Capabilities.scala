@@ -125,8 +125,8 @@ end HasAccessibleDescription
   * empty. See [[HasAccessibleName]] for why these traits exist.
   */
 private[uic] trait HasPlaceholder extends Node:
-    /** Stores the resolved placeholder slot. Implemented as `new Input(s.copy(placeholderText = v))`. */
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): Self
+    /** Stores the placeholder slot. Implemented as a copy of the component with the slot set. */
+    private[uic] def withPlaceholder(v: Maybe[Prop[String]]): Self
 
     /** Text shown while the bound value is empty. A `Signal[String]` tracks a downstream source
       * (a locale-driven `I18n.t` leaf); how it lands depends on where the placeholder lives.
@@ -134,8 +134,7 @@ private[uic] trait HasPlaceholder extends Node:
       * re-render and no lost caret. On a picker's closed trigger the label is text rather than
       * an attribute, so that slot re-renders inside its own mount subscription instead.
       */
-    final def placeholder(v: String | Signal[String]): Self =
-        withPlaceholder(Present(ReactiveValue(v)))
+    final def placeholder(v: Prop[String]): Self = withPlaceholder(Present(v))
 end HasPlaceholder
 
 /** The native tooltip slot (the `title` attribute). See [[HasAccessibleName]] for why these

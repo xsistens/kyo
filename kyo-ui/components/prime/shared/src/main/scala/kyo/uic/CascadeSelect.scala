@@ -141,7 +141,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val p: CascadeSelect.Pro
     /** A panel held open by a constant nobody hears: nothing the reader does may close it. */
     private def openFixedOpen: Boolean = openSlot.fixedAt(true)
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): CascadeSelect[A] = new CascadeSelect(p.copy(placeholderV = v))
+    private[uic] def withPlaceholder(v: Maybe[Prop[String]]): CascadeSelect[A] = new CascadeSelect(p.copy(placeholderV = v))
 
     def disabled(v: Boolean): CascadeSelect[A] = new CascadeSelect(p.copy(disabledFlag = v))
 
@@ -266,8 +266,9 @@ final class CascadeSelect[A] private[uic] (private[uic] val p: CascadeSelect.Pro
       */
     private def shown(using Frame): ReactiveValue[(Maybe[A], Boolean, Maybe[String])] =
         val held: ReactiveValue[Maybe[A]] = choice.fold(ReactiveValue.Const(Maybe.empty[A]))(_.reading)
-        held.and(ReactiveValue.optional(loadingV)).and(ReactiveValue.optional(placeholderV)).map { case ((h, ld), ph) =>
-            (h, ld.getOrElse(false), ph)
+        held.and(ReactiveValue.optional(loadingV)).and(ReactiveValue.optional(placeholderV.map(ReactiveValue[String](_)))).map {
+            case ((h, ld), ph) =>
+                (h, ld.getOrElse(false), ph)
         }
     end shown
 
@@ -546,7 +547,7 @@ object CascadeSelect:
         keyF: Maybe[A => String] = Absent,
         choice: Maybe[SingleChoice[A]] = Absent,
         openSlot: Controlled[Boolean] = Controlled(),
-        placeholderV: Maybe[TextValue] = Absent,
+        placeholderV: Maybe[Prop[String]] = Absent,
         disabledFlag: Boolean = false,
         nameV: Maybe[String] = Absent,
         tooltipV: Maybe[Prop[String]] = Absent,

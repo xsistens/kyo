@@ -38,7 +38,7 @@ final class InputMask private[uic] (private[uic] val p: InputMask.Props) extends
       */
     def value(v: String | Signal[String]): InputMask = new InputMask(p.copy(valueSlot = valueSlot.bind(v)))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): InputMask = new InputMask(p.copy(placeholderText = v))
+    private[uic] def withPlaceholder(v: Maybe[UI.Prop[String]]): InputMask = new InputMask(p.copy(placeholderText = v))
 
     private[uic] def accessibility: Accessibility              = access
     private[uic] def withAccessibility(v: Accessibility): Self = new InputMask(p.copy(access = v))
@@ -97,11 +97,7 @@ final class InputMask private[uic] (private[uic] val p: InputMask.Props) extends
         in = readonlyFlag.foldFlag(in)(in.readonly(_))
         access.id.foreach(v => in = in.id(v))
         access.name.foreach(v => in = in.accessibleName(v))
-        placeholderText match
-            case Present(TextValue.Const(v)) => in = in.placeholder(v)
-            case Present(TextValue.Dyn(sig)) => in = in.placeholder(sig)
-            case Absent                      => ()
-        end match
+        in = in.withPlaceholder(placeholderText)
         valueSlot.bound.foreach(v => in = in.value(v))
         if valueSlot.hearer.isDefined || onCompleteF.isDefined then
             in = in.onChange { masked =>
@@ -129,7 +125,7 @@ object InputMask:
     final private[uic] case class Props(
         maskV: String,
         valueSlot: Controlled[String] = Controlled(),
-        placeholderText: Maybe[TextValue] = Absent,
+        placeholderText: Maybe[UI.Prop[String]] = Absent,
         disabledFlag: Maybe[BoolValue] = Absent,
         readonlyFlag: Maybe[BoolValue] = Absent,
         sizeV: Size = Size.Normal,

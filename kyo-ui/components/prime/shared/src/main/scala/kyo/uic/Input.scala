@@ -68,7 +68,7 @@ final class Input private[uic] (private[uic] val p: Input.Props) extends Node, T
       */
     def value(v: String | Signal[String]): Input = new Input(p.copy(valueSlot = valueSlot.bind(v)))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): Input = new Input(p.copy(placeholderText = v))
+    private[uic] def withPlaceholder(v: Maybe[Prop[String]]): Input = new Input(p.copy(placeholderText = v))
 
     /** Disabled, constant or reactive: a `Signal[Boolean]` toggles the native `disabled` attribute IN
       * PLACE via kyo-ui's boolean-attribute channel (no re-render, so caret/focus survive), e.g. disable
@@ -148,7 +148,6 @@ final class Input private[uic] (private[uic] val p: Input.Props) extends Node, T
             case sig: Signal[UI.TextType] @unchecked =>
                 buildField(
                     withConstraints(input).textType(sig),
-                    _.placeholder(_),
                     _.onInput(_),
                     _.onChange(_),
                     validity
@@ -158,7 +157,6 @@ final class Input private[uic] (private[uic] val p: Input.Props) extends Node, T
                     case InputType.Text =>
                         buildField(
                             withConstraints(input),
-                            _.placeholder(_),
                             _.onInput(_),
                             _.onChange(_),
                             validity
@@ -166,17 +164,15 @@ final class Input private[uic] (private[uic] val p: Input.Props) extends Node, T
                     case InputType.Email =>
                         buildField(
                             withConstraints(emailInput),
-                            _.placeholder(_),
                             _.onInput(_),
                             _.onChange(_),
                             validity
                         )
                     case InputType.Number =>
-                        buildField(numberInput, _.placeholder(_), _.onInput(_), _.onChange(_), validity)
+                        buildField(numberInput, _.onInput(_), _.onChange(_), validity)
                     case InputType.Password =>
                         buildField(
                             withConstraints(passwordInput),
-                            _.placeholder(_),
                             _.onInput(_),
                             _.onChange(_),
                             validity
@@ -184,7 +180,6 @@ final class Input private[uic] (private[uic] val p: Input.Props) extends Node, T
                     case InputType.Tel =>
                         buildField(
                             withConstraints(telInput),
-                            _.placeholder(_),
                             _.onInput(_),
                             _.onChange(_),
                             validity
@@ -192,7 +187,6 @@ final class Input private[uic] (private[uic] val p: Input.Props) extends Node, T
                     case InputType.URL =>
                         buildField(
                             withConstraints(urlInput),
-                            _.placeholder(_),
                             _.onInput(_),
                             _.onChange(_),
                             validity
@@ -212,7 +206,6 @@ final class Input private[uic] (private[uic] val p: Input.Props) extends Node, T
       */
     private def buildField[T <: (UI.Ast.TextInput & UI.Ast.Interactive) { type Self <: T }](
         base: T,
-        setPlaceholder: (T, String) => T,
         setOnInput: (T, String => UI.Action) => T,
         setOnChange: (T, String => UI.Action) => T,
         validity: FieldValidity
@@ -236,13 +229,7 @@ final class Input private[uic] (private[uic] val p: Input.Props) extends Node, T
         // A two-way ref is kyo-ui's own binding. A one-way signal is shown in place, with no region around the field, so a keystroke renders
         // nothing: kyo-ui puts back an edit its owner did not take. A constant is the starting text.
         valueSlot.bound.foreach(v => b = b.value(v))
-        // A constant placeholder joins the attribute chain via the concrete factory's
-        // String setter; a reactive one uses kyo-ui's placeholder patch channel (in-place
-        // setAttribute, no re-render), declared on the shared TextInput bound.
-        b = placeholderText match
-            case Present(TextValue.Const(v)) => setPlaceholder(b, v)
-            case Present(TextValue.Dyn(sig)) => b.placeholder(sig)
-            case Absent                      => b
+        b = b.placeholder(placeholderText)
         b = disabledFlag.foldFlag(b)(b.disabled(_))
         b = readonlyFlag.foldFlag(b)(b.readOnly(_))
         if requiredFlag.getOrElse(false) then b = b.aria("required", "true").jsProp("required", "true")
@@ -278,7 +265,7 @@ end Input
 object Input:
     final private[uic] case class Props(
         valueSlot: Controlled[String] = Controlled(),
-        placeholderText: Maybe[TextValue] = Absent,
+        placeholderText: Maybe[Prop[String]] = Absent,
         disabledFlag: Maybe[BoolValue] = Absent,
         readonlyFlag: Maybe[BoolValue] = Absent,
         requiredFlag: Maybe[Boolean] = Absent,

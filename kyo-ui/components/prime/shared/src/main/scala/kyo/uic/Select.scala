@@ -175,7 +175,7 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
     /** Fired with the panel visibility the reader asks for, after a two-way [[open]] is written. */
     def onOpenChange(f: Boolean => UI.Action)(using Frame): Select[A] = new Select(p.copy(openSlot = openSlot.hear(f)))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): Select[A] = new Select(p.copy(placeholderV = v))
+    private[uic] def withPlaceholder(v: Maybe[Prop[String]]): Select[A] = new Select(p.copy(placeholderV = v))
 
     /** Switches Prime's header filter (`div.p-select-header` > `input.p-select-filter`), over a query the select
       * allocates itself unless [[filterQuery]] hands it one; while it is on, the query starts fresh on every open.
@@ -423,8 +423,9 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
             currentV match
                 case Present(cur) => ReactiveValue.Const(cur)
                 case Absent       => choice.fold(ReactiveValue.Const(Maybe.empty[A]))(_.reading)
-        held.and(ReactiveValue.optional(loadingV)).and(ReactiveValue.optional(placeholderV)).map { case ((h, ld), ph) =>
-            (h, ld.getOrElse(false), ph)
+        held.and(ReactiveValue.optional(loadingV)).and(ReactiveValue.optional(placeholderV.map(ReactiveValue[String](_)))).map {
+            case ((h, ld), ph) =>
+                (h, ld.getOrElse(false), ph)
         }
     end shown
 
@@ -826,7 +827,7 @@ object Select:
         choice: Maybe[SingleChoice[A]] = Absent,
         itemTemplateF: Maybe[A => UI] = Absent,
         openSlot: Controlled[Boolean] = Controlled(),
-        placeholderV: Maybe[TextValue] = Absent,
+        placeholderV: Maybe[Prop[String]] = Absent,
         filterableV: Maybe[BoolValue] = Absent,
         filterF: Maybe[(A, String) => Boolean] = Absent,
         filterQuerySlot: Controlled[String] = Controlled(),
