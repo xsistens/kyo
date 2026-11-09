@@ -77,16 +77,12 @@ class PasswordTest extends ReactiveValueContract:
         // The typing is wired once the field writes a ref (the instance's own text, or the caller's) or tells a hearer. Until the
         // instance has published its field (a host's tree holds it only as its place, and the meter's region may publish first)
         // there is no field yet, which is not ready rather than a failure.
-        ready = Present(t =>
-            elementsWithClass(t, "p-password-input").map(_.exists {
-                case f: UI.Ast.TextInput =>
-                    f.onInput.isDefined ||
-                    (f.value match
-                        case Present(UI.Bound.Ref(_)) => true
-                        case _                        => false)
-                case _ => false
-            })
-        ),
+        ready = Present(fieldIn(_)(f =>
+            Kyo.lift(f.onInput.isDefined ||
+                (f.value match
+                    case Present(UI.Bound.Ref(_)) => true
+                    case _                        => false))
+        )),
         startText = Present("abc")
     )
 
@@ -110,11 +106,20 @@ class PasswordTest extends ReactiveValueContract:
     holds(toggleSlot)
     blurs(toggleSlot, (c, f) => c.onBlur(f))
 
+    /** Whether `t` holds the field and `holds` says yes of it. A tree a region inside the instance published (the meter, the
+      * eye's glyph) holds no field, and neither does a host's tree, which holds the instance only as its place: that is not
+      * yet, never a failure, so a predicate the harness waits on reads it as `false`.
+      */
+    private def fieldIn(t: UI)(holds: (UI.Ast.Element & UI.Ast.TextInput) => Boolean < Sync)(using Frame): Boolean < Sync =
+        elements(t).map(_.collectFirst {
+            case f: (UI.Ast.Element & UI.Ast.TextInput) if f.attrs.cssClasses.contains("p-password-input") => f
+        }).map(_.fold(Kyo.lift(false))(holds))
+
     "started from a constant, the meter judges what the reader types" in {
         for
             after <- publishedAfterReady(
                 uic.Password().feedback(true).value("abc").onInput(_ => ()).render,
-                textField(_, "p-password-input").map { case f: UI.Ast.TextInput => f.onInput.isDefined; case _ => false },
+                fieldIn(_)(f => Kyo.lift(f.onInput.isDefined)),
                 until = t => elementsWithClass(t, "p-password-meter-strong").map(_.nonEmpty)
             )(t => textField(t, "p-password-input").map(typed(_, "abcDEF12", commit = false)))
         yield assert(after.nonEmpty, "the meter never judged the text typed")
@@ -127,7 +132,7 @@ class PasswordTest extends ReactiveValueContract:
             after <- publishedAfterReady(
                 uic.Password().toggleMask(true).value("abc").render,
                 elementsWithClass(_, "p-password-toggle-mask-icon").map(_.nonEmpty),
-                until = t => textField(t, "p-password-input").map(textIn).map(_ == "xyz")
+                until = fieldIn(_)(f => textIn(f).map(_ == "xyz"))
             )(
                 t => textField(t, "p-password-input").map(typed(_, "xyz", commit = false)),
                 t => elementWithClass(t, "p-password-toggle-mask-icon").map(click)
