@@ -202,7 +202,7 @@ object UI:
       */
     final class Live[P] private[kyo] (first: P, runsRef: Maybe[SignalRef[kyo.internal.Owning.Run[P]]], owning: kyo.internal.Owning[P]):
 
-        /** Props with no controlled prop resolved: a node drawn in place, which a host binds itself. */
+        /** Props with no ownable prop resolved: a node drawn in place, which a host binds itself. */
         private[kyo] def this(first: P, runsRef: Maybe[SignalRef[kyo.internal.Owning.Run[P]]]) =
             this(first, runsRef, kyo.internal.Owning.none[P])
 
@@ -212,7 +212,7 @@ object UI:
         // The latest run, where the engine can hand this instance new props: its props as given and as resolved.
         private val runs: Maybe[Signal[kyo.internal.Owning.Run[P]]] = runsRef
 
-        /** Hands this instance the props of a new run: a controlled prop the run stops binding hands its value to the instance first,
+        /** Hands this instance the props of a new run: an ownable prop the run stops binding hands its value to the instance first,
           * then the new props, resolved once here, are what every field follows. Equal props change nothing.
           */
         private[kyo] def offer(next: P)(using CanEqual[P, P], Frame): Unit < Sync =
@@ -268,7 +268,7 @@ object UI:
       * value it showed to that ref first, so the instance carries on from it. A caller's binding (a ref two way, a signal one way, a
       * constant) is the prop wherever the caller gives one.
       */
-    trait Controlled[A]:
+    trait Ownable[A]:
         /** What the caller bound, `Absent` where it bound nothing. */
         def bound: Maybe[Prop[A]]
 
@@ -276,8 +276,8 @@ object UI:
         def start: Maybe[A]
 
         /** This prop with the instance's own `ref` bound in place of nothing, as the engine hands it to a draw. */
-        def owning(ref: SignalRef[A]): Controlled[A]
-    end Controlled
+        def owning(ref: SignalRef[A]): Ownable[A]
+    end Ownable
 
     /** What a [[reactive]] block reads with: `.read` on a prop or a signal, which exists only inside the block.
       *

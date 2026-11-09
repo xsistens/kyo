@@ -136,7 +136,7 @@ end TextArea
 
 object TextArea:
     final private[uic] case class Props(
-        valueSlot: Slot[String] = Slot(),
+        valueSlot: Controlled[String] = Controlled(),
         placeholderText: Maybe[TextValue] = Absent,
         rowsV: Maybe[Int] = Absent,
         disabledFlag: Maybe[BoolValue] = Absent,
@@ -157,5 +157,5 @@ object TextArea:
 
     def apply(): TextArea = new TextArea(Props())
 
-    private val valueName = Slot.Name("TextArea", "value", "a change", "onInput or onChange")
+    private val valueName = Controlled.Name("TextArea", "value", "a change", "onInput or onChange")
 end TextArea

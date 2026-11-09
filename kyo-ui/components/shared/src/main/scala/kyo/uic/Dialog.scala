@@ -144,7 +144,7 @@ final class Dialog private[uic] (private[uic] val p: Dialog.Props) extends Node,
     /** Package-internal: the slot of a host that embeds this dialog, as the host wants it heard. A host that reports its own
       * binding mistakes (ConfirmDialog, whose choices are heard apart) hands it over quieted.
       */
-    private[uic] def withOpen(slot: Slot[Boolean]): Dialog = new Dialog(p.copy(openSlot = slot))
+    private[uic] def withOpen(slot: Controlled[Boolean]): Dialog = new Dialog(p.copy(openSlot = slot))
 
     /** Adds content children. */
     def apply(cs: UI*): Dialog = new Dialog(p.copy(kids = kids ++ cs))
@@ -176,7 +176,7 @@ final class Dialog private[uic] (private[uic] val p: Dialog.Props) extends Node,
 
     private[uic] def render(using Frame): UI =
         // Unbound, the dialog keeps its visibility itself and starts open.
-        Slot.draw(openSlot, Dialog.openName, start = true)(s => new Dialog(this.p.copy(openSlot = s)).drawn)
+        Controlled.draw(openSlot, Dialog.openName, start = true)(s => new Dialog(this.p.copy(openSlot = s)).drawn)
 
     private def drawn(using Frame): UI =
         openSlot.binding match
@@ -362,7 +362,7 @@ end Dialog
 
 object Dialog:
     final private[uic] case class Props(
-        openSlot: Slot[Boolean] = Slot(),
+        openSlot: Controlled[Boolean] = Controlled(),
         headerText: Maybe[TextValue] = Absent,
         headerContent: Maybe[UI] = Absent,
         footerV: Maybe[UI] = Absent,
@@ -388,5 +388,5 @@ object Dialog:
     private[uic] val MinW = 200.0
     private[uic] val MinH = 120.0
 
-    private val openName = Slot.Name("Dialog", "the visibility", "a close", "onOpenChange")
+    private val openName = Controlled.Name("Dialog", "the visibility", "a close", "onOpenChange")
 end Dialog

@@ -435,12 +435,12 @@ object Tabs:
         tabList: List[Tab[K]] = Nil,
         tabSources: List[TabLiveEntry[K]] = Nil,
         // Over `Maybe[K]`, since the strip's own state may start with no tab to name: a live list can be empty at mount.
-        selectedSlot: Slot[Maybe[K]] = Slot[Maybe[K]](),
+        selectedSlot: Controlled[Maybe[K]] = Controlled[Maybe[K]](),
         access: Accessibility = Accessibility.none,
         lazyPanelsFlag: Boolean = false
     )
 
     def apply[K](): Tabs[K] = new Tabs[K](Props())
 
-    private val selectedName = Slot.Name("Tabs", "selected", "a change", "onSelectedChange")
+    private val selectedName = Controlled.Name("Tabs", "selected", "a change", "onSelectedChange")
 end Tabs

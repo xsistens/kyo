@@ -358,16 +358,16 @@ end OrganizationChart
 object OrganizationChart:
     final private[uic] case class Props[K](
         rootNode: Maybe[OrgChartNode[K]] = Absent,
-        expandedSlot: Slot[Set[K]] = Slot[Set[K]](),
+        expandedSlot: Controlled[Set[K]] = Controlled[Set[K]](),
         expandableV: Maybe[BoolValue] = Absent,
-        selectedSlot: Slot[Set[K]] = Slot[Set[K]](),
+        selectedSlot: Controlled[Set[K]] = Controlled[Set[K]](),
         selectionModeV: SelectionMode = SelectionMode.None,
         onNodeToggleF: Maybe[K => UI.Action] = Absent,
         onNodeClickF: Maybe[K => UI.Action] = Absent
     )
 
-    private val expandedName             = Slot.Name("OrganizationChart", "the expanded subtrees", "a toggle", "onExpandedChange")
-    private val selectionName            = Slot.Name("OrganizationChart", "the selection", "a click", "onSelectionChange")
+    private val expandedName             = Controlled.Name("OrganizationChart", "the expanded subtrees", "a toggle", "onExpandedChange")
+    private val selectionName            = Controlled.Name("OrganizationChart", "the selection", "a click", "onSelectionChange")
     def apply[K](): OrganizationChart[K] = new OrganizationChart[K](Props())
 
     /** The node cursor a chart's mount mints: the node the reader is on, the id base its node boxes derive theirs from,

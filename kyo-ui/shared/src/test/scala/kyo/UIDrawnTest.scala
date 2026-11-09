@@ -813,7 +813,7 @@ class UIDrawnTest extends kyo.test.Test[Any]:
         yield assert(first == Absent, s"$first")
     }
 
-    private case class Held(bound: Maybe[Prop[String]] = Absent, start: Maybe[String] = Present("own")) extends UI.Controlled[String]:
+    private case class Held(bound: Maybe[Prop[String]] = Absent, start: Maybe[String] = Present("own")) extends UI.Ownable[String]:
         def owning(ref: SignalRef[String]): Held = copy(bound = Present(ref))
 
     private case class Form(name: Held, size: Int) derives CanEqual
@@ -824,7 +824,7 @@ class UIDrawnTest extends kyo.test.Test[Any]:
     private def nameOf(live: UI.Live[Form])(using Frame): String < Sync =
         live.call(_.name.bound).flatMap(b => Prop.signal(b.get).current)
 
-    "a controlled prop the run leaves unbound reads the instance's own value, a bound one the binding" in {
+    "an ownable prop the run leaves unbound reads the instance's own value, a bound one the binding" in {
         for
             app  <- Signal.initRef("app")
             live <- formLive(Form(Held(), 1))
@@ -834,7 +834,7 @@ class UIDrawnTest extends kyo.test.Test[Any]:
         yield assert(mine == "own" && seen == "app", s"$mine $seen")
     }
 
-    "a run that stops binding a controlled prop hands the value it showed to the instance before that run is seen" in {
+    "a run that stops binding an ownable prop hands the value it showed to the instance before that run is seen" in {
         for
             app  <- Signal.initRef("app")
             live <- formLive(Form(Held(Present(app)), 1))
@@ -904,11 +904,11 @@ class UIDrawnTest extends kyo.test.Test[Any]:
         end for
     }
 
-    // How often an instance's props were resolved: each resolve binds the instance's own ref into its unbound controlled field.
+    // How often an instance's props were resolved: each resolve binds the instance's own ref into its unbound ownable field.
     private val resolves = new java.util.concurrent.atomic.AtomicInteger(0)
 
     private case class Counted(bound: Maybe[Prop[String]] = Absent, start: Maybe[String] = Present("own"))
-        extends UI.Controlled[String]:
+        extends UI.Ownable[String]:
         def owning(ref: SignalRef[String]): Counted =
             discard(resolves.incrementAndGet()); copy(bound = Present(ref))
     end Counted

@@ -420,7 +420,7 @@ private[uic] object RowSpec:
       * tall as its rows are declared to be; a page's, with no height declared, is as tall as a line of
       * text makes a row.
       */
-    final case class Slot[A](
+    final case class Controlled[A](
         index: Int,
         height: Maybe[Int],
         lead: Int,
@@ -1493,7 +1493,7 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
       */
     def header(ui: UI): DataTable[A] = new DataTable(p.copy(headerV = Present(ui)))
 
-    /** Slot below the table and the paginator (`div.p-datatable-footer`). For per
+    /** Controlled below the table and the paginator (`div.p-datatable-footer`). For per
       * column summary cells use [[Column.footer]], which renders a real `tfoot`.
       */
     def footer(ui: UI): DataTable[A] = new DataTable(p.copy(footerV = Present(ui)))
@@ -3656,7 +3656,7 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
             val run = math.max(1, n)
             (0 until run).toList.map(i =>
                 if loadingContentV.isDefined then RowSpec.Loading[A](i, i, run, colCount, height)
-                else RowSpec.Slot(i, height, leadTerms.size, leafCols.size, trailTerms.size, frozen)
+                else RowSpec.Controlled(i, height, leadTerms.size, leafCols.size, trailTerms.size, frozen)
             )
         end loadingRows
 
@@ -3798,7 +3798,7 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
                             else (math.max(from, loadedEnd), until)
                         RowSpec.Loading[A](i, i - runFrom, runUntil - runFrom, colCount, Present(rowHeightV.getOrElse(1)))
                     else
-                        RowSpec.Slot(
+                        RowSpec.Controlled(
                             i,
                             Present(rowHeightV.getOrElse(1)),
                             leadTerms.size,
@@ -5559,7 +5559,7 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
     /** A row of the window the source has not reached yet: one `Skeleton` per column,
       * so the grid stays whole and the geometry never moves once the rows land.
       */
-    private def slotRow(spec: RowSpec.Slot[A])(using Frame): UI =
+    private def slotRow(spec: RowSpec.Controlled[A])(using Frame): UI =
         // A line's worth of skeleton, which is what the cell would hold. In a window the row is as
         // tall as every other one because the row says so, not because the slot does; with no height
         // declared the skeleton is exactly one line (`1lh`), so the row is as tall as a row of text.
@@ -5627,10 +5627,10 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
             case g: RowSpec.GroupFoot[A] => s"gf:${g.path.keys.mkString(" ")}"
             // The leading spacer is the one that states where the window starts; the trailing one
             // never does, which is what tells them apart without carrying a flag for it.
-            case s: RowSpec.Spacer[A]  => if s.marks.isDefined then "sp:top" else "sp:bottom"
-            case s: RowSpec.Slot[A]    => s"slot:${s.index}"
-            case l: RowSpec.Loading[A] => s"loading:${l.index}"
-            case _: RowSpec.Empty[A]   => "empty"
+            case s: RowSpec.Spacer[A]     => if s.marks.isDefined then "sp:top" else "sp:bottom"
+            case s: RowSpec.Controlled[A] => s"slot:${s.index}"
+            case l: RowSpec.Loading[A]    => s"loading:${l.index}"
+            case _: RowSpec.Empty[A]      => "empty"
         end match
     end rowSpecKey
 
@@ -5654,9 +5654,9 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
                     pad = pad.data("uic-vs-first", first.toString).data("uic-vs-count", count.toString)
                 }
                 pad
-            case s: RowSpec.Slot[A]    => slotRow(s)
-            case l: RowSpec.Loading[A] => loadingRow(l)
-            case e: RowSpec.Empty[A]   => emptyRow(e.colCount)
+            case s: RowSpec.Controlled[A] => slotRow(s)
+            case l: RowSpec.Loading[A]    => loadingRow(l)
+            case e: RowSpec.Empty[A]      => emptyRow(e.colCount)
         end match
     end renderTr
 
@@ -6305,7 +6305,7 @@ object DataTable:
         onAnchorF: Maybe[Maybe[A] => UI.Action] = Absent
     )
 
-    private def name(subject: String, gesture: String, event: String) = Slot.Name("DataTable", subject, gesture, event)
+    private def name(subject: String, gesture: String, event: String) = Controlled.Name("DataTable", subject, gesture, event)
 
     private val sortName     = name("the sort", "a header press", "onSortChange")
     private val filtersName  = name("the column filters", "what the reader types or applies", "onColumnFiltersChange")

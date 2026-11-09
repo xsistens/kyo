@@ -537,7 +537,7 @@ object AutoComplete:
         labelF: A => String,
         keyF: Maybe[A => String] = Absent,
         itemTemplateF: Maybe[A => UI] = Absent,
-        valueSlot: Slot[String] = Slot(),
+        valueSlot: Controlled[String] = Controlled(),
         filterF: Maybe[(A, String) => Boolean] = Absent,
         minQueryLengthV: Int = 1,
         emptyContentV: Maybe[EmptyContent] = Absent,

@@ -252,7 +252,7 @@ object SpeedDial:
         itemsV: List[MenuItem] = Nil,
         entriesV: List[MenuItemLiveEntry] = Nil,
         directionV: SpeedDialDirection = SpeedDialDirection.Up,
-        openSlot: Slot[Boolean] = Slot(),
+        openSlot: Controlled[Boolean] = Controlled(),
         disabledFlag: Boolean = false,
         access: Accessibility = Accessibility.none
     )
@@ -260,5 +260,5 @@ object SpeedDial:
     /** An empty speed dial; add actions via [[SpeedDial.items]]. */
     def apply(): SpeedDial = new SpeedDial(Props())
 
-    private val openName = Slot.Name("SpeedDial", "the fan", "a toggle", "onOpenChange")
+    private val openName = Controlled.Name("SpeedDial", "the fan", "a toggle", "onOpenChange")
 end SpeedDial

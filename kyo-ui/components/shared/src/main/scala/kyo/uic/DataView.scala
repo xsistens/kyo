@@ -127,7 +127,7 @@ final class DataView[A] private[uic] (private[uic] val p: DataView.Props[A]) ext
 
     private[uic] def render(using Frame): UI =
         // Paginated with nothing bound, the page is the view's own.
-        Slot.owning(
+        Controlled.owning(
             pageSlot,
             start = 0,
             on = ReactiveValue.Const(pageSizeV.isDefined)
@@ -235,7 +235,7 @@ object DataView:
         headerV: Maybe[UI] = Absent,
         footerV: Maybe[UI] = Absent,
         pageSizeV: Maybe[Int] = Absent,
-        pageSlot: Slot[Int] = Slot(),
+        pageSlot: Controlled[Int] = Controlled(),
         emptyContentV: Maybe[EmptyContent] = Absent,
         loadingV: Maybe[BoolValue] = Absent
     )

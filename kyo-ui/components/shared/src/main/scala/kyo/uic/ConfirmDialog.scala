@@ -82,14 +82,14 @@ final class ConfirmDialog private[uic] (private[uic] val p: ConfirmDialog.Props)
         new ConfirmDialog(p.copy(onRejectEff = Present(Callback(action))))
 
     /** The slot as an accept hears it: [[onOpenChange]], or [[onAccept]]. */
-    private def accepting: Slot[Boolean] = if onAcceptEff.isDefined then openSlot.heardToo else openSlot
+    private def accepting: Controlled[Boolean] = if onAcceptEff.isDefined then openSlot.heardToo else openSlot
 
     /** The slot as a reject and every dismissal hear it: [[onOpenChange]], or [[onReject]]. */
-    private def rejecting: Slot[Boolean] = if onRejectEff.isDefined then openSlot.heardToo else openSlot
+    private def rejecting: Controlled[Boolean] = if onRejectEff.isDefined then openSlot.heardToo else openSlot
 
     private[uic] def render(using Frame): UI =
         // Unbound, the confirm dialog keeps its visibility itself and starts open, like [[Dialog]].
-        val drawing = Slot.owning(
+        val drawing = Controlled.owning(
             openSlot,
             start = true
         )(s => new ConfirmDialog(this.p.copy(openSlot = s)).drawn)
@@ -138,7 +138,7 @@ final class ConfirmDialog private[uic] (private[uic] val p: ConfirmDialog.Props)
                 val reject = if rejectFixed then rejectShell.ariaDisabled(true) else rejectShell.onClick(choose(onRejectEff))
 
                 var dialog = Dialog()
-                    .withOpen(Slot(openSlot.bound, quiet = true))
+                    .withOpen(Controlled(openSlot.bound, quiet = true))
                     .boxClass("p-confirmdialog")
                     .accessibleRole(PopupAccessibleRole.AlertDialog)
                     .footer(fragment(reject, accept))
@@ -161,7 +161,7 @@ end ConfirmDialog
 
 object ConfirmDialog:
     final private[uic] case class Props(
-        openSlot: Slot[Boolean] = Slot(),
+        openSlot: Controlled[Boolean] = Controlled(),
         messageV: Maybe[TextValue] = Absent,
         headerV: Maybe[TextValue] = Absent,
         iconV: Maybe[IconGlyph] = Absent,
@@ -173,10 +173,10 @@ object ConfirmDialog:
     )
 
     /** A confirm dialog whose visibility binds to `open` (see [[ConfirmDialog.open]]). */
-    def apply(open: Boolean | Signal[Boolean]): ConfirmDialog = new ConfirmDialog(Props(openSlot = Slot().bind(open)))
+    def apply(open: Boolean | Signal[Boolean]): ConfirmDialog = new ConfirmDialog(Props(openSlot = Controlled().bind(open)))
 
     /** An unbound confirm dialog: it keeps its visibility itself and starts open. */
     def apply(): ConfirmDialog = new ConfirmDialog(Props())
 
-    private def openName(gesture: String) = Slot.Name("ConfirmDialog", "the visibility", gesture, "onOpenChange")
+    private def openName(gesture: String) = Controlled.Name("ConfirmDialog", "the visibility", gesture, "onOpenChange")
 end ConfirmDialog

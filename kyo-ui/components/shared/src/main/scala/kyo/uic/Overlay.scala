@@ -582,7 +582,7 @@ end Overlay
 object Overlay:
     final private[uic] case class Props(
         // Unbound for a panel its host gates and closes itself (see [[Overlay.gated]]).
-        openSlot: Slot[Boolean],
+        openSlot: Controlled[Boolean],
         anchorV: OverlayAnchor = OverlayAnchor.BottomStart,
         matchWidthV: Boolean = true,
         maxHeightV: Maybe[String] = Absent,
@@ -613,23 +613,24 @@ object Overlay:
       * one way: the panel follows it and only reports a dismissal. A constant nobody hears is fixed: an open panel
       * stays, and nothing outside dismisses it. A signal nothing hears is reported in a card.
       */
-    def apply(open: Boolean | Signal[Boolean])(using site: UI.MountSite): Overlay = new Overlay(Props(Slot().bind(open), siteV = site))
+    def apply(open: Boolean | Signal[Boolean])(using site: UI.MountSite): Overlay =
+        new Overlay(Props(Controlled().bind(open), siteV = site))
 
     /** Package-internal: a panel its host draws only while open and closes with `close`, which Escape and an outside click
       * run. For a submenu whose open state is one path in a set the host keeps, rather than a ref of its own.
       */
     private[uic] def gated(close: UI.Action)(using site: UI.MountSite): Overlay =
-        new Overlay(Props(Slot(), closeV = Present(close), siteV = site))
+        new Overlay(Props(Controlled(), closeV = Present(close), siteV = site))
 
     /** Package-internal: the panel of a host over the host's own open slot, reporting a dismissal to whoever hears it.
       * Quiet, since the host reports its binding itself.
       */
-    private[uic] def hosted(open: Slot[Boolean])(using site: UI.MountSite): Overlay = new Overlay(Props(open.quieted, siteV = site))
+    private[uic] def hosted(open: Controlled[Boolean])(using site: UI.MountSite): Overlay = new Overlay(Props(open.quieted, siteV = site))
 
     /** Package-internal: the slot of a host that embeds this overlay, as the host wants it heard. */
-    private[uic] def withOpen(slot: Slot[Boolean])(using site: UI.MountSite): Overlay = new Overlay(Props(slot, siteV = site))
+    private[uic] def withOpen(slot: Controlled[Boolean])(using site: UI.MountSite): Overlay = new Overlay(Props(slot, siteV = site))
 
-    private val openAdvice = Slot.Name("Overlay", "the visibility", "a dismissal", "onOpenChange").advice
+    private val openAdvice = Controlled.Name("Overlay", "the visibility", "a dismissal", "onOpenChange").advice
 
     /** How an OPEN overlay responds to scroll input outside its panel. The invisible outside-click
       * backdrop covers the whole viewport, so page scrolling necessarily runs through it; the mode

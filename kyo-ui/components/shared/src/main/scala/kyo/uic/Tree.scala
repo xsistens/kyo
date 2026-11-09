@@ -507,8 +507,8 @@ object Tree:
         // The roots `body` draws, resolved from `nodeSources` by the render.
         nodeList: List[TreeNode[K]] = Nil,
         nodeSources: List[TreeNodeLiveEntry[K]] = Nil,
-        expandedSlot: Slot[Set[K]] = Slot[Set[K]](),
-        selectedSlot: Slot[Set[K]] = Slot[Set[K]](),
+        expandedSlot: Controlled[Set[K]] = Controlled[Set[K]](),
+        selectedSlot: Controlled[Set[K]] = Controlled[Set[K]](),
         onNodeToggleF: Maybe[K => UI.Action] = Absent,
         onItemClickF: Maybe[K => UI.Action] = Absent,
         selectionModeV: SelectionMode = SelectionMode.None,
@@ -517,8 +517,8 @@ object Tree:
         access: Accessibility = Accessibility.none
     )
 
-    private val expandedName  = Slot.Name("Tree", "expanded", "a toggle", "onExpandedChange")
-    private val selectionName = Slot.Name("Tree", "selection", "a click", "onSelectionChange")
+    private val expandedName  = Controlled.Name("Tree", "expanded", "a toggle", "onExpandedChange")
+    private val selectionName = Controlled.Name("Tree", "selection", "a click", "onSelectionChange")
 
     /** The rows the reader can see, outermost first, in the order they render.
       *

@@ -14,7 +14,7 @@ private[uic] object Diagnostic:
     def naming(advice: String, keys: Seq[String]): Diagnostic = Diagnostic(keys.nonEmpty, advice, keys)
 
     /** A slot bound one way that nobody hears, while `on` says the slot does anything at all. */
-    def unheard[A](slot: Slot[A], name: Slot.Name, on: Boolean = true): Diagnostic = Diagnostic(on && slot.deaf, name.advice)
+    def unheard[A](slot: Controlled[A], name: Controlled.Name, on: Boolean = true): Diagnostic = Diagnostic(on && slot.deaf, name.advice)
 
     /** A typed binding that holds a value no option carries: the data and the binding disagree, and the value stays where it
       * is until the app changes it. `loading` is the way to say the options are not all there yet.

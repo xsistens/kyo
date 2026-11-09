@@ -193,7 +193,7 @@ object TieredMenu:
         // The root rows `body` draws, resolved from `entriesV` by the render.
         itemsV: List[MenuItem] = Nil,
         entriesV: List[MenuItemLiveEntry] = Nil,
-        popupSlot: Slot[Boolean] = Slot(),
+        popupSlot: Controlled[Boolean] = Controlled(),
         popupOwnFlag: Boolean = false,
         access: Accessibility = Accessibility.none
     )
@@ -201,5 +201,5 @@ object TieredMenu:
     /** An empty tiered menu; add root items via [[TieredMenu.items]]. */
     def apply(): TieredMenu = new TieredMenu(Props())
 
-    private val popupName = Slot.Name("TieredMenu", "the popup", "a close", "onPopupChange")
+    private val popupName = Controlled.Name("TieredMenu", "the popup", "a close", "onPopupChange")
 end TieredMenu

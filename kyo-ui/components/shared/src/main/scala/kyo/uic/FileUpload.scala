@@ -107,7 +107,7 @@ final class FileUpload private[uic] (private[uic] val p: FileUpload.Props) exten
     private[uic] def render(using Frame): UI =
         // The chosen-name label is reactive over the files. Unbound, the mount holds what the reader picks; the page as first
         // rendered shows the empty-state label until the transport attaches.
-        Diagnostics.before(Slot.owning(
+        Diagnostics.before(Controlled.owning(
             filesSlot,
             start = Seq.empty
         )(s => new FileUpload(this.p.copy(filesSlot = s)).body))("FileUpload")(
@@ -184,7 +184,7 @@ object FileUpload:
         acceptV: List[FileAccept] = Nil,
         multipleFlag: Boolean = false,
         disabledFlag: Boolean = false,
-        filesSlot: Slot[Seq[UI.FilePayload]] = Slot(),
+        filesSlot: Controlled[Seq[UI.FilePayload]] = Controlled(),
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         onBlurF: Maybe[Seq[UI.FilePayload] => UI.Action] = Absent
     )
@@ -198,7 +198,8 @@ object FileUpload:
 
     private val startingAccess = Accessibility(id = Present(defaultInputId))
 
-    private val filesName = Slot.Name("FileUpload", "the files", "a pick", "onChange", consequence = "the reader's choice reaches nobody")
+    private val filesName =
+        Controlled.Name("FileUpload", "the files", "a pick", "onChange", consequence = "the reader's choice reaches nobody")
 
     /** The label text for a set of picked files: their names joined, or `Absent` for the
       * empty state.

@@ -491,7 +491,7 @@ object Carousel:
         itemList: List[A] = Nil,
         itemSources: List[List[A] | Signal[Seq[A]]] = Nil,
         templateF: Maybe[A => UI] = Absent,
-        pageSlot: Slot[Int] = Slot(),
+        pageSlot: Controlled[Int] = Controlled(),
         numVisibleV: Int = 1,
         numScrollV: Int = 1,
         circularFlag: Boolean = false,
@@ -502,7 +502,7 @@ object Carousel:
         autoplayMsV: Int = 0
     )
 
-    private val pageName        = Slot.Name("Carousel", "the page", "a turn", "onPageChange")
+    private val pageName        = Controlled.Name("Carousel", "the page", "a turn", "onPageChange")
     def apply[A](): Carousel[A] = new Carousel[A](Props())
 
     /** Drag distance (px) past which a swipe turns the page. */

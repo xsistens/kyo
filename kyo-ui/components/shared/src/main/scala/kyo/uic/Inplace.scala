@@ -82,7 +82,7 @@ final class Inplace private[uic] (private[uic] val p: Inplace.Props) extends Nod
     private[uic] def render(using Frame): UI =
         // Unbound, the inplace keeps the side itself, starting on the display. Before the mount runs it draws the display from a
         // stand-in, so the static page does not call it fixed.
-        Slot.draw(activeSlot, Inplace.activeName, start = false)(s => new Inplace(this.p.copy(activeSlot = s)).drawn)
+        Controlled.draw(activeSlot, Inplace.activeName, start = false)(s => new Inplace(this.p.copy(activeSlot = s)).drawn)
 
     private def drawn(using Frame): UI =
         div.cssClass("p-inplace").cssClass("p-component").aria("live", "polite")(
@@ -94,12 +94,12 @@ object Inplace:
     final private[uic] case class Props(
         displayV: Maybe[UI] = Absent,
         contentV: Maybe[UI] = Absent,
-        activeSlot: Slot[Boolean] = Slot(),
+        activeSlot: Controlled[Boolean] = Controlled(),
         closableFlag: Boolean = false,
         disabledFlag: Boolean = false
     )
 
     def apply(): Inplace = new Inplace(Props())
 
-    private val activeName = Slot.Name("Inplace", "the active side", "the other side", "onActiveChange")
+    private val activeName = Controlled.Name("Inplace", "the active side", "the other side", "onActiveChange")
 end Inplace

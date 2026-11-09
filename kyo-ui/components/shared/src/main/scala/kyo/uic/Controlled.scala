@@ -11,6 +11,9 @@ import kyo.UI.*
   * [[change]] and [[update]] are the reader's change itself, written to a two-way binding first and then reported. A setter is
   * one line, `new X(s.copy(xSlot = xSlot.bind(v)))` and `new X(s.copy(xSlot = xSlot.hear(f)))`.
   *
+  * The name covers both of React's cases: controlled where the caller binds, and uncontrolled where nothing is bound and the
+  * instance holds the value itself, from [[start]].
+  *
   * One hearer, not a list: `.onChange(a).onChange(b)` replaces, as every setter in this module does. An event that carries
   * another value, or fires at another moment, keeps its own field and calls [[heardToo]] at its setter.
   *
@@ -25,23 +28,23 @@ import kyo.UI.*
   *   a host that embeds this component reports the mistake itself, or the binding is a stand-in nobody made: never a card
   * @param start
   *   where the instance's own value starts, for a slot the component holds itself where the caller binds nothing (a
-  *   [[kyo.UI.Controlled]] prop the engine binds to the instance's own ref); `Absent` where it holds none
+  *   [[kyo.UI.Ownable]] prop the engine binds to the instance's own ref); `Absent` where it holds none
   */
-final private[uic] case class Slot[A](
+final private[uic] case class Controlled[A](
     bound: Maybe[Prop[A]] = Absent,
     hearer: Maybe[A => UI.Action] = Absent,
     heardElsewhere: Boolean = false,
     quiet: Boolean = false,
     start: Maybe[A] = Absent
-) extends UI.Controlled[A]:
+) extends UI.Ownable[A]:
     /** The slot bound as the caller says: a ref two way, a signal one way, anything else a constant. */
-    def bind(v: Prop[A]): Slot[A] = copy(bound = Present(v))
+    def bind(v: Prop[A]): Controlled[A] = copy(bound = Present(v))
 
     /** The slot with nothing bound: the component's own. */
-    def unbound: Slot[A] = copy(bound = Absent)
+    def unbound: Controlled[A] = copy(bound = Absent)
 
     /** The slot with the instance's own `ref` bound, as the engine hands it to a draw where the caller bound nothing. */
-    def owning(ref: SignalRef[A]): Slot[A] = copy(bound = Present(ref))
+    def owning(ref: SignalRef[A]): Controlled[A] = copy(bound = Present(ref))
 
     /** What was bound, as the `ReactiveValue` the components the waves have not reached yet read. A bridge: it goes with
       * `ReactiveValue` in the last wave.
@@ -49,13 +52,13 @@ final private[uic] case class Slot[A](
     def binding: Maybe[ReactiveValue[A]] = bound.map(ReactiveValue(_))
 
     /** The slot with `f` hearing every change, in place of whoever heard it before. */
-    def hear(f: A => UI.Action)(using Frame): Slot[A] = copy(hearer = Present(Callback.of(f)))
+    def hear(f: A => UI.Action)(using Frame): Controlled[A] = copy(hearer = Present(Callback.of(f)))
 
     /** The slot with an event of another shape hearing it too. */
-    def heardToo: Slot[A] = copy(heardElsewhere = true)
+    def heardToo: Controlled[A] = copy(heardElsewhere = true)
 
     /** The slot with no card to show, whatever it is bound to. */
-    def quieted: Slot[A] = copy(quiet = true)
+    def quieted: Controlled[A] = copy(quiet = true)
 
     /** The ref a reader's change is written into, where the slot binds two way. */
     def writable: Maybe[SignalRef[A]] = bound.flatMap(Prop.writable)
@@ -98,23 +101,23 @@ final private[uic] case class Slot[A](
       * bound stays. A second mount around a slot like this would be a mount inside a mount for every instance, and while a
       * mount restarts kyo-ui shows an inert snapshot.
       */
-    def owned(start: A < Sync)(using CanEqual[A, A], Frame): Slot[A] < Sync =
+    def owned(start: A < Sync)(using CanEqual[A, A], Frame): Controlled[A] < Sync =
         binding match
             case Present(_) => copy()
             case _          => start.map(mintFrom)
 
     /** [[owned]] where a constant is only where the slot starts: a text the reader goes on editing. */
-    def ownedFrom(unbound: A)(using CanEqual[A, A], Frame): Slot[A] < Sync =
+    def ownedFrom(unbound: A)(using CanEqual[A, A], Frame): Controlled[A] < Sync =
         binding match
             case Present(ReactiveValue.Const(a)) => mintFrom(a)
             case Present(_)                      => copy()
             case _                               => mintFrom(unbound)
 
-    private def mintFrom(a: A)(using CanEqual[A, A], Frame): Slot[A] < Sync =
+    private def mintFrom(a: A)(using CanEqual[A, A], Frame): Controlled[A] < Sync =
         Signal.initRef(a).map(ref => copy(bound = Present(ref)))
-end Slot
+end Controlled
 
-private[uic] object Slot:
+private[uic] object Controlled:
 
     /** What a card for a slot nobody hears says, in one template, so every such card says the same thing.
       *
@@ -146,12 +149,15 @@ private[uic] object Slot:
       * `on` is the feature's switch. Own state is minted unless the switch is constant false: under a signal the state is held
       * while the switch is off, so it comes back as the reader left it, and whoever draws reads the switch inside.
       */
-    def owning[A](slot: Slot[A], start: A, on: BoolValue = alwaysOn)(draw: Slot[A] => UI)(using CanEqual[A, A], Frame): UI =
+    def owning[A](slot: Controlled[A], start: A, on: BoolValue = alwaysOn)(draw: Controlled[A] => UI)(using CanEqual[A, A], Frame): UI =
         if slot.binding.isDefined || on.const.contains(false) then draw(slot)
         else UI.mounted(Signal.initRef(start).map(own => draw(slot.copy(bound = Present(own)))))
 
     /** [[owning]] where a constant is only where the slot starts. */
-    def owningFrom[A](slot: Slot[A], unbound: A, on: BoolValue = alwaysOn)(draw: Slot[A] => UI)(using CanEqual[A, A], Frame): UI =
+    def owningFrom[A](slot: Controlled[A], unbound: A, on: BoolValue = alwaysOn)(draw: Controlled[A] => UI)(using
+        CanEqual[A, A],
+        Frame
+    ): UI =
         slot.binding match
             case Present(ReactiveValue.Const(a)) if !on.const.contains(false) =>
                 UI.mounted(Signal.initRef(a).map(own => draw(slot.copy(bound = Present(own)))))
@@ -159,7 +165,10 @@ private[uic] object Slot:
             case _          => owning(slot, unbound, on)(draw)
 
     /** [[owning]] for a container: a card for a slot nobody hears goes in front, for as long as the switch is on. */
-    def draw[A](slot: Slot[A], name: Name, start: A, on: BoolValue = alwaysOn)(body: Slot[A] => UI)(using CanEqual[A, A], Frame): UI =
+    def draw[A](slot: Controlled[A], name: Name, start: A, on: BoolValue = alwaysOn)(body: Controlled[A] => UI)(using
+        CanEqual[A, A],
+        Frame
+    ): UI =
         val drawn = owning(slot, start, on)(body)
         if slot.deaf then Diagnostics.beforeWhile(drawn)(on)(name.component)(b => Seq(Diagnostic.unheard(slot, name, b)))
         else drawn
@@ -180,7 +189,7 @@ private[uic] object Slot:
     final case class Field[A](value: A, native: A | Signal[A], edit: Maybe[A => UI.Action], fixed: Boolean)
 
     /** Draws a field with native state from its slot, the same way for each binding. */
-    def drawField[A](slot: Slot[A], unbound: A)(body: Field[A] => UI)(using CanEqual[A, A], Frame): UI =
+    def drawField[A](slot: Controlled[A], unbound: A)(body: Field[A] => UI)(using CanEqual[A, A], Frame): UI =
         val edit: Maybe[A => UI.Action] = if slot.heard then Present((a: A) => slot.change(a)) else Absent
         slot.binding match
             case Present(ReactiveVariable(ref))                    => ref.render(a => body(Field(a, a, edit, false)))
@@ -196,4 +205,4 @@ private[uic] object Slot:
         n match
             case s: Signal[A] @unchecked => s.map(f)
             case a: A @unchecked         => f(a)
-end Slot
+end Controlled

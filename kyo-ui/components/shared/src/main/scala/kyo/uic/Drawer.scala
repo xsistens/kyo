@@ -128,7 +128,7 @@ final class Drawer private[uic] (private[uic] val p: Drawer.Props) extends Node,
     private[uic] def render(using Frame): UI =
         // Unbound, the drawer keeps its visibility itself and starts open. Before the mount runs it draws from a stand-in, so
         // the static page does not call its close button fixed.
-        Slot.draw(openSlot, Drawer.openName, start = true)(s => new Drawer(this.p.copy(openSlot = s)).drawn)
+        Controlled.draw(openSlot, Drawer.openName, start = true)(s => new Drawer(this.p.copy(openSlot = s)).drawn)
 
     private def drawn(using Frame): UI =
         openSlot.binding match
@@ -232,7 +232,7 @@ end Drawer
 
 object Drawer:
     final private[uic] case class Props(
-        openSlot: Slot[Boolean] = Slot(),
+        openSlot: Controlled[Boolean] = Controlled(),
         positionV: DrawerPosition = DrawerPosition.Left,
         headerText: Maybe[TextValue] = Absent,
         headerContent: Maybe[UI] = Absent,
@@ -247,5 +247,5 @@ object Drawer:
 
     def apply(): Drawer = new Drawer(Props())
 
-    private val openName = Slot.Name("Drawer", "the visibility", "a close", "onOpenChange")
+    private val openName = Controlled.Name("Drawer", "the visibility", "a close", "onOpenChange")
 end Drawer

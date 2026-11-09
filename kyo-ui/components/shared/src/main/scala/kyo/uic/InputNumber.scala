@@ -168,7 +168,7 @@ final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) ext
         // through the same text channel a text binding uses, so it starts empty; a constant text is where it starts.
         if numberSlot.fixed && !readonlyFlag then new InputNumber(p.copy(readonlyFlag = true)).render
         else if numberSlot.binding.isDefined then renderLive
-        else Slot.owningFrom(textSlot, unbound = "")(s => new InputNumber(this.p.copy(textSlot = s)).renderLive)
+        else Controlled.owningFrom(textSlot, unbound = "")(s => new InputNumber(this.p.copy(textSlot = s)).renderLive)
 
     private def renderLive(using Frame): UI =
         val validity = FieldValidity(validityV)
@@ -186,11 +186,11 @@ final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) ext
         if numberSlot.binding.isDefined then
             // Bound one way, the native field follows the signal, so kyo-ui puts back a number the owner does not take. A constant
             // somebody hears is the same, and a constant nobody hears is fixed (drawn read-only).
-            Slot.drawField(numberSlot, unbound = 0.0)(f =>
+            Controlled.drawField(numberSlot, unbound = 0.0)(f =>
                 body(
                     Present(f.value),
                     validity,
-                    native = Slot.mapNative[Double, String](f.native)(InputNumber.format) match
+                    native = Controlled.mapNative[Double, String](f.native)(InputNumber.format) match
                         case s: Signal[String] @unchecked => Present(s)
                         case _                            => Absent
                 )
@@ -347,8 +347,8 @@ end InputNumber
 
 object InputNumber:
     final private[uic] case class Props(
-        numberSlot: Slot[Double] = Slot(),
-        textSlot: Slot[String] = Slot(),
+        numberSlot: Controlled[Double] = Controlled(),
+        textSlot: Controlled[String] = Controlled(),
         minV: Maybe[Double] = Absent,
         maxV: Maybe[Double] = Absent,
         stepV: Double = 1.0,
@@ -378,6 +378,6 @@ object InputNumber:
     private[uic] def format(v: Double): String =
         if v.isWhole && math.abs(v) < 1e15 then v.toLong.toString else v.toString
 
-    private val valueName = Slot.Name("InputNumber", "value", "a change", "onChange")
-    private val textName  = Slot.Name("InputNumber", "text", "a change", "onTextChange")
+    private val valueName = Controlled.Name("InputNumber", "value", "a change", "onChange")
+    private val textName  = Controlled.Name("InputNumber", "text", "a change", "onTextChange")
 end InputNumber

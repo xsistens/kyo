@@ -230,17 +230,17 @@ end OrderList
 
 object OrderList:
     final private[uic] case class Props[A](
-        itemsSlot: Slot[Seq[A]] = Slot[Seq[A]](),
+        itemsSlot: Controlled[Seq[A]] = Controlled[Seq[A]](),
         labelF: Maybe[A => String] = Absent,
         keyF: Maybe[A => String] = Absent,
         templateF: Maybe[A => UI] = Absent,
-        selectedSlot: Slot[Set[A]] = Slot[Set[A]](),
+        selectedSlot: Controlled[Set[A]] = Controlled[Set[A]](),
         disabledFlag: Boolean = false,
         metaKeyFlag: Boolean = false,
         access: Accessibility = Accessibility.none
     )
 
-    private val itemsName        = Slot.Name("OrderList", "items", "a move", "onItemsChange")
-    private val selectionName    = Slot.Name("OrderList", "selection", "a click", "onSelectionChange")
+    private val itemsName        = Controlled.Name("OrderList", "items", "a move", "onItemsChange")
+    private val selectionName    = Controlled.Name("OrderList", "selection", "a click", "onSelectionChange")
     def apply[A](): OrderList[A] = new OrderList[A](Props())
 end OrderList

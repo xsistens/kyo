@@ -87,7 +87,9 @@ final class Panel private[uic] (private[uic] val p: Panel.Props) extends Node, H
 
     private[uic] def render(using Frame): UI =
         // Unbound, a toggleable panel keeps its collapse state itself, starting expanded.
-        Slot.draw(collapsedSlot, Panel.collapsedName, start = false, on = toggleOn)(s => new Panel(this.p.copy(collapsedSlot = s)).body)
+        Controlled.draw(collapsedSlot, Panel.collapsedName, start = false, on = toggleOn)(s =>
+            new Panel(this.p.copy(collapsedSlot = s)).body
+        )
 
     /** The switch as this panel reads it: set, it decides alone; unset, a binding of [[collapsed]] turns the toggle on. */
     private def toggleOn: BoolValue = toggleableV.getOrElse(ReactiveValue.Const(collapsedSlot.binding.isDefined))
@@ -190,7 +192,7 @@ object Panel:
     final private[uic] case class Props(
         headerText: Maybe[TextValue] = Absent,
         headerUIV: Maybe[UI] = Absent,
-        collapsedSlot: Slot[Boolean] = Slot(),
+        collapsedSlot: Controlled[Boolean] = Controlled(),
         toggleableV: Maybe[BoolValue] = Absent,
         headerLevelV: TitleLevel = TitleLevel.H2,
         access: Accessibility = Accessibility.none,
@@ -201,5 +203,5 @@ object Panel:
 
     def apply(): Panel = new Panel(Props())
 
-    private val collapsedName = Slot.Name("Panel", "the collapse state", "a press", "onCollapsedChange")
+    private val collapsedName = Controlled.Name("Panel", "the collapse state", "a press", "onCollapsedChange")
 end Panel

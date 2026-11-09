@@ -10,7 +10,7 @@ import kyo.UI.*
   *
   * It is also what one render of a control reads, combined with [[and]] and drawn with [[render]] or
   * [[children]], whether a caller bound the value or the control holds it in a ref of its own. A
-  * value read that way is only read: [[map]] drops the ref, and a write goes through the [[Slot]].
+  * value read that way is only read: [[map]] drops the ref, and a write goes through the [[Controlled]].
   *
   * How a `Dyn` value updates is the component's choice (Signal.render for a text node,
   * the boolean-attribute channel for `disabled`, the class channel for a severity accent).
@@ -76,7 +76,7 @@ sealed private[uic] trait ReactiveValue[A]:
             case (ReactiveValue.Const(a), ReactiveValue.Const(b)) => ReactiveValue.Const((a, b))
             case _                                                => ReactiveValue.Dyn(signal.combineLatest(other.signal))
 
-    /** The value through `f`. A mapped binding is one way, over a ref too: a reader's change goes through the [[Slot]], never through
+    /** The value through `f`. A mapped binding is one way, over a ref too: a reader's change goes through the [[Controlled]], never through
       * what a render read from it.
       */
     private[uic] def map[B](f: A => B)(using CanEqual[B, B], Frame): ReactiveValue[B] =
