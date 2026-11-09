@@ -20,15 +20,16 @@ end Opt
   *
   * Every field of `P` is a setter of its name, `uic.Button("Save").size(Size.Small)`, typed against the field and completed by the
   * IDE as a selectable field. A setter the component writes itself takes its field's place, so an author who wants the setter's
-  * scaladoc in the IDE, or a setter that does more than store its value, writes it by hand. Two components of one class are equal
-  * when their props are.
+  * scaladoc in the IDE, or a setter that does more than store its value, writes it by hand. A `Controlled` field is a binding setter
+  * and its event (`on<Field>Change`, or `@eventName`), and a callback field takes the function itself (see [[kyo.Setters.apply]]).
+  * Two components of one class are equal when their props are.
   */
 abstract class Component[P, Self, S <: Setters[P, Self]](private[uic] val setters: S) extends Selectable:
     private[uic] def p: P
 
     type Fields = setters.Fields
 
-    def selectDynamic(name: String): Any = (value: Any) => setters.make(setters.set(p, name, value))
+    def selectDynamic(name: String)(using Frame): Any = (value: Any) => setters.make(setters.set(p, name, value))
 
     override def equals(other: Any): Boolean = other match
         case that: Component[?, ?, ?] => getClass.equals(that.getClass) && p.equals(that.p)
@@ -38,3 +39,28 @@ abstract class Component[P, Self, S <: Setters[P, Self]](private[uic] val setter
 
     override def toString: String = s"${getClass.getSimpleName}($p)"
 end Component
+
+/** Evidence that a component `C` has a setter named `N` that takes an `A`, and the way to call it, so generic code (a form's `bind`)
+  * can write through a setter without knowing whether `Setters` generated it or the class wrote it by hand.
+  */
+@scala.annotation.implicitNotFound("${C} has no setter ${N} that takes ${A}")
+abstract class HasSetter[C, N <: String, A]:
+    def apply(c: C, a: A)(using Frame): C
+
+object HasSetter:
+    /** A setter `Setters` generated: found in the component's `Fields` by its name, and checked against what it takes. A name
+      * `Fields` does not hold leaves `Of` unreduced, so there is no instance.
+      */
+    given fromFields[F <: NamedTuple.AnyNamedTuple, C <: Component[?, ?, ?] { type Fields = F }, N <: String, A](using
+        name: ValueOf[N],
+        fits: Of[NamedTuple.Names[F], NamedTuple.DropNames[F], N] <:< (A => C)
+    ): HasSetter[C, N, A] with
+        def apply(c: C, a: A)(using Frame): C =
+            fits(c.selectDynamic(name.value).asInstanceOf[Of[NamedTuple.Names[F], NamedTuple.DropNames[F], N]])(a)
+    end fromFields
+
+    /** What the setter named `N` takes and gives, looked up in the names `Ns` and setter types `Vs` of a `Fields`. */
+    type Of[Ns <: Tuple, Vs <: Tuple, N] = (Ns, Vs) match
+        case (N *: ?, v *: ?)   => v
+        case (? *: ns, ? *: vs) => Of[ns, vs, N]
+end HasSetter

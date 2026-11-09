@@ -1,10 +1,10 @@
 package kyo.uic.form
 
 import kyo.*
-import kyo.uic.BooleanFormControl
 import kyo.uic.ChoiceFormControl
 import kyo.uic.FileFormControl
 import kyo.uic.FormControl
+import kyo.uic.HasSetter
 import kyo.uic.MultiChoiceFormControl
 import kyo.uic.NumberFormControl
 import kyo.uic.OptionalFormControl
@@ -811,20 +811,21 @@ extension [C <: TextFormControl { type Self <: C }](control: C)
     end bindControlOnly
 end extension
 
-extension [C <: BooleanFormControl { type Self <: C }](control: C)
-    def bind(field: FormField[Boolean])(using Frame): C =
-        var b: C = stampId(control.checked(field.valueRef), field)
-        b = b.invalidMessage(field.message)
-        b = b.onBlur(_ => field.blurred)
-        b
-    end bind
+/** A `Boolean` field binds to any control with a `checked` and an `onBlur` setter, generated or written by hand ([[HasSetter]]). */
+extension [C <: FormControl { type Self <: C }](control: C)
+    def bind(field: FormField[Boolean])(using
+        checked: HasSetter[C, "checked", UI.Prop[Boolean]],
+        blur: HasSetter[C, "onBlur", Boolean => UI.Action],
+        frame: Frame
+    ): C =
+        blur(stampId(checked(control, field.valueRef), field).invalidMessage(field.message), _ => field.blurred)
 
-    def bindControlOnly(field: FormField[Boolean])(using Frame): C =
-        var b: C = stampId(control.checked(field.valueRef), field)
-        b = b.invalid(field.visibleError.map(_.isDefined))
-        b = b.onBlur(_ => field.blurred)
-        b
-    end bindControlOnly
+    def bindControlOnly(field: FormField[Boolean])(using
+        checked: HasSetter[C, "checked", UI.Prop[Boolean]],
+        blur: HasSetter[C, "onBlur", Boolean => UI.Action],
+        frame: Frame
+    ): C =
+        blur(stampId(checked(control, field.valueRef), field).invalid(field.visibleError.map(_.isDefined)), _ => field.blurred)
 end extension
 
 /** The `Double`-control binding, as a named helper so a wrapping control ([[NumberField]]'s

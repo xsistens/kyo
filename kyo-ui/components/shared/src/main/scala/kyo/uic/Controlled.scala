@@ -43,16 +43,16 @@ final private[uic] case class Controlled[A](
     /** The slot with nothing bound: the component's own. */
     def unbound: Controlled[A] = copy(bound = Absent)
 
-    /** The slot with the instance's own `ref` bound, as the engine hands it to a draw where the caller bound nothing. */
-    def owning(ref: SignalRef[A]): Controlled[A] = copy(bound = Present(ref))
-
     /** What was bound, as the `ReactiveValue` the components the waves have not reached yet read. A bridge: it goes with
       * `ReactiveValue` in the last wave.
       */
     def binding: Maybe[ReactiveValue[A]] = bound.map(ReactiveValue(_))
 
     /** The slot with `f` hearing every change, in place of whoever heard it before. */
-    def hear(f: A => UI.Action)(using Frame): Controlled[A] = copy(hearer = Present(Callback.of(f)))
+    def hear(f: A => UI.Action)(using Frame): Controlled[A] = withHearer(Callback.of(f))
+
+    /** The slot with `f` hearing every change, run as given: the generated event setter wraps `f` itself. */
+    def withHearer(f: A => UI.Action): Controlled[A] = copy(hearer = Present(f))
 
     /** The slot with an event of another shape hearing it too. */
     def heardToo: Controlled[A] = copy(heardElsewhere = true)
