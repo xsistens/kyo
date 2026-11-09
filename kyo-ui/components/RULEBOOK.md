@@ -27,6 +27,24 @@ comparing the result with ToggleButton, aspect by aspect.
   changed by accident, never a reason to keep a shape the rules replace.
 - **The report names, per aspect of the comparison, what was applied, what is a question, and why.**
 
+**The order of a migration.** The rules are numbered in the order they were found, not in the order they are applied, and a later
+rule can make an earlier step wasted work (a hand-written setter renamed by rule 1 and then deleted by rule 11, a draw put into
+chains by rule 3 and then rewritten by the template). So a migration goes outside in, and each phase changes only what the
+phases after it keep:
+
+1. **Structure, the template** (`CLAUDE.md`): the component's own state as a `Controlled` with a `start` the engine binds, one
+   `render`, a `Base` of only what decides the structure, one draw path (rule 2). Everything after this is written into this shape.
+2. **The props:** field names (rule 1), field types: `Prop[A]` wherever a constant or a signal makes sense (rule 8), an `Opt` for an
+   optional prop the caller sets, a default where unset is a value and a `Maybe` only for a callback or a slot a host or trait writes
+   (rule 9), text as `Prop[String]` (rule 4), host lists of props (rule 7).
+3. **The setters, generated** (rule 11). Hand-written setters are deleted here, never edited before; the ones that stay are those
+   that do more than store.
+4. **The draw:** one `UI.reactive` block over the structure (rule 6), each element one chain (rule 3), `classFor` (rule 5), leaves
+   handed the prop (rule 10), texts and host lists written with one call each (rules 4 and 7).
+5. **Order and scaladoc** (rule 9).
+
+A phase that needs another component changed first stops there and asks.
+
 ## 1. Props fields have plain names, and the body reads them through `p`
 
 A field is named for what it holds (`size`, `disabled`, `onClick`), with no `V`, `Flag`, `Eff` or `F` suffix, and the class
@@ -85,12 +103,14 @@ classed(el, loading)
     .aria("label", p.access.name)
 ```
 
-- A step that is a match over a value (until rule 4 removes it) is a small local `def step(e: E): E`, applied in the chain.
+- In a migration rule 4 comes first (phase 2), so no step of the chain is a match over a value's form. Where a step still needs a
+  `def`, it is a small local `def step(e: E): E`, applied in the chain.
 
 ## 4. A text slot is a `Prop[String]`, written with one call
 
 A text a caller may give as a constant or a signal (a label, a tooltip, an accessible name or description) is stored as
-`Prop[String]` (or `Maybe[Prop[String]]` where it is optional) and written with the kyo-ui setter that takes it:
+`Prop[String]` (where it is optional, `Opt[Prop[String]]` as the component's own prop and `Maybe[Prop[String]]` in a shared slot
+a trait writes) and written with the kyo-ui setter that takes it:
 `aria(name, prop)`, `aria(name, maybe)`, `title(prop)`, `title(maybe)`, or as a child (`liftPropString`). Never match it into
 its constant and its signal at the render site.
 
@@ -176,21 +196,24 @@ its signal.
 - **Why:** the setter already tells the forms apart (rule 4), so the fold is one line in the chain, and a host can hand over a
   constant or a signal without the component knowing which.
 
-## 8. A setter that takes a constant or a signal says `Prop[A]`
+## 8. A field that takes a constant or a signal says `Prop[A]`
 
-Every setter and every field that takes either form is typed `Prop[A]` (`disabled(v: Prop[Boolean])`, `apply(label: Prop[String])`,
-`icon(glyph: Prop[IconGlyph])`), never the spelled-out `A | Signal[A]`, and a slot that may stay unset is `Maybe[Prop[A]]`.
+Every field that may take either form is typed `Prop[A]` (`disabled: Prop[Boolean]`, `size: Prop[Size]`, `icon: Opt[Prop[IconGlyph]]`),
+never the spelled-out `A | Signal[A]`; its generated setter then takes the same (rule 11), and so does a hand-written one
+(`apply(label: Prop[String])`). An optional prop the caller sets is `Opt[Prop[A]]`.
 
-- **Why:** one name for one idea, so a reader sees at a glance which setters follow a signal, and a field and its setter say the
-  same type. A slot that was constant only because nobody needed more (Button's icons) becomes a `Prop` too, drawn with
-  `Prop.render`: a constant draws once with no region, a signal in a region of its own, below the component.
+- **Why:** one name for one idea, so a reader sees at a glance which settings follow a signal, and a field and its setter say the
+  same type. A field that was constant only because nobody needed more (Button's icons, a size) becomes a `Prop` too: it reaches a
+  channel, or a leaf that draws it (rule 10), so a constant costs nothing and a signal patches in place. A field stays a plain
+  value only where it decides the structure (Password's `feedback`, which adds the meter).
 
 ## 9. A field is a `Maybe` only where unset is not a value; the draw has its scaladoc
 
-A prop whose unset form behaves as one value is that value as its default (`disabled: Prop[Boolean] = false`), and its setter is
-`p.copy(x = v)`. A `Maybe` is for a slot whose absence draws something different from every value it can hold: no label span, an
-icon-only button, no link, no attribute, no handler. Before keeping one, check its readers: if each turns `Absent` into the same
-value at once (`getOrElse(false)`), it is a default.
+A prop whose unset form behaves as one value is that value as its default (`disabled: Prop[Boolean] = false`). A prop whose absence
+draws something different from every value it can hold (no label span, an icon-only button, no link, no attribute) is an `Opt`,
+so its generated setter takes the value itself; a `Maybe` is left for a callback (`Maybe[A => UI.Action]`, a handler or not) and for
+a slot a host or a shared trait writes (`@noSetter`). Before keeping an `Opt` or a `Maybe`, check its readers: if each turns
+`Absent` into the same value at once (`getOrElse(false)`), it is a default.
 
 - **Why:** a `Maybe` that every reader unwraps to one value is a second spelling of that value, and each reader has to repeat it.
 - **Order:** the class holds its setters, then the draw with a scaladoc saying what it reads where (no `//` block above it), then
