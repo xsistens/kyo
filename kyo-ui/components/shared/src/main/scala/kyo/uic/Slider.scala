@@ -98,7 +98,7 @@ final class Slider private[uic] (private[uic] val p: Slider.Props) extends Node,
     private[uic] def render(using Frame): UI =
         // A constant nobody hears is fixed: drawn read-only. Unbound, the field keeps what the reader does itself.
         if valueSlot.fixed && !readonlyFlag then new Slider(p.copy(readonlyFlag = true)).render
-        else Slot.owning(valueSlot, start = minV)(s => new Slider(this.p.copy(valueSlot = s)).renderLive)
+        else Controlled.owning(valueSlot, start = minV)(s => new Slider(this.p.copy(valueSlot = s)).renderLive)
 
     private def renderLive(using Frame): UI =
         val validity = FieldValidity(validityV)
@@ -110,7 +110,7 @@ final class Slider private[uic] (private[uic] val p: Slider.Props) extends Node,
     // Bound one way the native thumb follows the signal, so kyo-ui puts back a drag the owner does not take; the visual layer is
     // drawn from it. A constant somebody hears is the same, and a constant nobody hears is fixed (drawn read-only).
     private def renderResolved(validity: FieldValidity)(using Frame): UI =
-        Slot.drawField(valueSlot, unbound = minV)(f => body(f.value, validity, Slot.mapNative[Double, Double](f.native)(clamp)))
+        Controlled.drawField(valueSlot, unbound = minV)(f => body(f.value, validity, Controlled.mapNative[Double, Double](f.native)(clamp)))
 
     private def body(raw: Double, validity: FieldValidity, native: Double | Signal[Double])(using Frame): UI =
         val value = clamp(raw)
@@ -160,7 +160,7 @@ end Slider
 
 object Slider:
     final private[uic] case class Props(
-        valueSlot: Slot[Double] = Slot(),
+        valueSlot: Controlled[Double] = Controlled(),
         minV: Double = 0.0,
         maxV: Double = 100.0,
         stepV: Double = 1.0,
@@ -175,5 +175,5 @@ object Slider:
 
     def apply(): Slider = new Slider(Props())
 
-    private val valueName = Slot.Name("Slider", "value", "a change", "onChange")
+    private val valueName = Controlled.Name("Slider", "value", "a change", "onChange")
 end Slider

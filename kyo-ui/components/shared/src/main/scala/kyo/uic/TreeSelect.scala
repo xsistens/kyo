@@ -122,7 +122,7 @@ final class TreeSelect[K] private[uic] (private[uic] val p: TreeSelect.Props[K])
     def onOpenChange(f: Boolean => UI.Action)(using Frame): TreeSelect[K] = new TreeSelect(p.copy(openSlot = openSlot.hear(f)))
 
     /** Asks for the panel open or closed: a two-way binding is written, then the change reported. */
-    private def askOpen(open: Slot[Boolean], v: Boolean)(using Frame): UI.Action = open.change(v)
+    private def askOpen(open: Controlled[Boolean], v: Boolean)(using Frame): UI.Action = open.change(v)
 
     /** A panel bound closed by a constant nobody hears: nothing the reader does may open it. */
     private def openFixedShut: Boolean = openSlot.fixedAt(false)
@@ -233,7 +233,7 @@ final class TreeSelect[K] private[uic] (private[uic] val p: TreeSelect.Props[K])
 
     /** [[wired]] over the panel state however it is bound. */
     private def wiredOver(
-        exp: Slot[Set[K]],
+        exp: Controlled[Set[K]],
         hi: SignalRef[Int],
         idBase: String
     )(using Frame): UI =
@@ -440,9 +440,9 @@ object TreeSelect:
     final private[uic] case class Props[K](
         // The roots the body draws, resolved from `nodeSources` by the region that draws them.
         nodeList: List[TreeNode[K]] = Nil,
-        valueSlot: Slot[Set[K]] = Slot[Set[K]](),
-        expandedSlot: Slot[Set[K]] = Slot[Set[K]](),
-        openSlot: Slot[Boolean] = Slot(),
+        valueSlot: Controlled[Set[K]] = Controlled[Set[K]](),
+        expandedSlot: Controlled[Set[K]] = Controlled[Set[K]](),
+        openSlot: Controlled[Boolean] = Controlled(),
         selectionModeV: SelectionMode = SelectionMode.Single,
         placeholderV: Maybe[TextValue] = Absent,
         emptyContentV: Maybe[EmptyContent] = Absent,
@@ -464,8 +464,8 @@ object TreeSelect:
       * addresses its rows by.
       */
     final private[uic] case class Wired[K](
-        open: Slot[Boolean],
-        exp: Slot[Set[K]],
+        open: Controlled[Boolean],
+        exp: Controlled[Set[K]],
         hi: SignalRef[Int],
         hiV: Int,
         idBase: String
@@ -473,9 +473,9 @@ object TreeSelect:
 
     def apply[K](): TreeSelect[K] = new TreeSelect[K](Props())
 
-    private val openName      = Slot.Name("TreeSelect", "the panel", "an open or a close", "onOpenChange")
-    private val selectionName = Slot.Name("TreeSelect", "selection", "a pick", "onChange")
-    private val expandedName  = Slot.Name("TreeSelect", "expanded", "a toggle", "onExpandedChange")
+    private val openName      = Controlled.Name("TreeSelect", "the panel", "an open or a close", "onOpenChange")
+    private val selectionName = Controlled.Name("TreeSelect", "selection", "a pick", "onChange")
+    private val expandedName  = Controlled.Name("TreeSelect", "expanded", "a toggle", "onExpandedChange")
 
     /** Projects one typed option (and, recursively, its sub-options) into the
       * [[TreeNode]] model the panel's [[Tree]] renders. Termination is the caller's

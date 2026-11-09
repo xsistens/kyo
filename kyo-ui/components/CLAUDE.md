@@ -71,7 +71,7 @@ region that runs again must not start a component over and take the reader's sta
 - **The template is `ToggleButton` (and `Paginator`)**: `render = UI.mountedWith(p)(X.drawn)`, and `drawn(props: UI.Live[Props])`
   runs once per instance. Each place reads the field it shows where it shows it: `props(_.size)` into a class channel,
   `props(_.checked.value(false))` into `cssClass` and `aria`, a label into the content's own region. A run that changes one field
-  patches that place alone and draws nothing else again. A state slot is a `Slot` with a `start` (a `UI.Controlled` prop): where a
+  patches that place alone and draws nothing else again. A state slot is a `Controlled` with a `start` (a `UI.Ownable` prop): where a
   run binds nothing the engine binds the instance's own ref in its place, minted once, so `props(_.checked.value(...))` always reads
   a bound slot, keeps the reader's value across runs, and carries on from what was shown when a run stops binding it.
 - **What builds the element and has no channel is one `UI.reactive` block** over a small value of the structural fields (ToggleButton's
@@ -99,7 +99,7 @@ region that runs again must not start a component over and take the reader's sta
   of its own over it. A component-specific repaint test adds what the case cannot say (`ToggleButtonTest`: nothing is drawn again for
   a new label or a new hearer; `ButtonTest` for the stateless case).
 - **During the waves** a converted component's own fields are `Prop`s; the shared traits (validity, accessibility, tooltip,
-  description) and `Slot` stay on `ReactiveValue` until the last wave removes it. `Prop.map` needs its type parameters spelled
+  description) and `Controlled` stay on `ReactiveValue` until the last wave removes it. `Prop.map` needs its type parameters spelled
   out on a value whose static type is already `Prop[A]` (ISA finding, task T8).
 
 ## kyo-ui is in-tree
@@ -166,7 +166,7 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   `value` keeps what was typed. So a plain field leaves an unbound text to the browser, but a field that draws anything
   from its text after the page is shown (AutoComplete's suggestions, Password's meter and reveal) or builds its value
   from several controls (InputOtp's cells, ColorPicker's sliders) keeps the text itself, unbound and from a constant
-  (`Slot.owningFrom`), and its handlers read the value live, since a keystroke can land before the render of the one
+  (`Controlled.owningFrom`), and its handlers read the value live, since a keystroke can land before the render of the one
   before it. `ReactiveValueContract.nativeText` and the `startText`/`keptNatively` slot fields hold them to it. A text
   field's `onBlur` reports the text kyo-ui's blur carries (kyo-ui's two-parameter `onBlur((e, text) => ...)`, read off the field as focus leaves it), never
   its binding: unbound or from a constant the binding does not have the reader's text at all. `ReactiveValueContract.blurs`
@@ -174,8 +174,8 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   reading what is held: InputOtp's code (a cell carries one character), ColorPicker's colour, DatePicker's parsed value,
   InputNumber's ref when bound to one. With no ref InputNumber reads the carried text as a number (clamped where it is
   bound to a number), since a commit with no ref writes nowhere and only the field holds what the reader typed.
-- **A STATE slot (what the reader changes: a page, a sort, filters, expansion, a selection, a column layout) is a `Slot[A]`**
-  (`Slot.scala`): what the caller bound, and who hears a reader's change. A setter is one line, `new X(p.copy(xSlot = xSlot.bind(v)))` and
+- **A STATE slot (what the reader changes: a page, a sort, filters, expansion, a selection, a column layout) is a `Controlled[A]`**
+  (`Controlled.scala`): what the caller bound, and who hears a reader's change. A setter is one line, `new X(p.copy(xSlot = xSlot.bind(v)))` and
   `new X(p.copy(xSlot = xSlot.hear(f)))`, and a field is never a binding and a callback side by side. It takes `A | Signal[A]` like any slot
   and reports every change the reader asks for: the component goes through `slot.change` (a new value) or `slot.update` (a step
   from the value shown), where a two-way binding is written first, atomically for a step, then the `on<Slot>Change` callback hears
@@ -187,16 +187,16 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   reports the mistake itself, or a stand-in nobody bound. `restore` writes only two-way slots. A host that embeds a component hands
   a slot on as it was bound (`slot.bound`, or the package-internal `withOpen(slot)` where the host's hearer goes along), never as
   a ref it made up. DataTable and the choice types (`SingleChoice`, `MultiChoice`, `SetBinding`, `DatePicker.Binding`) still read
-  the `ReactiveValue` functions `Slot` delegates to, since their hearer's type or their write is not the binding's.
+  the `ReactiveValue` functions `Controlled` delegates to, since their hearer's type or their write is not the binding's.
 - **Every slot the reader changes: a CONSTANT nothing hears is fixed, and an UNBOUND slot is the component's own**
   (decided 2026-10-28, for every component). A constant nobody hears (`slot.fixed`) is not a mistake but a value meant to stay: the
   component draws it read-only, reachable and readable with nothing to change, the way `readonly` does, and says
   nothing. A slot nobody bound keeps what the reader does in state the component owns for as long as its mount instance
   lives, the way an HTML control nobody binds keeps its tick. There are four forms, smallest first: `slot.owned(start)` inside a mount
   the component already has (beside its ids and highlights: a mount around it would be a mount inside a mount for every instance,
-  which `UicTest.mountsAbove` holds), `slot.ownedFrom(unbound)` the same where a constant is only where it starts, `Slot.owning` a mount
-  of its own, and `Slot.draw` that with the card in front, for a container.
-  `Slot.drawField` is what a field with native state draws from. A region around it that re-renders ends the instance and starts the
+  which `UicTest.mountsAbove` holds), `slot.ownedFrom(unbound)` the same where a constant is only where it starts, `Controlled.owning` a mount
+  of its own, and `Controlled.draw` that with the card in front, for a container.
+  `Controlled.drawField` is what a field with native state draws from. A region around it that re-renders ends the instance and starts the
   state over, which a native control under a morph would not do; a parent that repaints and has to keep it binds the slot or gives
   the component a key. So a component that draws itself again for `disabled` reads that signal below the mount that holds its state,
   never around it (`SlotCase.disable` holds the fields that do). A host that supplies the held value itself (DataTable's filter selects through `Select.current`) is bound
@@ -207,7 +207,7 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   `expandable` on OrganizationChart, `resizableColumns`, `reorderableColumns`, `collapsibleGroups`, `cellSelection`, `rowEditing` and
   `cellEditing` on DataTable each take `Boolean | Signal[Boolean]`, the rule `filterable` set for the pickers: with no switch a binding
   turns the feature on, and set, it alone decides. Own state is minted whenever a switch is present and not constant false
-  (`BoolValue.mayTurnOn`, `on` in `Slot.owning` and `Slot.draw`), so it survives the switch going off and on. Off over the component's
+  (`BoolValue.mayTurnOn`, `on` in `Controlled.owning` and `Controlled.draw`), so it survives the switch going off and on. Off over the component's
   own state means not applied, never cleared. Off over a caller's binding depends on what is left: widths, an order, groups and a chart's
   subtrees keep the layout and lose only the affordance, as a fixed constant does; cell selection and editing have no layout to keep and
   read no binding at all; Panel and Fieldset are plain. A signal switch is read inside the mount, never around it. In a DataTable
@@ -254,10 +254,10 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
 
 A mistake a type cannot catch and nothing crashes on is said in a card (`Diagnostics.scala`, `.p-uic-diagnostic`). A `Diagnostic` is one
 thing that may hold: `Diagnostic(when, advice, keys)`, `Diagnostic.naming(advice, keys)` that fires when there is something to name, and
-`Diagnostic.unheard(slot, name, on)` for a slot nobody hears. `Slot.Name` holds the one template of that last sentence, in the component's
+`Diagnostic.unheard(slot, name, on)` for a slot nobody hears. `Controlled.Name` holds the one template of that last sentence, in the component's
 companion, so a rename is one string.
 
-- **One card per slot, and where it goes follows the component.** A container draws it in front (`Diagnostics.before`, `Slot.draw`). A
+- **One card per slot, and where it goes follows the component.** A container draws it in front (`Diagnostics.before`, `Controlled.draw`). A
   field draws it behind, with the message row between (`Diagnostics.after`). A table or a list draws it inside its root, as children
   (`Diagnostics.cards`), and a card that reads what a region reads is built in that region. With nothing to say `before` and `after` are
   the very `ui`, no fragment, so the bytes stay.

@@ -277,7 +277,7 @@ end Input
 
 object Input:
     final private[uic] case class Props(
-        valueSlot: Slot[String] = Slot(),
+        valueSlot: Controlled[String] = Controlled(),
         placeholderText: Maybe[TextValue] = Absent,
         disabledFlag: Maybe[BoolValue] = Absent,
         readonlyFlag: Maybe[BoolValue] = Absent,
@@ -297,13 +297,13 @@ object Input:
         inputMaskV: Maybe[String] = Absent,
         extraClassesV: List[String] = Nil,
         focusAutoFlag: Boolean = false,
-        unheardAsV: Slot.Name = Input.valueName("Input", "onInput or onChange"),
+        unheardAsV: Controlled.Name = Input.valueName("Input", "onInput or onChange"),
         filledUpV: Maybe[(String, String)] = Absent
     )
 
     def apply(): Input = new Input(Props())
 
-    private[uic] def valueName(component: String, events: String) = Slot.Name(component, "value", "a change", events)
+    private[uic] def valueName(component: String, events: String) = Controlled.Name(component, "value", "a change", events)
 
     /** Maps this library's filter string onto kyo's typed [[kyo.UI.InputFilter]]. `"int"` is
       * `Digits` (digits only; kyo's set carries no sign character), `"decimal"` is `Decimal`,

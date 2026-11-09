@@ -152,7 +152,7 @@ final class Menu private[uic] (private[uic] val p: Menu.Props) extends Node, Has
       */
     private def navigation(using Frame): UI =
         // `popup()` with no mount to allocate in: the open state is kept by a mount of its own.
-        Slot.owning(popupSlot, start = true, on = ReactiveValue.Const(popupOwnFlag))(s =>
+        Controlled.owning(popupSlot, start = true, on = ReactiveValue.Const(popupOwnFlag))(s =>
             new Menu(this.p.copy(popupSlot = s)).navigationOver
         )
     end navigation
@@ -391,7 +391,7 @@ object Menu:
         // The rows `body` draws: what a render resolved from `entriesV`, or what a host handed over through `rows`.
         itemsV: List[MenuItem] = Nil,
         entriesV: List[MenuItemLiveEntry] = Nil,
-        popupSlot: Slot[Boolean] = Slot(),
+        popupSlot: Controlled[Boolean] = Controlled(),
         popupOwnFlag: Boolean = false,
         access: Accessibility = Accessibility.none,
         roleV: MenuAccessibleRole = MenuAccessibleRole.Menu
@@ -400,7 +400,7 @@ object Menu:
     /** An empty menu; add rows via [[Menu.items]]. */
     def apply(): Menu = new Menu(Props())
 
-    private val popupName = Slot.Name("Menu", "the popup", "a close", "onPopupChange")
+    private val popupName = Controlled.Name("Menu", "the popup", "a close", "onPopupChange")
 
     /** How a highlighted ROW position moves when the roots do. A row is a position in the flattened list (a section
       * spreads into its heading and its children), so it is located as a root item and an offset within it, the root is

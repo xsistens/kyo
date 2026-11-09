@@ -218,7 +218,7 @@ final class TreeTable[A] private[uic] (private[uic] val p: TreeTable.Props[A]) e
     /** Applies `f` to a row set's keys and hands on the rows they name, the rows already held kept as the caller wrote
       * them: written if `slot` binds two way, then reported to `report`.
       */
-    private def updateRows(slot: Slot[Set[A]])(f: Set[String] => Set[String])(using Frame): UI.Action =
+    private def updateRows(slot: Controlled[Set[A]])(f: Set[String] => Set[String])(using Frame): UI.Action =
         slot.update(prev =>
             val now   = f(prev.map(keyFor))
             val kept  = prev.filter(a => now.contains(keyFor(a)))
@@ -715,9 +715,9 @@ object TreeTable:
         nodeSources: List[TreeTableNodeLiveEntry[A]] = Nil,
         rowKeyF: Maybe[A => String] = Absent,
         cols: List[Column[A, AnyTable]] = Nil,
-        expandedSlot: Slot[Set[A]] = Slot[Set[A]](),
-        selectedSlot: Slot[Set[A]] = Slot[Set[A]](),
-        sortSlot: Slot[List[SortKey]] = Slot[List[SortKey]](),
+        expandedSlot: Controlled[Set[A]] = Controlled[Set[A]](),
+        selectedSlot: Controlled[Set[A]] = Controlled[Set[A]](),
+        sortSlot: Controlled[List[SortKey]] = Controlled[List[SortKey]](),
         selectionModeV: SelectionMode = SelectionMode.None,
         metaKeyFlag: Boolean = false,
         removableSortFlag: Boolean = true,
@@ -730,8 +730,8 @@ object TreeTable:
         hiddenCols: List[Column[A, AnyTable]] = Nil
     )
 
-    private val sortName         = Slot.Name("TreeTable", "the sort", "a header press", "onSortChange")
-    private val expandedName     = Slot.Name("TreeTable", "expanded", "a toggle", "onExpandedChange")
-    private val selectionName    = Slot.Name("TreeTable", "selection", "a row press", "onSelectionChange")
+    private val sortName         = Controlled.Name("TreeTable", "the sort", "a header press", "onSortChange")
+    private val expandedName     = Controlled.Name("TreeTable", "expanded", "a toggle", "onExpandedChange")
+    private val selectionName    = Controlled.Name("TreeTable", "selection", "a row press", "onSelectionChange")
     def apply[A](): TreeTable[A] = new TreeTable[A](Props())
 end TreeTable

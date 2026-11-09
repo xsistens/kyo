@@ -82,7 +82,7 @@ final class Toast private[uic] (private[uic] val p: Toast.Props) extends Node, H
     private[uic] def render(using Frame): UI =
         // Unbound, the toast keeps its visibility itself and starts open. Before the mount runs it draws from a stand-in, so the
         // static page does not call its close button fixed. A toast with no close button has nothing to hear.
-        Slot.draw(if closableFlag then openSlot else openSlot.quieted, Toast.openName, start = true)(s =>
+        Controlled.draw(if closableFlag then openSlot else openSlot.quieted, Toast.openName, start = true)(s =>
             new Toast(this.p.copy(openSlot = s)).drawn
         )
 
@@ -145,7 +145,7 @@ end Toast
 
 object Toast:
     final private[uic] case class Props(
-        openSlot: Slot[Boolean] = Slot(),
+        openSlot: Controlled[Boolean] = Controlled(),
         durationMs: Int = 3000,
         positionV: OverlayPosition = OverlayPosition.TopRight,
         severityV: Severity = Severity.Info,
@@ -157,7 +157,7 @@ object Toast:
 
     def apply(): Toast = new Toast(Props())
 
-    private val openName = Slot.Name("Toast", "the visibility", "a close", "onOpenChange")
+    private val openName = Controlled.Name("Toast", "the visibility", "a close", "onOpenChange")
 
     /** The `.p-toast-message-<token>` suffix (Prime's toast vocabulary; `Danger`
       * maps to `error`, `Primary`/`Help` fall back to the `info` skin), shared

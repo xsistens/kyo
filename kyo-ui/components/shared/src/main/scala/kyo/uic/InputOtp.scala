@@ -86,7 +86,7 @@ final class InputOtp private[uic] (private[uic] val p: InputOtp.Props) extends N
     // for is the one they hold, which a ref the field keeps for as long as it is shown remembers. It sits above the region over
     // `disabled`, or a flip would end the mount that holds it.
     private[uic] def render(using Frame): UI =
-        Slot.owningFrom(
+        Controlled.owningFrom(
             valueSlot,
             unbound = "",
             on = BoolValue.Const(interactive)
@@ -184,7 +184,7 @@ end InputOtp
 
 object InputOtp:
     final private[uic] case class Props(
-        valueSlot: Slot[String] = Slot(),
+        valueSlot: Controlled[String] = Controlled(),
         lengthV: Int = 4,
         integerOnlyFlag: Boolean = false,
         maskFlag: Boolean = false,
@@ -199,5 +199,5 @@ object InputOtp:
 
     def apply(): InputOtp = new InputOtp(Props())
 
-    private val valueName = Slot.Name("InputOtp", "value", "a change", "onChange")
+    private val valueName = Controlled.Name("InputOtp", "value", "a change", "onChange")
 end InputOtp

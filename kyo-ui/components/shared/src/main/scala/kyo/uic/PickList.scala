@@ -78,7 +78,7 @@ final class PickList[A] private[uic] (private[uic] val p: PickList.Props[A]) ext
         new PickList(p.copy(targetSelectedSlot = targetSelectedSlot.hear(f)))
 
     /** One column's bindings and the events that hear them, so a move or a transfer is the same code for either. */
-    final private case class Col(items: Slot[Seq[A]], sel: Slot[Set[A]]):
+    final private case class Col(items: Controlled[Seq[A]], sel: Controlled[Set[A]]):
         /** A constant column nobody hears is fixed: it shows its rows, and nothing moves or transfers them. */
         def itemsFixed: Boolean = items.fixed
 
@@ -124,7 +124,7 @@ final class PickList[A] private[uic] (private[uic] val p: PickList.Props[A]) ext
     private given CanEqual[Snapshot, Snapshot]                           = CanEqual.derived
 
     /** A column's selection as the keys its rows are matched by. */
-    private def selectionKeys(slot: Slot[Set[A]])(using Frame): Signal[Set[String]] =
+    private def selectionKeys(slot: Controlled[Set[A]])(using Frame): Signal[Set[String]] =
         slot.binding match
             case Present(ReactiveValue.Dyn(s))   => s.map(_.map(keyOf))
             case Present(ReactiveValue.Const(c)) => Signal.initConst(c.map(keyOf))
@@ -406,19 +406,19 @@ end PickList
 
 object PickList:
     final private[uic] case class Props[A](
-        sourceSlot: Slot[Seq[A]] = Slot[Seq[A]](),
-        targetSlot: Slot[Seq[A]] = Slot[Seq[A]](),
+        sourceSlot: Controlled[Seq[A]] = Controlled[Seq[A]](),
+        targetSlot: Controlled[Seq[A]] = Controlled[Seq[A]](),
         labelF: Maybe[A => String] = Absent,
         keyF: Maybe[A => String] = Absent,
         templateF: Maybe[A => UI] = Absent,
-        sourceSelectedSlot: Slot[Set[A]] = Slot[Set[A]](),
-        targetSelectedSlot: Slot[Set[A]] = Slot[Set[A]](),
+        sourceSelectedSlot: Controlled[Set[A]] = Controlled[Set[A]](),
+        targetSelectedSlot: Controlled[Set[A]] = Controlled[Set[A]](),
         showSourceControlsFlag: Boolean = true,
         showTargetControlsFlag: Boolean = true,
         disabledFlag: Boolean = false,
         metaKeyFlag: Boolean = false
     )
 
-    private def name(subject: String, event: String) = Slot.Name("PickList", subject, "a change", event)
+    private def name(subject: String, event: String) = Controlled.Name("PickList", subject, "a change", event)
     def apply[A](): PickList[A]                      = new PickList[A](Props())
 end PickList

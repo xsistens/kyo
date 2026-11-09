@@ -85,7 +85,7 @@ final class Popover private[uic] (private[uic] val p: Popover.Props) extends Nod
 
     private[uic] def render(using Frame): UI =
         // Unbound, the popover keeps its visibility itself: closed when a trigger can open it, open otherwise.
-        Slot.owning(openSlot, start = triggerV.isEmpty)(s => new Popover(this.p.copy(openSlot = s)).drawn)
+        Controlled.owning(openSlot, start = triggerV.isEmpty)(s => new Popover(this.p.copy(openSlot = s)).drawn)
     end render
 
     private def drawn(using Frame): UI =
@@ -126,7 +126,7 @@ end Popover
 
 object Popover:
     final private[uic] case class Props(
-        openSlot: Slot[Boolean] = Slot(),
+        openSlot: Controlled[Boolean] = Controlled(),
         triggerV: Maybe[UI.Ast.Interactive | PopupTrigger] = Absent,
         anchorV: OverlayAnchor = OverlayAnchor.BottomStart,
         dismissableV: Boolean = true,
@@ -137,7 +137,7 @@ object Popover:
     )
 
     /** A popover over the visibility `open` (see [[Popover.open]]). */
-    def apply(open: Boolean | Signal[Boolean]): Popover = new Popover(Props(openSlot = Slot().bind(open)))
+    def apply(open: Boolean | Signal[Boolean]): Popover = new Popover(Props(openSlot = Controlled().bind(open)))
 
     /** An unbound popover: it keeps its visibility itself (see [[Popover.open]]). */
     def apply(): Popover = new Popover(Props())

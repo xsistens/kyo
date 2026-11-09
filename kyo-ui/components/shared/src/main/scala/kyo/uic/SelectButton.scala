@@ -345,7 +345,7 @@ final class SelectButton[A] private[uic] (private[uic] val p: SelectButton.Props
         val deaf =
             if multipleFlag then multi.exists(_.deaf(onChangeSetF))
             else single.exists(_.deaf(onChangeF.orElse(onPickF)))
-        val name = Slot.Name("SelectButton", "the selection", "a click", if multipleFlag then "onChange" else "onChange or onPick")
+        val name = Controlled.Name("SelectButton", "the selection", "a click", if multipleFlag then "onChange" else "onChange or onPick")
         Diagnostic(deaf && !disabledFlag.constTrue, name.advice)
     end unheardCard
 

@@ -352,13 +352,13 @@ object Stepper:
         // The steps the headers draw, resolved from `stepSources` by the render.
         stepList: List[Step[K]] = Nil,
         stepSources: List[StepLiveEntry[K]] = Nil,
-        activeSlot: Slot[Int] = Slot(),
-        valueSlot: Slot[K] = Slot[K](),
+        activeSlot: Controlled[Int] = Controlled(),
+        valueSlot: Controlled[K] = Controlled[K](),
         linearFlag: Boolean = false,
         verticalFlag: Boolean = false
     )
 
-    private def activeName(event: String) = Slot.Name("Stepper", "the active step", "a click", event)
+    private def activeName(event: String) = Controlled.Name("Stepper", "the active step", "a click", event)
 
     /** An empty stepper whose steps may carry values of type `K`.
       *

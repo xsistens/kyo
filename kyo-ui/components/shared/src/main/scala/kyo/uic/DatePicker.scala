@@ -505,7 +505,7 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
         oref.current.map(isOpen => if isOpen then (): UI.Action else openOver(oref).change(true))
 
     /** The open slot over the EFFECTIVE binding (bound or mount-allocated), with whoever hears it. */
-    private def openOver(oref: ReactiveValue[Boolean]): Slot[Boolean] = openSlot.copy(bound = Present(oref.bound))
+    private def openOver(oref: ReactiveValue[Boolean]): Controlled[Boolean] = openSlot.copy(bound = Present(oref.bound))
 
     /** Whether the binding's own event is set: `onChange`, or its set or range form. */
     private def valueHeard: Boolean =
@@ -1341,8 +1341,8 @@ object DatePicker:
     final private[uic] case class Props[A](
         kind: DateKind[A],
         bindingV: Maybe[DatePicker.Binding[A]] = Absent,
-        monthSlot: Slot[YearMonth] = Slot(),
-        currentViewSlot: Slot[DatePickerView] = Slot(),
+        monthSlot: Controlled[YearMonth] = Controlled(),
+        currentViewSlot: Controlled[DatePickerView] = Controlled(),
         inlineFlag: Boolean = false,
         hourFormatV: HourFormat = HourFormat.H24,
         showButtonBarFlag: Boolean = false,
@@ -1360,7 +1360,7 @@ object DatePicker:
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         access: Accessibility = Accessibility.none,
-        openSlot: Slot[Boolean] = Slot(),
+        openSlot: Controlled[Boolean] = Controlled(),
         referenceDateV: Maybe[A] = Absent,
         onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
         onValuesChangeF: Maybe[Set[A] => UI.Action] = Absent,
@@ -1370,10 +1370,10 @@ object DatePicker:
         onRangeBlurF: Maybe[(Maybe[A], Maybe[A]) => UI.Action] = Absent
     )
 
-    private val valueName = Slot.Name("DatePicker", "the value", "a pick", "onChange")
-    private val openName  = Slot.Name("DatePicker", "the calendar", "an open or a close", "onOpenChange")
-    private val monthName = Slot.Name("DatePicker", "the month", "a page", "onMonthChange")
-    private val viewName  = Slot.Name("DatePicker", "the view", "a drill", "onCurrentViewChange")
+    private val valueName = Controlled.Name("DatePicker", "the value", "a pick", "onChange")
+    private val openName  = Controlled.Name("DatePicker", "the calendar", "an open or a close", "onOpenChange")
+    private val monthName = Controlled.Name("DatePicker", "the month", "a page", "onMonthChange")
+    private val viewName  = Controlled.Name("DatePicker", "the view", "a drill", "onCurrentViewChange")
 
     /** A picker over the value type `A`, whose [[DateKind]] given decides what it shows: `uic.DatePicker[LocalDate]()`. */
     def apply[A]()(using kind: DateKind[A]): DatePicker[A] = new DatePicker[A](Props(kind))

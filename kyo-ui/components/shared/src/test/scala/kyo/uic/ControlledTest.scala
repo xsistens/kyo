@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-class SlotTest extends UicTest:
+class ControlledTest extends UicTest:
 
     /** The four bindings a slot can hold, with what each answers: writable, a constant, a signal. */
     private def bindings(using Frame): Seq[(String, Maybe[Prop[Int]], Boolean, Boolean, Boolean)] =
@@ -23,7 +23,7 @@ class SlotTest extends UicTest:
                 elsewhere                                   <- Seq(false, true)
                 quiet                                       <- Seq(false, true)
             do
-                val s     = Slot[Int](binding, if hearer then Present(hearerF) else Absent, elsewhere, quiet)
+                val s     = Controlled[Int](binding, if hearer then Present(hearerF) else Absent, elsewhere, quiet)
                 val where = s"$name, hearer $hearer, elsewhere $elsewhere, quiet $quiet"
                 val heard = writable || hearer || elsewhere
                 assert(s.heard == heard, s"heard: $where")
@@ -35,7 +35,7 @@ class SlotTest extends UicTest:
 
         "a ref is heard by itself, is never fixed and never deaf" in {
             Signal.initRef(1).map { ref =>
-                val s = Slot[Int]().bind(ref)
+                val s = Controlled[Int]().bind(ref)
                 assert(s.heard)
                 assert(!s.fixed)
                 assert(!s.deaf)
@@ -44,32 +44,32 @@ class SlotTest extends UicTest:
 
         "a read-only view of a ref is a signal, not a ref" in {
             Signal.initRef(1).map { ref =>
-                val s = Slot[Int]().bind(ref.readOnly)
+                val s = Controlled[Int]().bind(ref.readOnly)
                 assert(!s.heard)
                 assert(s.deaf)
             }
         }
 
         "fixedAt says fixed at that value, and nothing else" in {
-            val s = Slot[Int]().bind(1)
+            val s = Controlled[Int]().bind(1)
             assert(s.fixedAt(1))
             assert(!s.fixedAt(2))
             assert(!s.hear(hearerF).fixedAt(1))
-            assert(!Slot[Int]().fixedAt(1))
+            assert(!Controlled[Int]().fixedAt(1))
         }
     }
 
     "bind" - {
         "takes the runtime class of the value, as ReactiveValue does" in {
             Signal.initRef(1).map { ref =>
-                assert(Slot[Int]().bind(1).binding.exists(_.const.contains(1)))
-                assert(Slot[Int]().bind(ref.readOnly).binding.exists(b => b.dyn.isDefined && b.writable.isEmpty))
-                assert(Slot[Int]().bind(ref).binding.exists(_.writable.isDefined))
+                assert(Controlled[Int]().bind(1).binding.exists(_.const.contains(1)))
+                assert(Controlled[Int]().bind(ref.readOnly).binding.exists(b => b.dyn.isDefined && b.writable.isEmpty))
+                assert(Controlled[Int]().bind(ref).binding.exists(_.writable.isDefined))
             }
         }
 
         "keeps who hears it" in {
-            val s = Slot[Int]().hear(hearerF).bind(1)
+            val s = Controlled[Int]().hear(hearerF).bind(1)
             assert(s.hearer.isDefined)
         }
     }
@@ -79,7 +79,7 @@ class SlotTest extends UicTest:
             for
                 ref  <- Signal.initRef(0)
                 seen <- Signal.initRef(Chunk.empty[(Int, Int)])
-                s = Slot[Int]().bind(ref).hear(v => ref.get.map(h => seen.updateAndGet(_.append((v, h))).unit))
+                s = Controlled[Int]().bind(ref).hear(v => ref.get.map(h => seen.updateAndGet(_.append((v, h))).unit))
                 _   <- s.change(3)
                 got <- seen.get
             yield assert(got == Chunk((3, 3)))
@@ -89,7 +89,7 @@ class SlotTest extends UicTest:
             for
                 ref  <- Signal.initRef(0)
                 seen <- Signal.initRef(Chunk.empty[Int])
-                s = Slot[Int]().bind(ref.readOnly).hear(v => seen.updateAndGet(_.append(v)).unit)
+                s = Controlled[Int]().bind(ref.readOnly).hear(v => seen.updateAndGet(_.append(v)).unit)
                 _    <- s.change(3)
                 got  <- seen.get
                 held <- ref.get
@@ -101,7 +101,7 @@ class SlotTest extends UicTest:
         "unbound, the hearer hears it" in {
             for
                 seen <- Signal.initRef(Chunk.empty[Int])
-                _    <- Slot[Int]().hear(v => seen.updateAndGet(_.append(v)).unit).change(3)
+                _    <- Controlled[Int]().hear(v => seen.updateAndGet(_.append(v)).unit).change(3)
                 got  <- seen.get
             yield assert(got == Chunk(3))
         }
@@ -110,7 +110,7 @@ class SlotTest extends UicTest:
             for
                 first  <- Signal.initRef(0)
                 second <- Signal.initRef(0)
-                s = Slot[Int]().hear(v => first.set(v)).hear(v => second.set(v))
+                s = Controlled[Int]().hear(v => first.set(v)).hear(v => second.set(v))
                 _ <- s.change(3)
                 a <- first.get
                 b <- second.get
@@ -124,7 +124,7 @@ class SlotTest extends UicTest:
         "steps a ref atomically: steps that interleave lose nothing" in {
             for
                 ref <- Signal.initRef(0)
-                s = Slot[Int]().bind(ref)
+                s = Controlled[Int]().bind(ref)
                 _    <- Async.fill(50, 50)(s.update(_ + 1))
                 held <- ref.get
             yield assert(held == 50)
@@ -135,8 +135,8 @@ class SlotTest extends UicTest:
                 ref  <- Signal.initRef(5)
                 seen <- Signal.initRef(Chunk.empty[Int])
                 hear = (v: Int) => seen.updateAndGet(_.append(v)).unit
-                _    <- Slot[Int]().bind(10).hear(hear).update(_ + 1)
-                _    <- Slot[Int]().bind(ref.readOnly).hear(hear).update(_ + 1)
+                _    <- Controlled[Int]().bind(10).hear(hear).update(_ + 1)
+                _    <- Controlled[Int]().bind(ref.readOnly).hear(hear).update(_ + 1)
                 got  <- seen.get
                 held <- ref.get
             yield
@@ -147,7 +147,7 @@ class SlotTest extends UicTest:
         "unbound does nothing and reports nothing: there is nothing to step from" in {
             for
                 seen <- Signal.initRef(Chunk.empty[Int])
-                _    <- Slot[Int]().hear(v => seen.updateAndGet(_.append(v)).unit).update(_ + 1)
+                _    <- Controlled[Int]().hear(v => seen.updateAndGet(_.append(v)).unit).update(_ + 1)
                 got  <- seen.get
             yield assert(got.isEmpty)
         }
@@ -156,13 +156,13 @@ class SlotTest extends UicTest:
     "what a render reads" - {
         "reading stands in for nothing bound, follows a signal and a ref, and stays fixed over a constant" in {
             Signal.initRef(7).map { ref =>
-                Slot[Int]().reading(1) match
+                Controlled[Int]().reading(1) match
                     case ReactiveValue.Const(v) => assert(v == 1)
                     case other                  => throw new AssertionError(s"nothing bound reads as $other")
-                Slot[Int]().bind(2).reading(1) match
+                Controlled[Int]().bind(2).reading(1) match
                     case ReactiveValue.Const(v) => assert(v == 2)
                     case other                  => throw new AssertionError(s"a constant reads as $other")
-                Slot[Int]().bind(ref).reading(1) match
+                Controlled[Int]().bind(ref).reading(1) match
                     case ReactiveValue.Dyn(sig) => sig.current.map(v => assert(v == 7))
                     case other                  => throw new AssertionError(s"a ref reads as $other")
             }
@@ -171,37 +171,37 @@ class SlotTest extends UicTest:
         "current reads the binding at this moment, or what stands in" in {
             for
                 ref <- Signal.initRef(7)
-                a   <- Slot[Int]().current(1)
-                b   <- Slot[Int]().bind(2).current(1)
-                c   <- Slot[Int]().bind(ref).current(1)
+                a   <- Controlled[Int]().current(1)
+                b   <- Controlled[Int]().bind(2).current(1)
+                c   <- Controlled[Int]().bind(ref).current(1)
                 _   <- ref.set(8)
-                d   <- Slot[Int]().bind(ref).current(1)
+                d   <- Controlled[Int]().bind(ref).current(1)
             yield assert((a, b, c, d) == (1, 2, 7, 8))
         }
 
         "value is the binding, else where the slot starts, else what stands in" in {
             Signal.initRef(7).map { ref =>
-                assert(Slot[Int]().value(1).equals(1))
-                assert(Slot[Int](start = Present(3)).value(1).equals(3))
-                assert(Slot[Int](start = Present(3)).bind(2).value(1).equals(2))
-                assert(Slot[Int](start = Present(3)).bind(ref).value(1).equals(ref))
+                assert(Controlled[Int]().value(1).equals(1))
+                assert(Controlled[Int](start = Present(3)).value(1).equals(3))
+                assert(Controlled[Int](start = Present(3)).bind(2).value(1).equals(2))
+                assert(Controlled[Int](start = Present(3)).bind(ref).value(1).equals(ref))
             }
         }
 
         "bound gives the binding back as the caller gave it" in {
             Signal.initRef(7).map { ref =>
-                assert(Slot[Int]().bound.isEmpty)
-                assert(Slot[Int]().bind(2).bound.exists(_.equals(2)))
-                assert(Slot[Int]().bind(ref).bound.exists(_.equals(ref)))
+                assert(Controlled[Int]().bound.isEmpty)
+                assert(Controlled[Int]().bind(2).bound.exists(_.equals(2)))
+                assert(Controlled[Int]().bind(ref).bound.exists(_.equals(ref)))
             }
         }
     }
 
     "the entry points" - {
-        val name = Slot.Name("X", "the thing", "a press", "onThing")
+        val name = Controlled.Name("X", "the thing", "a press", "onThing")
         val cls  = "p-slot-body"
 
-        def body(s: Slot[Int])(using Frame): UI =
+        def body(s: Controlled[Int])(using Frame): UI =
             s.reading(-1).render(v =>
                 UI.div.cssClass(cls).cssClass(if s.binding.exists(_.writable.isDefined) then "own" else "other")(v.toString)
             )
@@ -210,8 +210,8 @@ class SlotTest extends UicTest:
 
         "owned mints a ref for an unbound slot, and leaves anything bound" in {
             for
-                own   <- Slot[Int]().owned(3)
-                stays <- Slot[Int]().bind(1).owned(3)
+                own   <- Controlled[Int]().owned(3)
+                stays <- Controlled[Int]().bind(1).owned(3)
                 held  <- own.current(-1)
             yield
                 assert(own.binding.exists(_.writable.isDefined))
@@ -221,9 +221,9 @@ class SlotTest extends UicTest:
 
         "ownedFrom takes a constant as where it starts" in {
             for
-                own  <- Slot[Int]().bind(5).ownedFrom(3)
-                none <- Slot[Int]().ownedFrom(3)
-                sig  <- Slot[Int]().bind(Signal.initConst(7)).ownedFrom(3)
+                own  <- Controlled[Int]().bind(5).ownedFrom(3)
+                none <- Controlled[Int]().ownedFrom(3)
+                sig  <- Controlled[Int]().bind(Signal.initConst(7)).ownedFrom(3)
                 a    <- own.current(-1)
                 b    <- none.current(-1)
             yield
@@ -234,9 +234,9 @@ class SlotTest extends UicTest:
 
         "owning mounts where nothing is bound, not where something is, and not where the switch is constant off" in {
             for
-                own   <- mountsAbove(Slot.owning(Slot[Int](), 0)(body), cls)
-                bound <- mountsAbove(Slot.owning(Slot[Int]().bind(1), 0)(body), cls)
-                off   <- mountsAbove(Slot.owning(Slot[Int](), 0, ReactiveValue.Const(false))(body), cls)
+                own   <- mountsAbove(Controlled.owning(Controlled[Int](), 0)(body), cls)
+                bound <- mountsAbove(Controlled.owning(Controlled[Int]().bind(1), 0)(body), cls)
+                off   <- mountsAbove(Controlled.owning(Controlled[Int](), 0, ReactiveValue.Const(false))(body), cls)
             yield
                 assert(own == 1)
                 assert(bound == 0)
@@ -244,16 +244,16 @@ class SlotTest extends UicTest:
         }
 
         "owning mounts under a signal switch whatever it holds now, so the state outlives it being off" in {
-            mountsAbove(Slot.owning(Slot[Int](), 0, ReactiveValue.Dyn(Signal.initConst(false)))(body), cls)
+            mountsAbove(Controlled.owning(Controlled[Int](), 0, ReactiveValue.Dyn(Signal.initConst(false)))(body), cls)
                 .map(n => assert(n == 1))
         }
 
         "owningFrom mints from a constant too" in {
             for
-                first <- shown(Slot.owningFrom(Slot[Int]().bind(5), 0)(body))
-                n     <- mountsAbove(Slot.owningFrom(Slot[Int]().bind(5), 0)(body), cls)
+                first <- shown(Controlled.owningFrom(Controlled[Int]().bind(5), 0)(body))
+                n     <- mountsAbove(Controlled.owningFrom(Controlled[Int]().bind(5), 0)(body), cls)
                 off   <- mountsAbove(
-                    Slot.owningFrom(Slot[Int]().bind(5), 0, ReactiveValue.Const(false))(body),
+                    Controlled.owningFrom(Controlled[Int]().bind(5), 0, ReactiveValue.Const(false))(body),
                     cls
                 )
             yield
@@ -264,8 +264,8 @@ class SlotTest extends UicTest:
 
         "draw shows the body over the state it allocated, with no card" in {
             for
-                page  <- shown(Slot.draw(Slot[Int](), name, 4)(body))
-                cards <- elementsWithClass(Slot.draw(Slot[Int](), name, 4)(body), UicTest.cardClass)
+                page  <- shown(Controlled.draw(Controlled[Int](), name, 4)(body))
+                cards <- elementsWithClass(Controlled.draw(Controlled[Int](), name, 4)(body), UicTest.cardClass)
             yield
                 assert(page == Chunk("4"))
                 assert(cards.isEmpty)
@@ -274,14 +274,14 @@ class SlotTest extends UicTest:
         "draw puts the card of a slot nobody hears in front, only while the switch is on" in {
             for
                 sw <- Signal.initRef(true)
-                deaf = Slot[Int]().bind(Signal.initConst(1))
-                ui   = Slot.draw(deaf, name, 0, ReactiveValue.Dyn(sw))(body)
+                deaf = Controlled[Int]().bind(Signal.initConst(1))
+                ui   = Controlled.draw(deaf, name, 0, ReactiveValue.Dyn(sw))(body)
                 on    <- elementsWithClass(ui, UicTest.cardClass)
                 _     <- sw.set(false)
                 off   <- elementsWithClass(ui, UicTest.cardClass)
                 _     <- sw.set(true)
                 back  <- elementsWithClass(ui, UicTest.cardClass)
-                still <- elementsWithClass(Slot.draw(deaf, name, 0, ReactiveValue.Const(false))(body), UicTest.cardClass)
+                still <- elementsWithClass(Controlled.draw(deaf, name, 0, ReactiveValue.Const(false))(body), UicTest.cardClass)
             yield
                 assert(on.size == 1)
                 assert(off.isEmpty)
@@ -290,22 +290,22 @@ class SlotTest extends UicTest:
         }
 
         "drawField draws each binding the same way" in {
-            def field(s: Slot[Int])(using Frame): Slot.Field[Int] < Sync =
+            def field(s: Controlled[Int])(using Frame): Controlled.Field[Int] < Sync =
                 def walk(ui: UI): UI < Sync = ui match
                     case r: UI.Ast.Reactive[?] => r.signal.current(using r.frame).map(walk)
                     case other                 => other
-                val cap = new scala.collection.mutable.ArrayBuffer[Slot.Field[Int]]
-                walk(Slot.drawField(s, -1)(f =>
+                val cap = new scala.collection.mutable.ArrayBuffer[Controlled.Field[Int]]
+                walk(Controlled.drawField(s, -1)(f =>
                     cap += f; UI.div
                 )).map(_ => cap.last)
             end field
             for
                 ref   <- Signal.initRef(2)
-                two   <- field(Slot[Int]().bind(ref))
-                one   <- field(Slot[Int]().bind(ref.readOnly))
-                heard <- field(Slot[Int]().bind(5).hear(_ => ()))
-                fixed <- field(Slot[Int]().bind(5))
-                none  <- field(Slot[Int]())
+                two   <- field(Controlled[Int]().bind(ref))
+                one   <- field(Controlled[Int]().bind(ref.readOnly))
+                heard <- field(Controlled[Int]().bind(5).hear(_ => ()))
+                fixed <- field(Controlled[Int]().bind(5))
+                none  <- field(Controlled[Int]())
             yield
                 assert(two.value == 2 && two.native.equals(2) && two.edit.isDefined && !two.fixed)
                 assert(one.value == 2 && !one.native.equals(2) && one.edit.isEmpty && !one.fixed)
@@ -358,12 +358,12 @@ class SlotTest extends UicTest:
         "mapNative maps a value and a signal" in {
             for
                 ref <- Signal.initRef(2)
-                v = Slot.mapNative[Int, Int](3)(_ + 1)
-                m = Slot.mapNative[Int, Int](ref.readOnly)(_ + 1)
+                v = Controlled.mapNative[Int, Int](3)(_ + 1)
+                m = Controlled.mapNative[Int, Int](ref.readOnly)(_ + 1)
                 a <- m.asInstanceOf[Signal[Int]].current
             yield
                 assert(v.equals(4))
                 assert(a == 3)
         }
     }
-end SlotTest
+end ControlledTest

@@ -128,7 +128,7 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
     def onOpenChange(f: Boolean => UI.Action)(using Frame): MultiSelect[A] = new MultiSelect(p.copy(openSlot = openSlot.hear(f)))
 
     /** Asks for the panel open or closed: a two-way binding is written, then the change reported. */
-    private def askOpen(open: Slot[Boolean], v: Boolean)(using Frame): UI.Action = open.change(v)
+    private def askOpen(open: Controlled[Boolean], v: Boolean)(using Frame): UI.Action = open.change(v)
 
     /** A panel bound closed by a constant nobody hears: nothing the reader does may open it. */
     private def openFixedShut: Boolean = openSlot.fixedAt(false)
@@ -272,7 +272,7 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
     /** Clears the query for a new open while the filter is on. While it is off the query is not the panel's to touch,
       * so switching the filter back on finds it as it was.
       */
-    private def freshQuery(q: Slot[String])(using Frame): UI.Action =
+    private def freshQuery(q: Controlled[String])(using Frame): UI.Action =
         val fresh: UI.Action = q.change("")
         filterOn match
             case BoolValue.Dyn(on)     => on.current.map(isOn => if isOn then fresh else (): UI.Action)
@@ -283,11 +283,11 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
 
     /** The wired interaction state, allocated per mount. */
     final private case class Wired(
-        open: Slot[Boolean],
+        open: Controlled[Boolean],
         isOpen: Boolean,
         hi: SignalRef[Int],
         hiV: Int,
-        q: Slot[String],
+        q: Controlled[String],
         qV: String,
         /** Whether the filter is on. Read only while the panel is open: closed, `false` stands in for a switch that
           * is not subscribed, and the trigger's role follows the switch itself.
@@ -344,7 +344,7 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
     /** [[wired]] over the panel state however it is bound. */
     private def wiredOver(
         hi: SignalRef[Int],
-        q: Slot[String],
+        q: Controlled[String],
         base: Maybe[String]
     )(using Frame): UI =
         val validity = FieldValidity(validityV)
@@ -816,14 +816,14 @@ object MultiSelect:
         keyF: Maybe[A => String] = Absent,
         optionDisabledF: Maybe[A => Boolean] = Absent,
         choice: Maybe[MultiChoice[A]] = Absent,
-        openSlot: Slot[Boolean] = Slot(),
+        openSlot: Controlled[Boolean] = Controlled(),
         placeholderV: Maybe[TextValue] = Absent,
         displayV: MultiSelectDisplay = MultiSelectDisplay.Comma,
         maxSelectedLabelsV: Maybe[Int] = Absent,
         selectedItemsLabelV: Maybe[TextValue] = Absent,
         filterableV: Maybe[BoolValue] = Absent,
         filterF: Maybe[(A, String) => Boolean] = Absent,
-        filterQuerySlot: Slot[String] = Slot(),
+        filterQuerySlot: Controlled[String] = Controlled(),
         showToggleAllFlag: Boolean = true,
         highlightOnSelectFlag: Boolean = false,
         showClearFlag: Boolean = false,
@@ -842,9 +842,9 @@ object MultiSelect:
         optionSources: List[OptionSource[A]] = Nil
     )
 
-    private val openName      = Slot.Name("MultiSelect", "the panel", "an open or a close", "onOpenChange")
-    private val queryName     = Slot.Name("MultiSelect", "the filter query", "the reader type", "onFilterQueryChange")
-    private val selectionName = Slot.Name("MultiSelect", "the selection", "a pick", "onChange")
+    private val openName      = Controlled.Name("MultiSelect", "the panel", "an open or a close", "onOpenChange")
+    private val queryName     = Controlled.Name("MultiSelect", "the filter query", "the reader type", "onFilterQueryChange")
+    private val selectionName = Controlled.Name("MultiSelect", "the selection", "a pick", "onChange")
 
     def apply[A](): MultiSelect[A] = new MultiSelect[A](Props(Nil, _.toString))
 end MultiSelect

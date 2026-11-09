@@ -121,7 +121,7 @@ end Password
 
 object Password:
     final private[uic] case class Props(
-        valueSlot: Slot[String] = Slot(),
+        valueSlot: Controlled[String] = Controlled(),
         toggleMaskFlag: Boolean = false,
         feedbackFlag: Boolean = false,
         promptLabelV: Prop[String] = "Enter a password",
