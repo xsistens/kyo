@@ -300,4 +300,51 @@ class TextInputTest extends UITest:
         }
     }
 
+    "the trait's own setters" - {
+        // Code over any text field, as a component that picks the field's type writes it: no setter is reached through a
+        // concrete class.
+        def wired[T <: UI.Ast.TextInput { type Self <: T }](t: T, hint: Maybe[UI.Prop[String]])(using Frame): T =
+            t.onInput(_ => Kyo.unit).onChange(_ => Kyo.unit).placeholder(hint)
+
+        def fields(using Frame): List[UI.Ast.TextInput] = List(
+            wired(UI.input, Present("hint")),
+            wired(UI.passwordInput, Present("hint")),
+            wired(UI.emailInput, Present("hint")),
+            wired(UI.telInput, Present("hint")),
+            wired(UI.urlInput, Present("hint")),
+            wired(UI.searchInput, Present("hint")),
+            wired(UI.numberInput, Present("hint")),
+            wired(UI.textarea, Present("hint"))
+        )
+
+        "every text field takes onInput, onChange and a placeholder through the trait" in {
+            fields.foreach { f =>
+                assert(f.onInput.isDefined && f.onChange.isDefined, s"handlers of $f")
+                assert(f.placeholder == Present("hint"), s"placeholder of $f")
+            }
+            succeed
+        }
+
+        "an absent optional placeholder sets nothing" in {
+            val f = wired(UI.input, Absent)
+            assert(f.placeholder.isEmpty && !f.attrs.reactiveAttrs.contains("placeholder"))
+        }
+
+        "a placeholder from a signal is the attribute's channel, written at the value it holds" in {
+            for
+                hint <- Signal.initRef("first")
+                f = wired(UI.input, Present(hint))
+                html <- kyo.internal.HtmlRenderer.render(UI.div(f), Seq.empty)
+            yield
+                assert(f.placeholder.isEmpty, "a signal fills no static field")
+                assert(f.attrs.reactiveAttrs.get("placeholder").exists(_ eq hint), "the signal is the attribute's channel")
+                assert(""" placeholder="([^"]*)"""".r.findAllMatchIn(html).map(_.group(1)).toList == List("first"), html)
+        }
+
+        "a constant placeholder is the attribute" in {
+            for html <- kyo.internal.HtmlRenderer.render(UI.div(UI.input.placeholder("hint"), UI.textarea.placeholder("hint")), Seq.empty)
+            yield assert(""" placeholder="([^"]*)"""".r.findAllMatchIn(html).map(_.group(1)).toList == List("hint", "hint"), html)
+        }
+    }
+
 end TextInputTest
