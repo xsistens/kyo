@@ -103,7 +103,7 @@ final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) ext
     /** Static adornment AFTER the field (`.p-uic-inputnumber-suffix`). */
     def suffix(v: String): InputNumber = new InputNumber(p.copy(suffixV = Present(v)))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): InputNumber = new InputNumber(p.copy(placeholderText = v))
+    private[uic] def withPlaceholder(v: Maybe[Prop[String]]): InputNumber = new InputNumber(p.copy(placeholderText = v))
 
     /** Disables the field + spin buttons; a `Signal[Boolean]` toggles it reactively (re-render). */
     def disabled(v: Boolean | Signal[Boolean]): InputNumber = new InputNumber(p.copy(disabledFlag = Present(ReactiveValue(v))))
@@ -254,11 +254,7 @@ final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) ext
         def reportText(t: String): UI.Action = textSlot.hearer.fold[UI.Action](())(f => f(t))
         if interactive && text.isDefined then in = in.onInput(reportText)
         if interactive && textShown.isDefined then in = in.onInput(reportText)
-        placeholderText match
-            case Present(TextValue.Const(v)) => in = in.placeholder(v)
-            case Present(TextValue.Dyn(sig)) => in = in.placeholder(sig)
-            case Absent                      => ()
-        end match
+        in = in.placeholder(placeholderText)
         if disabledFlag.constTrue then in = in.disabled(true)
         if readonlyFlag then in = in.readOnly(true)
         nameV.foreach(v => in = in.jsProp("name", v))
@@ -356,7 +352,7 @@ object InputNumber:
         buttonLayoutV: InputNumberButtonLayout = InputNumberButtonLayout.Stacked,
         prefixV: Maybe[String] = Absent,
         suffixV: Maybe[String] = Absent,
-        placeholderText: Maybe[TextValue] = Absent,
+        placeholderText: Maybe[Prop[String]] = Absent,
         disabledFlag: Maybe[BoolValue] = Absent,
         readonlyFlag: Boolean = false,
         nameV: Maybe[String] = Absent,

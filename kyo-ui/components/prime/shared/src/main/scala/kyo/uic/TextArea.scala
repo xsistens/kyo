@@ -32,7 +32,7 @@ final class TextArea private[uic] (private[uic] val p: TextArea.Props) extends N
       */
     def value(v: String | Signal[String]): TextArea = new TextArea(p.copy(valueSlot = valueSlot.bind(v)))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): TextArea = new TextArea(p.copy(placeholderText = v))
+    private[uic] def withPlaceholder(v: Maybe[Prop[String]]): TextArea = new TextArea(p.copy(placeholderText = v))
 
     def rows(n: Int): TextArea = new TextArea(p.copy(rowsV = Present(math.max(1, n))))
 
@@ -109,10 +109,7 @@ final class TextArea private[uic] (private[uic] val p: TextArea.Props) extends N
         // A two-way ref is kyo-ui's own binding. A one-way signal is shown in place, with no region around the field, so a keystroke renders
         // nothing: kyo-ui puts back an edit its owner did not take. A constant is the starting text.
         valueSlot.bound.foreach(v => b = b.value(v))
-        b = placeholderText match
-            case Present(TextValue.Const(v)) => b.placeholder(v)
-            case Present(TextValue.Dyn(sig)) => b.placeholder(sig)
-            case Absent                      => b
+        b = b.placeholder(placeholderText)
         // `<textarea>` has no native `rows` attribute in the kyo AST, so the row count
         // is exposed as `data-rows` (wire/discoverability hook) and reflected visually
         // as a minimum height (~1.4rem per row).
@@ -137,7 +134,7 @@ end TextArea
 object TextArea:
     final private[uic] case class Props(
         valueSlot: Controlled[String] = Controlled(),
-        placeholderText: Maybe[TextValue] = Absent,
+        placeholderText: Maybe[Prop[String]] = Absent,
         rowsV: Maybe[Int] = Absent,
         disabledFlag: Maybe[BoolValue] = Absent,
         readonlyFlag: Maybe[BoolValue] = Absent,

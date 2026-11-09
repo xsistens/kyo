@@ -136,7 +136,7 @@ final class TreeSelect[K] private[uic] (private[uic] val p: TreeSelect.Props[K])
       */
     def selectionMode(v: SelectionMode): TreeSelect[K] = new TreeSelect(p.copy(selectionModeV = v))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): TreeSelect[K] = new TreeSelect(p.copy(placeholderV = v))
+    private[uic] def withPlaceholder(v: Maybe[Prop[String]]): TreeSelect[K] = new TreeSelect(p.copy(placeholderV = v))
 
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): TreeSelect[K] = new TreeSelect(p.copy(emptyContentV = v))
 
@@ -259,8 +259,9 @@ final class TreeSelect[K] private[uic] (private[uic] val p: TreeSelect.Props[K])
       */
     private def shown(using Frame): ReactiveValue[(Set[K], Boolean, Maybe[String])] =
         val held: ReactiveValue[Set[K]] = valueSlot.reading(Set.empty[K])
-        held.and(ReactiveValue.optional(loadingV)).and(ReactiveValue.optional(placeholderV)).map { case ((sel, ld), ph) =>
-            (sel, ld.getOrElse(false), ph)
+        held.and(ReactiveValue.optional(loadingV)).and(ReactiveValue.optional(placeholderV.map(ReactiveValue[String](_)))).map {
+            case ((sel, ld), ph) =>
+                (sel, ld.getOrElse(false), ph)
         }
     end shown
 
@@ -444,7 +445,7 @@ object TreeSelect:
         expandedSlot: Controlled[Set[K]] = Controlled[Set[K]](),
         openSlot: Controlled[Boolean] = Controlled(),
         selectionModeV: SelectionMode = SelectionMode.Single,
-        placeholderV: Maybe[TextValue] = Absent,
+        placeholderV: Maybe[Prop[String]] = Absent,
         emptyContentV: Maybe[EmptyContent] = Absent,
         disabledFlag: Boolean = false,
         nameV: Maybe[String] = Absent,

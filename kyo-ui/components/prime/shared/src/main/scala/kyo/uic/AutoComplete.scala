@@ -112,7 +112,7 @@ final class AutoComplete[A] private[uic] (private[uic] val p: AutoComplete.Props
 
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): AutoComplete[A] = new AutoComplete(p.copy(emptyContentV = v))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): AutoComplete[A] = new AutoComplete(p.copy(placeholderText = v))
+    private[uic] def withPlaceholder(v: Maybe[Prop[String]]): AutoComplete[A] = new AutoComplete(p.copy(placeholderText = v))
 
     /** Busy state: renders Prime's spinning `span.p-autocomplete-loader` inside
       * the field while suggestions are being fetched. Bind a `Signal[Boolean]` to the
@@ -373,10 +373,7 @@ final class AutoComplete[A] private[uic] (private[uic] val p: AutoComplete.Props
         f = validity.mark(f)
         // A two-way ref is kyo-ui's own binding, a one-way signal is followed in place, a constant is the starting text.
         valueSlot.bound.foreach(v => f = f.value(v))
-        f = placeholderText match
-            case Present(TextValue.Const(v)) => f.placeholder(v)
-            case Present(TextValue.Dyn(sig)) => f.placeholder(sig)
-            case Absent                      => f
+        f = f.placeholder(placeholderText)
         if disabledFlag then f = f.disabled(true)
         if readonlyFlag then f = f.readOnly(true)
         if requiredFlag then f = f.aria("required", "true").jsProp("required", "true")
@@ -541,7 +538,7 @@ object AutoComplete:
         filterF: Maybe[(A, String) => Boolean] = Absent,
         minQueryLengthV: Int = 1,
         emptyContentV: Maybe[EmptyContent] = Absent,
-        placeholderText: Maybe[TextValue] = Absent,
+        placeholderText: Maybe[Prop[String]] = Absent,
         loadingV: Maybe[BoolValue] = Absent,
         showClearFlag: Boolean = false,
         dropdownFlag: Boolean = false,
