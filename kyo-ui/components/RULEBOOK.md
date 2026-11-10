@@ -98,17 +98,15 @@ that builds two different chains is a `val` of an `if`, not a `var` set in each 
 ```scala
 classed(el, loading)
     .when(p.access.id)(_.id(_))
-    .when(p.focusSeed)(_.focusAuto(true).focusRestore(true))
+    .focusAuto(p.focusSeed).focusRestore(p.focusSeed)
     .when(p.onKeyDown)(_.onKeyDown(_))
     .aria("label", p.access.name)
 ```
 
-- **A setter that takes the condition gets it directly** (`disabled(off)`, `ariaFlag("busy", loading)`); `when` is for a setter
-  that is called only under a condition (`when(blurs)(_.onBlur(blur))`), and stays where the direct call would differ:
-  - a value the element may already carry from elsewhere: Button's popup trigger is the host's own Button, so
-    `trigger.when(fixed)(_.ariaDisabled(true))` keeps a host's `ariaDisabled` where `ariaDisabled(fixed)` would reset it;
-  - a setter whose `false` is a value, not unset: `focusAuto(false)` writes no attribute but leaves `focusAuto` set on the
-    element, where `when(seed)(_.focusAuto(true))` leaves it unset (SpeedDial reads that its other actions carry none).
+- **A setter that takes the condition gets it directly** (`focusAuto(p.focusSeed)`, `disabled(off)`; kyo-ui's client-side markers
+  such as `focusAuto` take `false` as unset); `when` is for a setter called only under a condition (`when(blurs)(_.onBlur(blur))`), and
+  for one whose value the element may already carry from elsewhere: Button's popup trigger is the host's own Button, so
+  `trigger.when(fixed)(_.ariaDisabled(true))` keeps a host's `ariaDisabled` where `ariaDisabled(fixed)` would reset it.
 
 - In a migration rule 4 comes first (phase 2), so no step of the chain is a match over a value's form. Where a step still needs a
   `def`, it is a small local `def step(e: E): E`, applied in the chain.
