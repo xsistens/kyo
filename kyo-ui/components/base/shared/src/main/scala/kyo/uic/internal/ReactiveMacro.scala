@@ -93,7 +93,7 @@ private[kyo] object ReactiveMacro:
             case Block(Nil, inner)      => strip(inner)
             case _                      => t
 
-        val (scopeParam, rhs, lambdaSym) = strip(body.asTerm) match
+        val (scopeParam, written, lambdaSym) = strip(body.asTerm) match
             case Block(List(dd @ DefDef(_, List(TermParamClause(List(param))), _, Some(rhs))), _: Closure) =>
                 (param.symbol, rhs, dd.symbol)
             case other =>
@@ -112,6 +112,150 @@ private[kyo] object ReactiveMacro:
                     sel(fn).collect { case q if strip(q).symbol == scopeParam => arg }
                 case _ => None
         end Read
+
+        // ---- `when(Boolean)` over toggle setters: the toggle form, so its condition is decided as a channel ----
+        //
+        // `el.when(cond)(f)` with a `Boolean` condition takes `f: Self => Self`, so a read there is the block's, and the block a
+        // region over it. Where `f` only sets what a `UI.Ast.Toggle` has (classes, `aria`, `data`, `role`, `hidden`, `silent`,
+        // `disabled`, `readOnly`, `required`, each with plain values) and the condition reads (a read, or something the block
+        // defines), the call becomes `when(cond: Prop[Boolean])` with `f` rebuilt on the toggle. That overload takes a `Prop`,
+        // so the data flow below decides the condition as it decides any setter's: a read, or a `val` that only reaches
+        // channels, is the toggle's channel, and a value the structure also needs stays the region's, where the toggle applies
+        // `f` as the constant it is (the bytes of `when(Boolean)`). Any other `f` is left as written, its condition the block's.
+        val elementClass   = TypeRepr.of[UI.Ast.Element].typeSymbol
+        val setterOwners   = Set(elementClass, TypeRepr.of[UI.Ast.HasDisabled].typeSymbol, TypeRepr.of[UI.Ast.TextInput].typeSymbol)
+        val cssClassModule = TypeRepr.of[UI.Ast.CssClass.type].termSymbol
+        val stringType     = TypeRepr.of[String]
+        val booleanType    = TypeRepr.of[Boolean]
+        // What each toggle setter takes, by name; the element's setter of that name takes these values too.
+        val toggleSetters = Map(
+            "aria"     -> List(stringType, stringType),
+            "data"     -> List(stringType, stringType),
+            "role"     -> List(stringType),
+            "hidden"   -> List(booleanType),
+            "silent"   -> List(booleanType),
+            "disabled" -> List(booleanType),
+            "readOnly" -> List(booleanType),
+            "required" -> List(booleanType)
+        )
+        def whenParams(m: Symbol): List[TypeRepr] = TypeRepr.of[UI.Ast.Element].memberType(m) match
+            case MethodType(_, params, _) => params
+            case _                        => Nil
+        val toggleWhen = elementClass.methodMember("when").find(m =>
+            whenParams(m) match
+                case List(p) =>
+                    p.dealias match
+                        case OrType(_, _) => true
+                        case _            => false
+                case _ => false
+        ).getOrElse(report.errorAndAbort("kyo-ui has no `when(cond: Prop[Boolean])`: the expansion of `UI.reactive` needs it."))
+        def isBooleanWhen(sel: Select): Boolean =
+            sel.name == "when" && sel.symbol.owner == elementClass &&
+                (whenParams(sel.symbol) match
+                    case List(p) => p =:= booleanType
+                    case _       => false)
+
+        // What the block defines, so a condition over it counts as one that reads.
+        val defined = scala.collection.mutable.Set.empty[Symbol]
+        new TreeTraverser:
+            override def traverseTree(tree: Tree)(owner: Symbol): Unit =
+                tree match
+                    case d: Definition => defined += d.symbol
+                    case _             => ()
+                super.traverseTree(tree)(owner)
+            end traverseTree
+        .traverseTree(written)(lambdaSym)
+        def readsOrDefined(t: Tree): Boolean =
+            var found = false
+            new TreeTraverser:
+                override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
+                    case Read(_)                                  => found = true
+                    case id: Ident if defined.contains(id.symbol) => found = true
+                    case _                                        => super.traverseTree(tree)(owner)
+            .traverseTree(t)(lambdaSym)
+            found
+        end readsOrDefined
+        def mentions(sym: Symbol)(t: Tree): Boolean =
+            var found = false
+            new TreeTraverser:
+                override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
+                    case id: Ident if id.symbol == sym => found = true
+                    case _                             => super.traverseTree(tree)(owner)
+            .traverseTree(t)(lambdaSym)
+            found
+        end mentions
+
+        // The arguments of a call, a varargs one spread out.
+        def spread(args: List[Term]): List[Term] = args.flatMap(a =>
+            strip(a) match
+                case Repeated(elems, _) => elems
+                case other              => List(other)
+        )
+        // The toggle's setter `name` on `recv` with `args`, its evidence (`S <:< HasDisabled`) found where it asks for one.
+        def toggleCall(recv: Term, name: String, args: List[Term]): Maybe[Term] =
+            val applied = Select.overloaded(recv, name, Nil, args)
+            applied.tpe.widen match
+                case mt: MethodType if mt.isImplicit =>
+                    val evidence = mt.paramTypes.map(t =>
+                        Implicits.search(t) match
+                            case ok: ImplicitSearchSuccess => Present(ok.tree)
+                            case _                         => Absent
+                    )
+                    if evidence.forall(_.isDefined) then Present(Apply(applied, evidence.map(_.get))) else Absent
+                case _ => Present(applied)
+            end match
+        end toggleCall
+        // `body` (a chain of setters on the lambda's parameter `p`) as the same chain on the toggle `recv`, or `Absent` where a
+        // step is not a toggle setter with plain values.
+        def onToggle(body: Term, p: Symbol, recv: Term): Maybe[Term] =
+            def plain(args: List[Term], types: List[TypeRepr]): Boolean =
+                args.size == types.size && args.zip(types).forall((a, t) => a.tpe.widen <:< t && !mentions(p)(a))
+            strip(body) match
+                case id: Ident if id.symbol == p => Present(recv)
+                case Apply(Apply(TypeApply(Select(m, "apply"), _), List(sel @ Select(inner, "cssClass"))), args)
+                    if m.symbol == cssClassModule && sel.symbol.owner == elementClass =>
+                    val names = spread(args)
+                    if plain(names, names.map(_ => stringType)) then onToggle(inner, p, recv).flatMap(toggleCall(_, "cssClass", names))
+                    else Absent
+                case Apply(sel @ Select(inner, name), args) if setterOwners.contains(sel.symbol.owner) =>
+                    toggleSetters.get(name) match
+                        case Some(types) if plain(args, types) => onToggle(inner, p, recv).flatMap(toggleCall(_, name, args))
+                        case _                                 => Absent
+                case _ => Absent
+            end match
+        end onToggle
+
+        val rhs = new TreeMap:
+            override def transformTerm(tree: Term)(owner: Symbol): Term = tree match
+                case Apply(Apply(sel @ Select(recv, "when"), List(cond)), List(f)) if isBooleanWhen(sel) && readsOrDefined(cond) =>
+                    val recv1 = transformTerm(recv)(owner)
+                    // The call as written, over the rewritten receiver and `f`, so a `when` inside `f` is rewritten too.
+                    def asWritten: Term = Select.copy(sel)(recv1, "when").appliedTo(cond).appliedTo(transformTerm(f)(owner))
+                    strip(f) match
+                        case Block(List(dd @ DefDef(_, List(TermParamClause(List(p))), _, Some(body))), _: Closure) =>
+                            val partial = Select(recv1, toggleWhen).appliedTo(cond)
+                            partial.tpe.widen match
+                                case MethodType(_, List(AppliedType(_, List(toggle, _))), _) =>
+                                    // The lambda is the only place the toggle's parameter exists, so the chain is rebuilt in
+                                    // it; a step the toggle has not leaves the call as written.
+                                    var rebuilt = true
+                                    val lambda  = Lambda(
+                                        dd.symbol.owner,
+                                        MethodType(List(p.name))(_ => List(toggle), _ => toggle),
+                                        (o, params) =>
+                                            onToggle(body, p.symbol, Ref(params.head.symbol)) match
+                                                case Present(chain) => chain.changeOwner(o)
+                                                case Absent         =>
+                                                    rebuilt = false
+                                                    Ref(params.head.symbol)
+                                    )
+                                    if rebuilt then partial.appliedTo(lambda) else asWritten
+                                case _ => asWritten
+                            end match
+                        case _ => asWritten
+                    end match
+                case _ => super.transformTerm(tree)(owner)
+        .transformTerm(written)(lambdaSym)
 
         // What the block defines, so no read refers to it.
         val local = scala.collection.mutable.Set.empty[Symbol]

@@ -2146,10 +2146,11 @@ object UI:
           * new one on in place, with nothing drawn again. `f` is a match over the cases, so under the build's `-Werror` a case it
           * leaves out does not compile.
           *
-          * It is the element itself under another type, so `el.cssClass` allocates nothing, and each setter is an inline
-          * forward to the element's own method. Every setter that writes a class lives here, so the class vocabulary is one
-          * place: a later setter (a prefix or a suffix over a prop, say) is a method of this type rather than an overload of
-          * `cssClass` on every element.
+          * It is the element itself under another type, so `el.cssClass` allocates nothing, and each setter is a static forward
+          * to the element's own method. The setters are not `inline`: `UI.reactive` reads a toggle's `cssClass` call as written
+          * to rebuild it (see `Element.when`), and an inline expansion keeps no call it could read. Every setter that writes a
+          * class lives here, so the class vocabulary is one place: a later setter (a prefix or a suffix over a prop, say) is a
+          * method of this type rather than an overload of `cssClass` on every element.
           *
           * @tparam S
           *   the element type the setters return
@@ -2160,12 +2161,12 @@ object UI:
             extension [S](self: CssClass[S])
 
                 /** Adds the class `name` after the element's classes. */
-                inline def apply(name: String): S =
+                def apply(name: String): S =
                     // Unsafe: `self` is the element whose `cssClass` built it, and `S` is that element's own `Self`.
                     self.addClass(name).asInstanceOf[S]
 
                 /** Adds the classes `names` after the element's classes, in the order given. */
-                inline def apply(names: String*): S =
+                def apply(names: String*): S =
                     // Unsafe: `self` is the element whose `cssClass` built it, and `S` is that element's own `Self`.
                     self.addClasses(names).asInstanceOf[S]
 
@@ -2174,7 +2175,7 @@ object UI:
                   * (`classList.toggle`, so CSS transitions fire) with no re-render, still chainable. Declarative twin of
                   * `UI.Commands.bindClassById`.
                   */
-                inline def apply(name: String, on: Boolean | Signal[Boolean]): S =
+                def apply(name: String, on: Boolean | Signal[Boolean]): S =
                     // Unsafe: `self` is the element whose `cssClass` built it, and `S` is that element's own `Self`.
                     self.toggleClass(name, on).asInstanceOf[S]
 
@@ -2183,7 +2184,7 @@ object UI:
                   * so CSS transitions fire) with no re-render. The channel owns the names it writes: a fixed class of the same
                   * name is taken off with it.
                   */
-                inline def matching[A](v: Prop[A])(f: A => String | Maybe[String]): S =
+                def matching[A](v: Prop[A])(f: A => String | Maybe[String]): S =
                     // Unsafe: `self` is the element whose `cssClass` built it, and `S` is that element's own `Self`.
                     self.matchClass(v, f).asInstanceOf[S]
             end extension
