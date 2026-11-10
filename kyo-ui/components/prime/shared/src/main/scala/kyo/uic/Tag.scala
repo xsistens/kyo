@@ -56,7 +56,7 @@ final class Tag private[uic] (private[uic] val p: Tag.Props) extends Node, HasEl
         severityV match
             case Present(SeverityValue.Const(s)) => tagToken(s).foreach(t => el = el.cssClass(s"p-tag-$t"))
             case Present(SeverityValue.Dyn(sig)) =>
-                Severity.values.foreach(s => tagToken(s).foreach(t => el = el.cssClass(s"p-tag-$t", sig.map(_ == s))))
+                el = el.cssClass.matching(sig)(s => tagToken(s).map(t => s"p-tag-$t"))
             case Absent => ()
         end match
         if roundedFlag then el = el.cssClass("p-tag-rounded")

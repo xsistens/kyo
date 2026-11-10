@@ -109,6 +109,14 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
                 case other          => fail(s"the block drew a region: $other")
         }
 
+        "a read handed to cssClass.matching is its class-name channel" in {
+            for
+                on <- Signal.initRef(false)
+            yield UI.reactive(span.cssClass.matching(on.read)(b => if b then "x" else Absent)) match
+                case s: SpanElement => assert(s.attrs.reactiveClassNames.size == 1, s"${s.attrs}")
+                case other          => fail(s"the block drew a region: $other")
+        }
+
         "over a constant it is the plain attribute" in {
             val on: Prop[Boolean] = true
             UI.reactive(span.aria("checked", on.read.toString)) match

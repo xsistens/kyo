@@ -275,8 +275,15 @@ object Input:
             b.extraClasses.foldLeft(el.cssClass("p-inputtext").cssClass("p-component"))(_.cssClass(_))
                 .when(b.access.id)(_.id(_))
                 .when(b.focusAuto)(_.focusAuto(true))
-                .classFor(props(_.size))(_.cls("p-inputtext"))
-                .classFor(props(_.variant))(_.cls)
+                .cssClass.matching(props(_.size)) {
+                    case Size.Small  => "p-inputtext-sm"
+                    case Size.Normal => Absent
+                    case Size.Large  => "p-inputtext-lg"
+                }
+                .cssClass.matching(props(_.variant)) {
+                    case FieldVariant.Outlined => Absent
+                    case FieldVariant.Filled   => "p-variant-filled"
+                }
         )
             .cssClass("p-inputtext-fluid", props(_.fluid))
             // Prime's `p-filled` follows the text the field holds, which the client knows and a render does not (an unbound
