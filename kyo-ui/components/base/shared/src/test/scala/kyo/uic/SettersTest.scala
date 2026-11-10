@@ -3,7 +3,8 @@ package kyo.uic
 import kyo.*
 
 /** The setters `Setters[P, Self]` works out for a class over its props: every field but those the class writes itself and those
-  * marked `@noSetter`, an ownable field as a binding setter and its event, and a callback field taking the function itself.
+  * marked `@noSetter`, an ownable field as a binding setter and its event, a callback field taking the function itself, and an
+  * action field taking its action by name.
   */
 class SettersTest extends kyo.test.Test[Any]:
 
@@ -66,10 +67,30 @@ class SettersTest extends kyo.test.Test[Any]:
         )
     }
 
+    "an action field takes the action by name: built not at the setter but on the event, each time, its failure kept from the caller" in {
+        var built = 0
+        for
+            heard <- AtomicRef.init(Chunk.empty[String])
+            t = SettersTest.Thing().onPress {
+                built += 1
+                heard.getAndUpdate(_.append(s"press $built")).andThen(Abort.fail("boom"))
+            }
+            atBuild = built
+            first  <- Abort.run[Any](t.p.onPress.get)
+            second <- Abort.run[Any](t.p.onPress.get)
+            hs     <- heard.get
+        yield assert(
+            atBuild == 0 && hs == Chunk("press 1", "press 2") && first.isSuccess && second.isSuccess,
+            s"built at the setter $atBuild, heard $hs, first $first, second $second"
+        )
+        end for
+    }
+
     "a generated setter's type keeps the names Prop and UI.Action, as the IDE and a compile error show it" in {
         typeCheckFailure("""val s: Int = kyo.uic.SettersTest.Thing().count""")("Prop[Int] =>")
         typeCheckFailure("""val s: Int = kyo.uic.SettersTest.Thing().onCountChange""")("Int => kyo.UI.Action")
         typeCheckFailure("""val s: Int = kyo.uic.SettersTest.Thing().onPick""")("Int => kyo.UI.Action")
+        typeCheckFailure("""val s: Int = kyo.uic.SettersTest.Thing().onPress""")("(=> kyo.UI.Action) =>")
     }
 
     "an event setter takes only a function of its field's value" in {
@@ -95,7 +116,8 @@ object SettersTest:
         @eventName("onFlip") flipped: Held[Boolean] = Held(start = Present(false)),
         other: Held[Int] = Held(),
         onPick: Maybe[Int => UI.Action] = Absent,
-        onMove: Maybe[(Int, Int) => UI.Action] = Absent
+        onMove: Maybe[(Int, Int) => UI.Action] = Absent,
+        onPress: Maybe[UI.Action] = Absent
     ) derives CanEqual
 
     final class Thing(val p: Props) extends Selectable:

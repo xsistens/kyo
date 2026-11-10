@@ -27,10 +27,12 @@ object Setters:
       *   - A field of a [[kyo.UI.Ownable]] type binds what the setter is handed (`checked(v: Prop[A])`), and has a second setter,
       *     its event, which hears every change: `on<Field>Change`, or the name `@eventName` gives.
       *   - A callback field (`Maybe[A => UI.Action]`, `Maybe[(A, B) => UI.Action]`) takes the function itself.
+      *   - An action field (`Maybe[UI.Action]`) takes the action by name (`onClick(action: => UI.Action)`), so it is built
+      *     when its event comes, each time, and not where the setter is called.
       *   - Any other field takes its own type.
       *
-      * A function handed to an event or a callback runs under [[kyo.UI.attempt]], so its failure goes to the `onFailure` rules
-      * where it ran and the component's own work after it still happens.
+      * A function handed to an event or a callback, and an action, runs under [[kyo.UI.attempt]], so its failure goes to the
+      * `onFailure` rules where it ran and the component's own work after it still happens.
       */
     transparent inline def apply[P, Self]: Setters[P, Self] = ${ applyImpl[P, Self] }
 
@@ -40,6 +42,7 @@ object Setters:
     final private[kyo] val KindHear    = 2
     final private[kyo] val KindCall1   = 3
     final private[kyo] val KindCall2   = 4
+    final private[kyo] val KindAction  = 5
 
     /** The step every generated setter runs: the field's new value, `value` as a setter of kind `kind` writes it over `old`. Public,
       * since the setters are generated where the component is.
@@ -56,6 +59,10 @@ object Setters:
             case KindCall2 =>
                 val f = value.asInstanceOf[(Any, Any) => UI.Action]
                 Present((a: Any, b: Any) => UI.attempt(f(a, b)))
+            case KindAction =>
+                // A by-name argument reaches the setter as the thunk the compiler made of it.
+                val thunk = value.asInstanceOf[() => UI.Action]
+                Present(UI.attempt(thunk()))
             case _ => value
     end write
 
@@ -100,6 +107,19 @@ object Setters:
                         case _ => Absent
                 case _ => Absent
 
+        // An action field, `Maybe[UI.Action]`, and what its setter takes: `=> UI.Action` as `UI.attempt` declares it, read rather than
+        // quoted for the reason `taken` gives (a quoted `=> UI.Action` prints as the computation type it stands for).
+        def isAction(t: TypeRepr): Boolean =
+            t.dealias match
+                case AppliedType(m, List(a)) => m.typeSymbol == maybe && a =:= action
+                case _                       => false
+        val byNameAction =
+            val ui = TypeRepr.of[UI.type]
+            ui.memberType(ui.typeSymbol.methodMember("attempt").head) match
+                case MethodType(_, List(p), _) => p
+                case other                     => report.errorAndAbort(s"UI.attempt takes one action by name, not ${other.show}")
+        end byNameAction
+
         val made = all.zipWithIndex.filterNot((f, _) => f.hasAnnotation(marked)).flatMap { (f, i) =>
             val t = TypeRepr.of[P].memberType(props.fieldMember(f.name))
             t.baseType(ownable) match
@@ -109,7 +129,9 @@ object Setters:
                     if f.hasAnnotation(named) then report.errorAndAbort(s"@eventName on ${f.name}, which is no UI.Ownable field")
                     callback(t) match
                         case Present((arity, fn)) => List(One(f.name, i, if arity == 1 then KindCall1 else KindCall2, fn))
+                        case _ if isAction(t)     => List(One(f.name, i, KindAction, byNameAction))
                         case _                    => List(One(f.name, i, KindReplace, t))
+                    end match
             end match
         }
         made.groupBy(_.name).collectFirst { case (n, ss) if ss.sizeIs > 1 => n }.foreach(n =>
