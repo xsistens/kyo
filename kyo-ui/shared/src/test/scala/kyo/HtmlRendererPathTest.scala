@@ -47,6 +47,41 @@ class HtmlRendererPathTest extends kyo.test.Test[Any]:
             assert(paths(enter) == Seq("0", "1"))
     }
 
+    "a client-side marker set to false is unset: no path, no marker, and a later false takes an earlier true back" in {
+        val off: Seq[SpanElement => SpanElement] = Seq(
+            _.focusAuto(false),
+            _.focusRestore(false),
+            _.focusTrap(false),
+            _.scrollAuto(false),
+            _.stopPropagation(false),
+            _.portal(false)
+        )
+        val takenBack: Seq[SpanElement => SpanElement] = Seq(
+            _.focusAuto(true).focusAuto(false),
+            _.focusRestore(true).focusRestore(false),
+            _.focusTrap(true).focusTrap(false),
+            _.scrollAuto(true).scrollAuto(false),
+            _.stopPropagation(true).stopPropagation(false),
+            _.portal(true).portal(false)
+        )
+        val plain = UI.span("a")
+        for
+            offHtml  <- renderHtml(UI.div(off.map(f => f(plain): UI)*))
+            backHtml <- renderHtml(UI.div(takenBack.map(f => f(plain): UI)*))
+        yield
+            val attrs = (off ++ takenBack).map(f => f(plain).attrs)
+            assert(
+                attrs.forall(a =>
+                    a.focusAuto.isEmpty && a.focusRestore.isEmpty && a.focusTrap.isEmpty && a.scrollAuto.isEmpty &&
+                        a.stopPropagation.isEmpty && a.portal.isEmpty
+                ),
+                s"$attrs"
+            )
+            assert(paths(offHtml).isEmpty && paths(backHtml).isEmpty, s"$offHtml | $backHtml")
+            assert(!offHtml.contains("data-kyo-") && !backHtml.contains("data-kyo-"), s"$offHtml | $backHtml")
+        end for
+    }
+
     "a keyed row root carries the key path even when the row is plain" in {
         for
             rows <- Signal.initRef(Chunk("a", "b"))
