@@ -258,7 +258,7 @@ final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) ext
         if disabledFlag.constTrue then in = in.disabled(true)
         if readonlyFlag then in = in.readOnly(true)
         nameV.foreach(v => in = in.jsProp("name", v))
-        access.name.foreach(v => in = in.aria("label", v))
+        access.name.foreach(v => in = in.aria("label" -> v))
         // Typed commit: the number field delivers a Double, clamped into [min, max]
         // before the write-back (the browser only ENFORCES min/max on form submit). A
         // text-bound field is left out of it: its content is what the reader typed, and
@@ -301,7 +301,7 @@ final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) ext
                 .cssClass(cls)
                 .jsProp("type", "button")
                 .tabIndex(-1)
-                .aria("hidden", "true")
+                .aria("hidden" -> "true")
             if !interactive then b = b.disabled(true)
             else b = b.onClick(spin(dir))
             b(GlyphSvg(glyph, "p-icon"))

@@ -187,11 +187,11 @@ final class ColorPicker private[uic] (private[uic] val p: ColorPicker.Props) ext
         var el = span
             .cssClass("p-hidden-accessible")
             .role("slider")
-            .aria("label", label)
-            .aria("valuemin", "0")
-            .aria("valuemax", ColorPicker.short(max))
-            .aria("valuenow", r.map(hex => ColorPicker.short(now(ColorPicker.hsvOf(hex)))))
-            .aria("valuetext", r.map(hex => text(ColorPicker.hsvOf(hex))))
+            .aria("label" -> label)
+            .aria("valuemin" -> "0")
+            .aria("valuemax" -> ColorPicker.short(max))
+            .aria("valuenow" -> r.map(hex => ColorPicker.short(now(ColorPicker.hsvOf(hex)))))
+            .aria("valuetext" -> r.map(hex => text(ColorPicker.hsvOf(hex))))
             .tabIndex(0)
             .preventScrollKeys
         elementId.foreach(v => el = el.id(v))
@@ -236,13 +236,13 @@ final class ColorPicker private[uic] (private[uic] val p: ColorPicker.Props) ext
         def planeVisual(hex: String): UI =
             val (h, s, v)    = ColorPicker.hsvOf(hex)
             val (hr, hg, hb) = ColorPicker.hsvToRgb(h, 1.0, 1.0) // pure hue tint
-            val handle       = div.cssClass("p-colorpicker-color-handle").aria("hidden", "true")
+            val handle       = div.cssClass("p-colorpicker-color-handle").aria("hidden" -> "true")
                 .style(_.left((s * 100).pct).top(((1 - v) * 100).pct))
             div.cssClass("p-colorpicker-color-background").style(_.bg(_.rgb(hr, hg, hb)))(handle)
         end planeVisual
         def hueVisual(hex: String): UI =
             val (h, _, _) = ColorPicker.hsvOf(hex)
-            div.cssClass("p-colorpicker-hue-handle").aria("hidden", "true")
+            div.cssClass("p-colorpicker-hue-handle").aria("hidden" -> "true")
                 .style(_.top(((1 - h / 360.0) * 100).pct))
         end hueVisual
 
@@ -361,7 +361,7 @@ final class ColorPicker private[uic] (private[uic] val p: ColorPicker.Props) ext
         if ownsId then access.id.foreach(v => root = root.id(v))
         if disabledFlag.constTrue then root = root.cssClass("p-disabled")
         root = validity.mark(root)
-        access.name.foreach(n => root = root.aria("label", n))
+        access.name.foreach(n => root = root.aria("label" -> n))
         onBlurF.foreach { f =>
             root = root.onBlur(valueSlot.current(ColorPicker.DefaultHex).map(f))
         }
@@ -386,7 +386,7 @@ final class ColorPicker private[uic] (private[uic] val p: ColorPicker.Props) ext
         // The swatch is the overlay picker's one tab stop, so it carries the caller's id.
         access.id.foreach(v => preview = preview.id(v))
         if disabledFlag.constTrue then preview = preview.disabled(true).cssClass("p-disabled")
-        access.name.foreach(n => preview = preview.aria("label", n))
+        access.name.foreach(n => preview = preview.aria("label" -> n))
         preview
     end previewSwatch
 

@@ -229,14 +229,14 @@ final class Stepper[K] private[uic] (private[uic] val p: Stepper.Props[K]) exten
         var header = button
             .cssClass("p-step-header")
             .jsProp("type", "button")
-        if tablist then header = header.role("tab").aria("selected", isActive.toString)
+        if tablist then header = header.role("tab").aria("selected" -> isActive)
         // A tablist is one tab stop, on the active header, from the first render: the arrows that
         // move between the headers come with the mount's ids, the single stop does not wait for them.
         if tablist && !blocked then header = header.tabIndex(if isActive then 0 else -1)
         if blocked then header = header.disabled(true).tabIndex(-1)
         else
             // A fixed stepper keeps every other header a stop that says it moves nothing.
-            if !isActive then header = if fixed then header.aria("disabled", "true") else header.onClick(activate(i))
+            if !isActive then header = if fixed then header.aria("disabled" -> "true") else header.onClick(activate(i))
             if ids.isDefinedAt(i) then
                 val axis = if tablist then ListNav.Orientation.Horizontal else ListNav.Orientation.Vertical
                 header = header.id(ids(i)).onKeyDown(headerMove(ids, navigableSteps(cur), i, axis, focus))
@@ -251,7 +251,7 @@ final class Stepper[K] private[uic] (private[uic] val p: Stepper.Props[K]) exten
         )
 
         var stepEl = div.cssClass("p-step").role("presentation")
-        if isActive then stepEl = stepEl.cssClass("p-step-active").aria("current", "step")
+        if isActive then stepEl = stepEl.cssClass("p-step-active").aria("current" -> "step")
         if blocked then stepEl = stepEl.cssClass("p-disabled")
         // Horizontal stepList carry the separator inside the step row (Prime); the
         // vertical layout renders it inside the active panel instead.

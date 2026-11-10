@@ -74,8 +74,8 @@ abstract class UicTest extends kyo.test.Test[Any]:
         end if
     end carriesClass
 
-    /** The value of `aria-$name` on `e` now: a plain attribute, or one a channel patches in place (an `ariaFlag` among them, which
-      * holds no attribute while off), read at its current value.
+    /** The value of `aria-$name` on `e` now: a plain attribute, or one a channel patches in place (a signal of a `Maybe` among them, which
+      * holds no attribute while `Absent`), read at its current value.
       */
     private[uic] def ariaNow(e: UI.Ast.Element, name: String)(using Frame): Maybe[String] < Sync =
         e.attrs.ariaAttrs.get(name) match

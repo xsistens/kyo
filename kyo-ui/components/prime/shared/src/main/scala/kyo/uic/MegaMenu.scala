@@ -273,7 +273,7 @@ final class MegaMenu private[uic] (private[uic] val p: MegaMenu.Props) extends N
                         val myIdx = navIdx
                         if !it.p.disabledFlag.constTrue then navIdx += 1
                         var row = MenuRender.markCurrent(li.cssClass("p-megamenu-item").role("menuitem"), it)
-                        if it.p.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
+                        if it.p.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled" -> "true")
                         else if focus == List(r, c, myIdx) then
                             row = row.cssClass("p-focus").scrollAuto(true)
                             partBase.foreach(b => row = row.id(s"$b-active"))
@@ -304,13 +304,13 @@ final class MegaMenu private[uic] (private[uic] val p: MegaMenu.Props) extends N
                 var row = li
                     .cssClass("p-megamenu-item")
                     .role("menuitem")
-                    .aria("haspopup", "menu")
-                    .aria("expanded", isOpen.toString)
+                    .aria("haspopup" -> "menu")
+                    .aria("expanded" -> isOpen)
                 if isOpen then row = row.cssClass("p-megamenu-item-active")
                 if focus == p then
                     row = row.cssClass("p-focus").scrollAuto(true)
                     partBase.foreach(b => row = row.id(s"$b-active"))
-                if it.p.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
+                if it.p.disabledFlag then row = row.cssClass("p-disabled").aria("disabled" -> "true")
                 val act: Maybe[UI.Action] =
                     if subs.isDefined && !it.p.disabledFlag then Present(toggle) else Absent
                 val subIcon = if orientationV == Orientation.Vertical then Icons.angleRight else Icons.angleDown
@@ -344,7 +344,7 @@ final class MegaMenu private[uic] (private[uic] val p: MegaMenu.Props) extends N
                 if focus == p then
                     row = row.cssClass("p-focus").scrollAuto(true)
                     partBase.foreach(b => row = row.id(s"$b-active"))
-                if it.p.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
+                if it.p.disabledFlag then row = row.cssClass("p-disabled").aria("disabled" -> "true")
                 val plain               = it.asMenuItem
                 def activate: UI.Action =
                     for
@@ -365,7 +365,7 @@ final class MegaMenu private[uic] (private[uic] val p: MegaMenu.Props) extends N
         // The bar is one tab stop from the first render; its keys are wired once the mount has a focus to move.
         list = list.tabIndex(0)
         if focusRef.isDefined then list = list.preventScrollKeys.onKeyDown(keyHandler)
-        if focus.nonEmpty then partBase.foreach(b => list = list.aria("activedescendant", s"$b-active"))
+        if focus.nonEmpty then partBase.foreach(b => list = list.aria("activedescendant" -> s"$b-active"))
         val listUI: UI = list(UI.children(rowUIs)*)
         // The caller's id on the component's own root, as HasElementId requires of a container.
         var root = div

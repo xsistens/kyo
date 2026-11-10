@@ -109,9 +109,9 @@ final class MeterGroup private[uic] (private[uic] val p: MeterGroup.Props) exten
             .cssClass("p-component")
             .cssClass(s"p-metergroup-${orientationV.token}")
             .role("meter")
-            .aria("valuemin", "0")
-            .aria("valuemax", NumberFmt(maxV))
-            .aria("valuenow", totalPct.toString)
+            .aria("valuemin" -> "0")
+            .aria("valuemax" -> NumberFmt(maxV))
+            .aria("valuenow" -> totalPct)
 
         // Like Prime, default segments rounding to 0% render no span at all; a
         // custom meterTemplate always renders (skipping is the template's call).

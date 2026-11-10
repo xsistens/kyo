@@ -32,7 +32,7 @@ final class ProgressSpinner private[uic] (private[uic] val p: ProgressSpinner.Pr
             case Size.Large  => el = el.cssClass("p-uic-progressspinner-lg")
             case Size.Normal => ()
         end match
-        access.name.foreach(n => el = el.aria("label", n))
+        access.name.foreach(n => el = el.aria("label" -> n))
         el(
             Svg.svg
                 .cssClass("p-progressspinner-spin")

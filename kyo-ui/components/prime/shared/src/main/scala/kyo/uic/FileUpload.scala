@@ -139,7 +139,7 @@ final class FileUpload private[uic] (private[uic] val p: FileUpload.Props) exten
             .cssClass("p-button")
             .cssClass("p-component")
         if disabledFlag then choose = choose.cssClass("p-disabled")
-        if fixed then choose = choose.aria("disabled", "true")
+        if fixed then choose = choose.aria("disabled" -> "true")
         val chooseLabelEl: UI = chooseLabelV match
             case TextValue.Const(t) => span.cssClass("p-button-label")(t)
             case TextValue.Dyn(s)   => span.cssClass("p-button-label")(s)

@@ -102,16 +102,16 @@ final class ToggleSwitch private[uic] (private[uic] val p: ToggleSwitch.Props) e
             .cssClass("p-toggleswitch-input")
             .role("switch")
             .checked(native)
-            .aria("checked", isChecked.toString)
+            .aria("checked" -> isChecked)
         box = access.id.map(v => box.id(v)).getOrElse(box)
         box = nameV.map(v => box.jsProp("name", v)).getOrElse(box)
-        if requiredFlag.getOrElse(false) then box = box.jsProp("required", "true").aria("required", "true")
+        if requiredFlag.getOrElse(false) then box = box.jsProp("required", "true").aria("required" -> "true")
         box = validity.markAria(box)
-        if isReadonly then box = box.aria("readonly", "true")
+        if isReadonly then box = box.aria("readonly" -> "true")
         box = access.name match
-            case Present(v) => box.aria("label", v)
+            case Present(v) => box.aria("label" -> v)
             case _          => box
-        box = access.nameRef.map(v => box.aria("labelledby", v)).getOrElse(box)
+        box = access.nameRef.map(v => box.aria("labelledby" -> v)).getOrElse(box)
         // readonly keeps the switch FOCUSABLE and refuses to change: the client declines the
         // browser's own toggle (`preventActivation`) and the handler is not wired. Disabling the
         // native input instead took it out of the tab order, which made readonly and disabled the

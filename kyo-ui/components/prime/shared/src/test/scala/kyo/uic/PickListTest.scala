@@ -75,7 +75,7 @@ class PickListTest extends ReactiveValueContract:
             move          <- button(ui, "Move to Target")
         yield
             assert(!move.disabled.contains(true), "not natively disabled, or the press loses its own focus")
-            assert(move.attrs.ariaAttrs.get("disabled").isEmpty, "with a selection it is simply enabled")
+            assert(move.attrs.ariaAttrs.get("disabled").contains("false"), "with a selection it is simply enabled: aria-disabled=\"false\"")
     }
 
     "with nothing selected it says so instead of leaving" in {
