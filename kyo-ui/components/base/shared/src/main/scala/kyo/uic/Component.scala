@@ -21,7 +21,8 @@ end Opt
   * Every field of `P` is a setter of its name, `uic.Button("Save").size(Size.Small)`, typed against the field and completed by the
   * IDE as a selectable field. A setter the component writes itself takes its field's place, so an author who wants the setter's
   * scaladoc in the IDE, or a setter that does more than store its value, writes it by hand. A `UI.Ownable` field is a binding setter
-  * and its event (`on<Field>Change`, or `@eventName`), and a callback field takes the function itself (see [[kyo.uic.Setters.apply]]).
+  * and its event (`on<Field>Change`, or `@eventName`), a callback field takes the function itself, and an action field its action
+  * by name (see [[kyo.uic.Setters.apply]]).
   * Two components of one class are equal when their props are.
   */
 abstract class Component[P, Self, S <: Setters[P, Self]](private[uic] val setters: S) extends Selectable:

@@ -92,12 +92,6 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
       */
     def ariaDisabled(gate: SubmitGate): Button = ariaDisabled(gate.signal)
 
-    /** Runs `action` when the button is pressed. Mirrors kyo-ui's native event effect
-      * (`Async`): a handler that can fail handles its own failure, the way a native
-      * `onClick` does.
-      */
-    def onClick(action: => UI.Action)(using Frame): Button = new Button(p.copy(onClick = Present(Callback(action))))
-
     /** Adds arbitrary extra children (e.g. a custom badge) after the label/icon. */
     def apply(cs: UI*): Button = new Button(p.copy(extraChildren = p.extraChildren ++ cs))
 
@@ -210,8 +204,9 @@ end Button
 
 object Button:
     /** What a button holds. Each field is a setter of its name (`uic.Button("Save").size(Size.Small)`), which takes a constant or
-      * a signal where the field is a `Prop` and the value itself where it is an `Opt`; `Button` writes the setters of `onClick` and
-      * `ariaDisabled` itself, and the fields marked `@noSetter` are written by hosts and the shared traits.
+      * a signal where the field is a `Prop` and the value itself where it is an `Opt`, and `onClick` its action by name;
+      * `Button` writes the setter of `ariaDisabled` itself, and the fields marked `@noSetter` are written by hosts and the shared
+      * traits.
       */
     final private[uic] case class Props(
         /** The label. A signal re-renders the label in place on emission (e.g. a locale-driven `I18n.t` leaf). */
@@ -255,6 +250,9 @@ object Button:
           * association (the DOM `form` property is read-only).
           */
         form: Opt[String] = Opt.unset,
+        /** What a press runs, kyo-ui's native handler type: its setter takes the action by name, built each time the button is
+          * pressed, and a failure goes to the `onFailure` rules where it ran.
+          */
         onClick: Maybe[UI.Action] = Absent,
         @noSetter access: Accessibility = Accessibility.none,
         @noSetter description: Maybe[Prop[String]] = Absent,
