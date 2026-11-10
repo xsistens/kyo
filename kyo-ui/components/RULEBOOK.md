@@ -87,7 +87,7 @@ private def renderAnchor(h: String, loading: Boolean, disabled: Boolean)(using F
 ## 3. An element is built as one chain, never as a `var` reassigned
 
 Optional and conditional settings stay in the chain: `when(maybe)(_.x(_))` for a `Maybe`, `when(cond)(_.x)` for a condition,
-and the setters that take a `Maybe` themselves (`aria("label", access.name)`, `aria("labelledby", access.nameRef)`). A branch
+and the setters that take a `Maybe` themselves (`aria("label" -> access.name, "labelledby" -> access.nameRef)`). A branch
 that builds two different chains is a `val` of an `if`, not a `var` set in each arm.
 
 - **Why:** `var el = ...; x.foreach(v => el = el.x(v))` spends a line and a reassignment on every optional attribute, and
@@ -100,7 +100,7 @@ classed(el, loading)
     .when(p.access.id)(_.id(_))
     .focusAuto(p.focusSeed).focusRestore(p.focusSeed)
     .when(p.onKeyDown)(_.onKeyDown(_))
-    .aria("label", p.access.name)
+    .aria("label" -> p.access.name)
 ```
 
 - **A setter that takes the condition gets it directly** (`focusAuto(p.focusSeed)`, `disabled(off)`; kyo-ui's client-side markers
@@ -116,8 +116,8 @@ classed(el, loading)
 A text a caller may give as a constant or a signal (a label, a tooltip, an accessible name or description) is stored as
 `Prop[String]` (where it is optional, `Opt[Prop[String]]` as the component's own prop and `Maybe[Prop[String]]` in a shared slot
 a trait writes) and written with the kyo-ui setter that takes it:
-`aria(name, prop)`, `aria(name, maybe)`, `title(prop)`, `title(maybe)`, or as a child (`liftPropString`). Never match it into
-its constant and its signal at the render site.
+`aria(name -> prop)` and `aria(name -> maybe)` (one entry form, the value's type decides), `title(prop)`, `title(maybe)`, or as a
+child (`liftPropString`). Never match it into its constant and its signal at the render site.
 
 - **Why:** the setter already knows a constant from a signal (a constant as an attribute, a signal as its channel), so a match
   at each render site is the same five lines in every component, and the slot's type says nothing a reader can use. The shared
@@ -126,8 +126,7 @@ its constant and its signal at the render site.
 - **Shape:**
 
 ```scala
-.aria("label", p.access.name)
-.aria("description", p.description)
+.aria("label" -> p.access.name, "description" -> p.description)
 .title(p.tooltip)
 ```
 
@@ -165,7 +164,7 @@ helper of the component's own, and never with `s"p-x-${v.token}"` on a value rea
 
 Flags that may be a constant or a signal (`disabled`, `aria-disabled`, `loading`) are read with `.read` inside one
 `UI.reactive` block and used as plain values: combined with `&&` and `||`, handed to the setters that take a `Prop`
-(`disabled`, `silent`, `ariaFlag`) or to `when(flag)(_.cssClass(name))`. A handler never checks a flag: a locked element is
+(`disabled`, `silent`, an `aria` entry's value) or to `when(flag)(_.cssClass(name))`. A handler never checks a flag: a locked element is
 silent. Never a match on `Boolean` against `Signal` at the place a flag is used, never a `var` set in its arms, never
 `Prop.zip`/`Prop.map` by hand for what the block can say.
 
@@ -182,14 +181,14 @@ UI.reactive {
     val says = ariaDisabled.read && !off
     renderButton(busy).disabled(off)
         .when(p.onClick)(_.onClick(_))
-        .ariaFlag("disabled", says)
+        .aria("disabled" -> says)
         .when(says)(_.cssClass("p-uic-aria-disabled"))(...)
 }
 ```
 
 - **`when` over a flag sets only what has a channel.** `el.when(cond)(f)` with `f` calling only the setters of kyo-ui's `Toggle`
-  (classes, `aria`, `data`, `role`, `hidden`, `silent`, and `disabled`, `readOnly`, `required` where the element has them, each
-  with plain values) binds each to the flag's channel: a read or a `val` that only reaches channels stays a channel there, as
+  (classes, `aria` and `data` entries, `role`, `hidden`, `silent`, and `disabled`, `readOnly`, `required` where the element has
+  them, each with plain values, an entry's value holding no signal) binds each to the flag's channel: a read or a `val` that only reaches channels stays a channel there, as
   it does in a setter that takes a `Prop` (the macro rewrites the call to the `Prop` form). An `f` with a handler, a style or a
   child is structure: the flag becomes the block's, a region, so such a `when` takes only what decides the structure (the `Base`).
 
@@ -201,8 +200,11 @@ UI.reactive {
 - **A text field's native `readonly` is not silenced either** (Input). The browser already refuses the edit, and the field
   stays a place the reader reaches and leaves: `silent` would drop its blur too, and the form layer's `Blur` trigger listens
   there. So `readOnly(locked)` alone says it, and the handlers stay.
-- An attribute that a constant writes only while true (`aria-disabled`, `aria-busy`) is `ariaFlag`; one where `"false"` says
-  something (`aria-pressed`) is `aria(name, on.toString)`.
+- An `aria` or `data` value writes what it is, so a flag or a number is handed over as it is, never through `toString`:
+  `aria("pressed" -> checked, "disabled" -> says, "valuenow" -> now)` writes `"true"`, `"false"` and the number's text, and
+  `aria-disabled="false"` means what no attribute means (ARIA 1.2). An attribute that must be left out names that with a
+  `Maybe` (or a signal of one): `Absent` writes nothing. Several attributes are one call with several entries, and a group kept
+  in a `val` is `Entry.of(...)`, spread with `aria(group*)`.
 - A setter beside its union with a plain overload (`disabled(Boolean)` once) keeps a `Boolean` off the channel: kyo-ui has one
   setter per flag, and a component adds no plain overload of its own.
 
@@ -210,7 +212,7 @@ UI.reactive {
 
 What a host hands a component in a list (extra aria attributes, extra classes) holds the same type a single setter takes
 (`List[(String, Prop[String])]`), and the render folds it with that setter in the chain:
-`p.extraArias.foldLeft(el)((e, aria) => e.aria(aria._1, aria._2))`. No helper that matches each entry into its constant and
+`p.extraArias.foldLeft(el)((e, aria) => e.aria(aria))`, each pair converting to an entry as written. No helper that matches each entry into its constant and
 its signal.
 
 - **Why:** the setter already tells the forms apart (rule 4), so the fold is one line in the chain, and a host can hand over a
