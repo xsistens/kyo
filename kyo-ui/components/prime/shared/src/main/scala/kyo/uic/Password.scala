@@ -248,7 +248,7 @@ object Password:
             .invalid(validity.red)
             .unheardAs("Password", "onInput or onChange")
         in = eye match
-            case Present(r) => in.inputType(r.map(on => if on then UI.TextType.Text else UI.TextType.Password))
+            case Present(r) => in.revealing(r.map(on => if on then UI.TextType.Text else UI.TextType.Password))
             case Absent     => in.inputType(InputType.Password)
         b.text.foreach(t => in = in.value(t))
         // Each hearer is read when its event comes, so it is the latest run's.
