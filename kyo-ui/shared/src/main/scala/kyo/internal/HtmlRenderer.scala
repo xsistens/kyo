@@ -985,23 +985,35 @@ private[kyo] object HtmlRenderer:
         if css.nonEmpty then w(sb, s""" style="${esc(css)}"""")
         // The emptiness gates match reactiveTrueClasses below: sorting for deterministic output costs a
         // Seq copy and a sort per element, and on a plain element every one of these maps is empty.
+        // A static value is left out where a channel of the same name is bound: the channel is the value (see
+        // renderElementAttrs on precedence). The name is only built when the element has a channel at all.
+        val channelled = hasAttrChannel(attrs)
         if attrs.ariaAttrs.nonEmpty then
             attrs.ariaAttrs.toSeq.sortBy(_._1).foreach { case (name, value) =>
-                w(sb, s""" aria-$name="${esc(value)}"""")
+                if !channelled || !ownsAttr(attrs, s"aria-$name") then w(sb, s""" aria-$name="${esc(value)}"""")
             }
         end if
-        attrs.role.foreach(r => w(sb, s""" role="${esc(r)}""""))
+        attrs.role.foreach(r => if !channelled || !ownsAttr(attrs, "role") then w(sb, s""" role="${esc(r)}""""))
         if attrs.dataAttrs.nonEmpty then
             attrs.dataAttrs.toSeq.sortBy(_._1).foreach { case (name, value) =>
-                w(sb, s""" data-$name="${esc(value)}"""")
+                if !channelled || !ownsAttr(attrs, s"data-$name") then w(sb, s""" data-$name="${esc(value)}"""")
             }
         end if
+        // A property of the same name as a channel's attribute (`title`) would be assigned after every paint and so
+        // overwrite what the channel wrote.
         if attrs.jsProps.nonEmpty then
             attrs.jsProps.toSeq.sortBy(_._1).foreach { case (name, value) =>
-                w(sb, s""" data-kyo-prop-$name="${esc(value)}"""")
+                if !channelled || !ownsAttr(attrs, name) then w(sb, s""" data-kyo-prop-$name="${esc(value)}"""")
             }
         end if
     end renderCommonAttrs
+
+    /** Whether an attribute channel (one that writes a whole attribute value) is bound on the element. */
+    private def hasAttrChannel(attrs: Attrs): Boolean = attrs.reactiveAttrs.nonEmpty || attrs.reactiveMaybeAttrs.nonEmpty
+
+    /** Whether an attribute channel writes `name`, so that the static value of that name is not written. */
+    private def ownsAttr(attrs: Attrs, name: String): Boolean =
+        attrs.reactiveAttrs.contains(name) || attrs.reactiveMaybeAttrs.contains(name)
 
     private def encodedDragSource(source: Drag.Source)(using Frame): String =
         DragProtocol.encodedSourceConfig(source, DragProtocol.Limits.default) match
@@ -1114,7 +1126,7 @@ private[kyo] object HtmlRenderer:
         // meaning something different from `.disabled(sig).disabled(true)`.
         def boolAttr(sb: StringBuilder, name: String, value: Maybe[Boolean]): Unit =
             if !elem.attrs.reactiveBoolAttrs.contains(name) then HtmlRenderer.boolAttr(sb, name, value)
-        def owned(name: String): Boolean = elem.attrs.reactiveAttrs.contains(name) || elem.attrs.reactiveMaybeAttrs.contains(name)
+        def owned(name: String): Boolean = ownsAttr(elem.attrs, name)
         elem match
             case ci: ConstrainedInput => renderInputConstraints(sb, ci)
             case _                    => ()
@@ -1139,49 +1151,49 @@ private[kyo] object HtmlRenderer:
                 boolAttr(sb, "disabled", i.disabled)
                 boolAttr(sb, "readonly", i.readOnly)
                 boolAttr(sb, "required", i.required)
-                i.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
+                if !owned("placeholder") then i.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
             case p: PasswordInput =>
                 if !owned("type") then w(sb, s""" type="${p.textType.fold("password")(_.attr)}"""")
                 renderValueAttr(sb, p.value, p.inputMask)
                 boolAttr(sb, "disabled", p.disabled)
                 boolAttr(sb, "readonly", p.readOnly)
                 boolAttr(sb, "required", p.required)
-                p.placeholder.foreach(p2 => w(sb, s""" placeholder="${esc(p2)}""""))
+                if !owned("placeholder") then p.placeholder.foreach(p2 => w(sb, s""" placeholder="${esc(p2)}""""))
             case e: EmailInput =>
                 if !owned("type") then w(sb, s""" type="${e.textType.fold("email")(_.attr)}"""")
                 renderValueAttr(sb, e.value, e.inputMask)
                 boolAttr(sb, "disabled", e.disabled)
                 boolAttr(sb, "readonly", e.readOnly)
                 boolAttr(sb, "required", e.required)
-                e.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
+                if !owned("placeholder") then e.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
             case t: TelInput =>
                 if !owned("type") then w(sb, s""" type="${t.textType.fold("tel")(_.attr)}"""")
                 renderValueAttr(sb, t.value, t.inputMask)
                 boolAttr(sb, "disabled", t.disabled)
                 boolAttr(sb, "readonly", t.readOnly)
                 boolAttr(sb, "required", t.required)
-                t.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
+                if !owned("placeholder") then t.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
             case u: UrlInput =>
                 if !owned("type") then w(sb, s""" type="${u.textType.fold("url")(_.attr)}"""")
                 renderValueAttr(sb, u.value, u.inputMask)
                 boolAttr(sb, "disabled", u.disabled)
                 boolAttr(sb, "readonly", u.readOnly)
                 boolAttr(sb, "required", u.required)
-                u.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
+                if !owned("placeholder") then u.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
             case s: SearchInput =>
                 if !owned("type") then w(sb, s""" type="${s.textType.fold("search")(_.attr)}"""")
                 renderValueAttr(sb, s.value, s.inputMask)
                 boolAttr(sb, "disabled", s.disabled)
                 boolAttr(sb, "readonly", s.readOnly)
                 boolAttr(sb, "required", s.required)
-                s.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
+                if !owned("placeholder") then s.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
             case n: NumberInput =>
                 w(sb, " type=\"number\"")
                 renderValueAttr(sb, n.value)
                 boolAttr(sb, "disabled", n.disabled)
                 boolAttr(sb, "readonly", n.readOnly)
                 boolAttr(sb, "required", n.required)
-                n.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
+                if !owned("placeholder") then n.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
                 n.min.foreach(v => w(sb, s""" min="${fmtD(v)}""""))
                 n.max.foreach(v => w(sb, s""" max="${fmtD(v)}""""))
                 n.step.foreach(v => w(sb, s""" step="${fmtD(v)}""""))
@@ -1228,7 +1240,7 @@ private[kyo] object HtmlRenderer:
                 boolAttr(sb, "disabled", ta.disabled)
                 boolAttr(sb, "readonly", ta.readOnly)
                 boolAttr(sb, "required", ta.required)
-                ta.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
+                if !owned("placeholder") then ta.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
             case sel: Select =>
                 boolAttr(sb, "disabled", sel.disabled)
                 // A select has no `value` attribute in HTML: the browser ignores it and shows the first option. The
@@ -1270,7 +1282,7 @@ private[kyo] object HtmlRenderer:
                 img.alt.foreach(a => w(sb, s""" alt="${esc(a)}""""))
             case f: Iframe =>
                 if !owned("src") then f.src.foreach(s => w(sb, s""" src="${esc(s)}""""))
-                f.frameTitle.foreach(t => w(sb, s""" title="${esc(t)}""""))
+                if !owned("title") then f.frameTitle.foreach(t => w(sb, s""" title="${esc(t)}""""))
             case td: Td =>
                 td.colspan.foreach(n => w(sb, s""" colspan="$n""""))
                 td.rowspan.foreach(n => w(sb, s""" rowspan="$n""""))
