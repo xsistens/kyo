@@ -31,6 +31,14 @@ class ComponentTest extends kyo.test.Test[Any]:
         typeCheckFailure("""summon[kyo.uic.HasSetter[kyo.uic.ComponentTest.Thing, "size", String]]""")
     }
 
+    "when takes a step where a condition holds or an option is present, and leaves the component as it was otherwise" in {
+        val t     = ComponentTest.Thing()
+        val taken = t.when(true)(_.size(2)).when(Present("x"))(_.label(_))
+        val left  = t.when(false)(_.size(2)).when(Absent: Maybe[String])(_.label(_))
+        assert(taken.p == ComponentTest.Props(size = 2, label = Opt.set("x")), s"${taken.p}")
+        assert(left.p == ComponentTest.Props(), s"${left.p}")
+    }
+
 end ComponentTest
 
 object ComponentTest:
