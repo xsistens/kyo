@@ -1826,6 +1826,24 @@ object UI:
                 v.fold(self)(a => f(self, a))
             end when
 
+            /** The element with the setters `f` makes on a [[kyo.UI.Ast.Toggle]] applied while `cond` holds, constant or reactive
+              * through one setter: `el.when(fluid)(_.cssClass("p-fluid"))`, `el.when(checked)(_.cssClass("on").aria("pressed", "true"))`.
+              *
+              * A `Boolean` applies them as the element's own setters would, or leaves the element as it is, so it is the bytes of
+              * `when(cond: Boolean)` with the same setters (a plain `Boolean` picks that overload anyway). A `Signal[Boolean]`
+              * binds each one to a channel, so a change patches the element in place and draws nothing again. That is why `f`
+              * only has the setters with a channel: classes, `aria`, `data`, `role`, `hidden`, `silent`, and `disabled`,
+              * `readOnly` and `required` where the element has them; a handler or a style needs `when(Boolean)` in a region.
+              *
+              * Inside a `UI.reactive` block a read handed to `when(Boolean)` with such setters is taken as this form's channel,
+              * by the same rule as any setter that takes a `Prop`.
+              */
+            def when(cond: Prop[Boolean])(f: kyo.UI.Ast.Toggle[Self] => kyo.UI.Ast.Toggle[Self]): Self =
+                // Unsafe: every element is its own `Self` (each case class fixes `type Self` to itself), and a toggle keeps the
+                // element's own class through its setters.
+                f(Toggle.of[Self](this, cond)).element.asInstanceOf[Self]
+            end when
+
             /** Shared bodies of the declarative reactive-channel setters (aria/title/placeholder/href/src →
               * reactiveAttrs; disabled/readOnly/hidden → reactiveBoolAttrs; cssClass → reactiveClasses, or reactiveClassNames for a name).
               * `inline` so each compiles to the bare `withAttrs(attrs.copy(...))`, adding no dispatch of its own.
@@ -2178,6 +2196,200 @@ object UI:
                 // Unsafe: what is no string here is the `Maybe` the union names.
                 case m => m.asInstanceOf[Maybe[String]]
         end CssClass
+
+        /** What [[kyo.UI.Ast.Element.when]] over a `Prop[Boolean]` hands its function: the setters of the element that have a channel,
+          * each applied while the condition holds.
+          *
+          * {{{
+          * el.when(fluid)(_.cssClass("p-password-fluid"))
+          * el.when(checked)(_.cssClass("p-togglebutton-checked").aria("pressed", "true"))
+          * }}}
+          *
+          * Over a constant each setter is the element's own: `true` applies it, `false` leaves the element as it is. Over a signal
+          * each one is bound to the channel of what it sets, and the element is patched in place as the signal moves, with
+          * nothing drawn again:
+          *
+          *   - a class goes on while the signal holds (the class channel); one the element already carries stays on in both
+          *     states, and the toggled classes are written after the element's fixed ones, sorted by name;
+          *   - `aria`, `data` and `role` are the attribute's channel, the toggle's value while the signal holds and what the
+          *     element had (its value, or no attribute) while it does not;
+          *   - `hidden`, `disabled`, `readOnly` and `required` are the boolean attribute's channel, and `silent` the element's
+          *     silence channel, with the element's own value as the off state.
+          *
+          * Where the element already has a channel of that name that a setter bound, the channel is the value in both states,
+          * as it is for a constant (the precedence rule above `withReactiveAttr`), and the toggle sets nothing. Where an earlier
+          * toggle bound it, the two compose as written: the later toggle's value while its signal holds, else the earlier's.
+          *
+          * Nothing else is offered, since nothing else can change in place: a handler or a style under a condition needs
+          * `when(cond: Boolean)` inside a region.
+          *
+          * @tparam S
+          *   the element type the toggle builds, which `when` hands back
+          */
+        final class Toggle[S] private (private[kyo] val element: Element, cond: Prop[Boolean]):
+
+            /** The classes `names` while the condition holds. */
+            def cssClass(names: String*): Toggle[S] = cond match
+                case s: Signal[Boolean] @unchecked => next(names.foldLeft(element)(Toggle.classChannel(_, _, s)))
+                case on: Boolean                   => if on then next(element.addClasses(names)) else this
+
+            /** `aria-$name="value"` while the condition holds. */
+            def aria(name: String, value: String): Toggle[S] =
+                attr(
+                    s"aria-$name",
+                    Maybe.fromOption(element.attrs.ariaAttrs.get(name)),
+                    value,
+                    a => a.copy(ariaAttrs = a.ariaAttrs - name)
+                )(
+                    element.aria(name, value)
+                )
+
+            /** `data-$name="value"` while the condition holds.
+              *
+              * @throws java.lang.IllegalArgumentException
+              *   if `name` starts with `kyo-`; that prefix is reserved by the framework
+              */
+            def data(name: String, value: String): Toggle[S] =
+                // The element's own setter refuses a reserved name, whichever way the condition goes.
+                val held = element.data(name, value)
+                attr(
+                    s"data-$name",
+                    Maybe.fromOption(element.attrs.dataAttrs.get(name)),
+                    value,
+                    a => a.copy(dataAttrs = a.dataAttrs - name)
+                )(held)
+            end data
+
+            /** The `role` while the condition holds. */
+            def role(value: String): Toggle[S] =
+                attr("role", element.attrs.role, value, _.copy(role = Absent))(element.role(value))
+
+            /** `hidden` set to `v` while the condition holds. */
+            def hidden(v: Boolean): Toggle[S] =
+                flag("hidden", element.attrs.hidden.getOrElse(false), v)(element.hidden(v))
+
+            /** The element silent (`v`) or listening while the condition holds; see [[kyo.UI.Ast.Element.silent]]. */
+            def silent(v: Boolean): Toggle[S] = cond match
+                case s: Signal[Boolean] @unchecked => next(Toggle.silenceChannel(element, v, s))
+                case on: Boolean                   => if on then next(element.silent(v)) else this
+
+            /** `disabled` set to `v` while the condition holds, on an element that has it. */
+            def disabled(v: Boolean)(using ev: S <:< HasDisabled): Toggle[S] =
+                // Unsafe: the toggle's element is its `S`, which the evidence says is a `HasDisabled`.
+                val el = ev(element.asInstanceOf[S])
+                flag("disabled", el.disabled.getOrElse(false), v)(el.withDisabled(v))
+            end disabled
+
+            /** `readonly` set to `v` while the condition holds, on a text field. */
+            def readOnly(v: Boolean)(using ev: S <:< TextInput): Toggle[S] =
+                // Unsafe: the toggle's element is its `S`, which the evidence says is a `TextInput`.
+                val el = ev(element.asInstanceOf[S])
+                flag("readonly", el.readOnly.getOrElse(false), v)(el.withReadOnly(v))
+            end readOnly
+
+            /** `required` set to `v` while the condition holds, on a text field. */
+            def required(v: Boolean)(using ev: S <:< TextInput): Toggle[S] =
+                // Unsafe: the toggle's element is its `S`, which the evidence says is a `TextInput`.
+                val el = ev(element.asInstanceOf[S])
+                flag("required", el.required.getOrElse(false), v)(el.withRequired(v))
+            end required
+
+            private def next(el: Element): Toggle[S] = new Toggle(el, cond)
+
+            private def attr(name: String, off: Maybe[String], value: String, strip: Attrs => Attrs)(held: => Element): Toggle[S] =
+                cond match
+                    case s: Signal[Boolean] @unchecked => next(Toggle.attrChannel(element, name, off, value, strip, s))
+                    case on: Boolean                   => if on then next(held) else this
+
+            private def flag(name: String, off: Boolean, v: Boolean)(held: => Element): Toggle[S] = cond match
+                case s: Signal[Boolean] @unchecked => next(Toggle.boolChannel(element, name, off, v, s))
+                case on: Boolean                   => if on then next(held) else this
+        end Toggle
+
+        object Toggle:
+            private[kyo] def of[S](el: Element, cond: Prop[Boolean]): Toggle[S] = new Toggle(el, cond)
+
+            private given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
+
+            // Each channel below is one the toggle binds, named in `Attrs.toggled`, so a later toggle on the same name composes
+            // with it; a channel some setter bound is the value, and the toggle leaves it.
+
+            /** The class `name` on while `s` holds: nothing where the element carries it already, or-ed with a channel a toggle bound. */
+            private[kyo] def classChannel(el: Element, name: String, s: Signal[Boolean]): Element =
+                given Frame = el.frame
+                val a       = el.attrs
+                if a.cssClasses.contains(name) then el
+                else
+                    a.reactiveClasses.get(name) match
+                        case Some(was) =>
+                            el.withAttrs(a.copy(reactiveClasses =
+                                a.reactiveClasses.updated(name, s.combineLatest(was).map((on, w) => on || w))
+                            ))
+                        case None => el.withAttrs(a.copy(reactiveClasses = a.reactiveClasses.updated(name, s)))
+                end if
+            end classChannel
+
+            /** The attribute `name` at `value` while `s` holds, and `off` (what the element had) while not. */
+            private[kyo] def attrChannel(
+                el: Element,
+                name: String,
+                off: Maybe[String],
+                value: String,
+                strip: Attrs => Attrs,
+                s: Signal[Boolean]
+            ): Element =
+                given Frame = el.frame
+                val a       = el.attrs
+                if a.toggled.contains(name) then
+                    val was = a.reactiveMaybeAttrs(name)
+                    el.withAttrs(a.copy(reactiveMaybeAttrs =
+                        a.reactiveMaybeAttrs.updated(name, s.combineLatest(was).map((on, w) => if on then Present(value) else w))
+                    ))
+                else if a.reactiveAttrs.contains(name) || a.reactiveMaybeAttrs.contains(name) || off == Present(value) then el
+                else
+                    val stripped = strip(a)
+                    el.withAttrs(stripped.copy(
+                        reactiveMaybeAttrs = stripped.reactiveMaybeAttrs.updated(name, s.map(on => if on then Present(value) else off)),
+                        toggled = stripped.toggled + name
+                    ))
+                end if
+            end attrChannel
+
+            /** The boolean attribute `name` at `v` while `s` holds, and `off` (the element's own value) while not. */
+            private[kyo] def boolChannel(el: Element, name: String, off: Boolean, v: Boolean, s: Signal[Boolean]): Element =
+                given Frame = el.frame
+                val a       = el.attrs
+                if a.toggled.contains(name) then
+                    val was = a.reactiveBoolAttrs(name)
+                    el.withAttrs(a.copy(reactiveBoolAttrs =
+                        a.reactiveBoolAttrs.updated(name, s.combineLatest(was).map((on, w) => if on then v else w))
+                    ))
+                else if a.reactiveBoolAttrs.contains(name) || off == v then el
+                else
+                    el.withAttrs(a.copy(
+                        reactiveBoolAttrs = a.reactiveBoolAttrs.updated(name, if v then s else s.map(!_)),
+                        toggled = a.toggled + name
+                    ))
+                end if
+            end boolChannel
+
+            /** The element silent (`v`) while `s` holds, and as silent as it was while not. */
+            private[kyo] def silenceChannel(el: Element, v: Boolean, s: Signal[Boolean]): Element =
+                given Frame = el.frame
+                val a       = el.attrs
+                a.silentSignal match
+                    case Present(was) if a.toggled.contains(silentKey) =>
+                        el.withAttrs(a.copy(silentSignal = Present(s.combineLatest(was).map((on, w) => if on then v else w))))
+                    case Present(_)              => el
+                    case Absent if a.silent == v => el
+                    case Absent                  =>
+                        el.withAttrs(a.copy(silentSignal = Present(if v then s else s.map(!_)), toggled = a.toggled + silentKey))
+                end match
+            end silenceChannel
+
+            /** The name `Attrs.toggled` keeps for the silence channel, which has no attribute of its own. */
+            private val silentKey = "data-kyo-ev"
+        end Toggle
 
         // ---- Interactive trait (event handlers + tabIndex) ----
 
@@ -2895,7 +3107,10 @@ object UI:
             // Element.silent: no event forwarded and no handler run while it holds. A signal is the channel of `data-kyo-ev` (see
             // kyo.internal.Channels.of); where it is bound the constant is not consulted.
             silent: Boolean = false,
-            silentSignal: Maybe[Signal[Boolean]] = Absent
+            silentSignal: Maybe[Signal[Boolean]] = Absent,
+            // The channels a `when` over a signal bound (by attribute name; the silence channel as `data-kyo-ev`), which a later
+            // toggle on the same name composes with; a channel a setter bound is the value, and a toggle leaves it (UI.Ast.Toggle).
+            toggled: Set[String] = Set.empty
         ):
             /** Whether any reactive channel is bound here. Every element of a render asks, so it allocates nothing; [[kyo.internal.Channels.of]] is the channels themselves. */
             def hasChannels: Boolean =
