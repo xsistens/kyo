@@ -170,7 +170,7 @@ final class CheckBox private[uic] (private[uic] val p: CheckBox.Props) extends N
         end match
         if variantV == FieldVariant.Filled then root = root.cssClass("p-variant-filled")
         root = validity.markClass(root)
-        root = disabledFlag.foldFlag(root)(root.cssClass("p-disabled", _))
+        root = disabledFlag.foldFlag(root)(on => root.when(on)(_.cssClass("p-disabled")))
         if isDisplayOnly then root = root.cssClass("p-uic-display-only")
 
         val control: UI = root(UI.children(List[UI](box, boxDiv))*)

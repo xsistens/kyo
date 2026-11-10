@@ -318,7 +318,7 @@ object Paginator:
 
         def navButton(cls: String, glyph: IconGlyph, target: Position => Int, off: Prop[Boolean], label: String, fixed: Boolean): UI =
             val nav = button.cssClass(s"p-paginator-$cls").jsProp("type", "button").aria("label", label)
-                .cssClass("p-disabled", off).disabled(off)
+                .when(off)(_.cssClass("p-disabled")).disabled(off)
             // A fixed page goes nowhere from any button, so each says so, disabled or not (Chris, 2026-11-08).
             (if fixed then nav.aria("disabled", "true") else nav.onClick(go(target))) (GlyphSvg(glyph, s"p-paginator-$cls-icon", "p-icon"))
         end navButton

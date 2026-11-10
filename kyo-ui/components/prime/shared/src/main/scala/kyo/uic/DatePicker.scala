@@ -368,7 +368,7 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
         // Reactive rather than a render-time branch: the anchor class was the only thing the field's own subtree needed the
         // open state for, and re-rendering the field on every open made the focus return on Escape a race.
         openSignal match
-            case Present(sig) if floating => el = el.cssClass("p-uic-overlay-anchor", sig.bound)
+            case Present(sig) if floating => el = el.when(sig.bound)(_.cssClass("p-uic-overlay-anchor"))
             case _                        => ()
         validity.follow(el(field, dropdown, panel))
     end assemble

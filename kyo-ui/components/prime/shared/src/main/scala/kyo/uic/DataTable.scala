@@ -2519,7 +2519,7 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
                 case ReactiveValue.Const(s) => freeze(cell, s).asInstanceOf[E]
                 case ReactiveValue.Dyn(sig) =>
                     given CanEqual[Style, Style] = CanEqual.derived
-                    cell.cssClass("p-datatable-frozen-column", sig.map(_.isDefined)).inlineStyle(sig.map {
+                    cell.when(sig.map(_.isDefined))(_.cssClass("p-datatable-frozen-column")).inlineStyle(sig.map {
                         case Present(s) => if s.edge == FrozenEdge.Start then Style.left(s.offset) else Style.right(s.offset)
                         case Absent     => Style.empty
                     })
@@ -2531,7 +2531,7 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
     private def classWhen[E <: Ast.Element { type Self = E }](el: E, name: String, on: ReactiveValue[Boolean])(using Frame): E =
         on match
             case ReactiveValue.Const(b) => if b then el.cssClass(name) else el
-            case ReactiveValue.Dyn(sig) => el.cssClass(name, sig)
+            case ReactiveValue.Dyn(sig) => el.when(sig)(_.cssClass(name))
 
     /** What the header reads as it changes, once the header is no longer drawn again for every one of them: the sort,
       * the column filters, the widths and the column drag. Each reaches the cells through a channel or a region of its
@@ -2978,7 +2978,7 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
                 }
             expanding match
                 case ReactiveValue.Const(on) => if on then root = root.cssClass("p-datatable-scrollable")
-                case ReactiveValue.Dyn(sig)  => root = root.cssClass("p-datatable-scrollable", sig)
+                case ReactiveValue.Dyn(sig)  => root = root.when(sig)(_.cssClass("p-datatable-scrollable"))
         end if
         if flexOn then root = root.cssClass("p-datatable-flex-scrollable")
         // The cursor keys must not ALSO scroll the page under the table. A kyo handler is

@@ -136,7 +136,7 @@ final class RadioButton private[uic] (private[uic] val p: RadioButton.Props) ext
         end match
         if variantV == FieldVariant.Filled then root = root.cssClass("p-variant-filled")
         root = validity.markClass(root)
-        root = disabledFlag.foldFlag(root)(root.cssClass("p-disabled", _))
+        root = disabledFlag.foldFlag(root)(on => root.when(on)(_.cssClass("p-disabled")))
 
         val control: UI = root(UI.children(List[UI](box, boxDiv))*)
         labelText match

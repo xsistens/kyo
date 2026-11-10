@@ -43,7 +43,7 @@ private[uic] enum FieldValidity:
     /** `.p-invalid` alone, for a control whose sheet hooks the class on a different element than the one that takes
       * `aria-invalid`.
       */
-    def markClass[E <: UI.Ast.Element { type Self <: E }](el: E): E = el.cssClass("p-invalid", red)
+    def markClass[E <: UI.Ast.Element { type Self <: E }](el: E): E = el.when(red)(_.cssClass("p-invalid"))
 
     /** `aria-invalid` alone (see [[markClass]]). */
     def markAria[E <: UI.Ast.Element { type Self <: E }](el: E)(using Frame): E = this match
