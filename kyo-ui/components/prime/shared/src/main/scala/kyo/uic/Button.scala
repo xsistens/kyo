@@ -129,7 +129,27 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
     /** The `.p-button` class chain, shared by the button and anchor renderings: a constant is a class, a signal a class channel. */
     private def classed[E <: UI.Ast.Element { type Self = E }](el: E, loading: Boolean)(using Frame): E =
         p.extraClasses.foldLeft(el.cssClass("p-button").cssClass("p-component"))(_.cssClass(_))
-            .classFor(p.severity)(_.cls("p-button")).classFor(p.variant)(_.cls).classFor(p.size)(_.cls("p-button"))
+            .cssClass.matching(p.severity) {
+                case Severity.Primary   => Absent
+                case Severity.Secondary => "p-button-secondary"
+                case Severity.Success   => "p-button-success"
+                case Severity.Info      => "p-button-info"
+                case Severity.Warn      => "p-button-warn"
+                case Severity.Danger    => "p-button-danger"
+                case Severity.Help      => "p-button-help"
+                case Severity.Contrast  => "p-button-contrast"
+            }
+            .cssClass.matching(p.variant) {
+                case ButtonVariant.Filled   => Absent
+                case ButtonVariant.Outlined => "p-button-outlined"
+                case ButtonVariant.Text     => "p-button-text"
+                case ButtonVariant.Link     => "p-button-link"
+            }
+            .cssClass.matching(p.size) {
+                case Size.Small  => "p-button-sm"
+                case Size.Normal => Absent
+                case Size.Large  => "p-button-lg"
+            }
             .cssClass("p-button-rounded", p.rounded).cssClass("p-button-raised", p.raised).cssClass("p-button-fluid", p.fluid)
             .cssClass("p-button-icon-only", p.label.isEmpty && p.extraChildren.isEmpty && (p.icon.isDefined || loading))
     end classed

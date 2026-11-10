@@ -98,15 +98,13 @@ final class Message private[uic] (private[uic] val p: Message.Props) extends Nod
             .enterTransition("p-uic-enter-fade")
             .leaveTransition("p-message-leave-active")
         access.id.foreach(v => el = el.id(v))
-        // Constant severity joins the class list; a reactive one binds one class per DISTINCT token
-        // (Info/Primary/Help all map to "info"), condition = the current severity maps to that token,
-        // so many-to-one severities never toggle the same class against each other.
+        // Constant severity joins the class list; a reactive one is the class-name channel over the token, so the
+        // severities that share one (Info/Primary/Help all map to "info") hold the same class and a move between them
+        // changes nothing.
         severityV match
             case SeverityValue.Const(s) => el = el.cssClass(s"p-message-${messageToken(s)}")
             case SeverityValue.Dyn(sig) =>
-                Severity.values.map(messageToken).distinct.foreach(tok =>
-                    el = el.cssClass(s"p-message-$tok", sig.map(s => messageToken(s) == tok))
-                )
+                el = el.cssClass.matching(sig)(s => s"p-message-${messageToken(s)}")
         end match
         variantV match
             case Present(MessageVariant.Outlined) => el = el.cssClass("p-message-outlined")
