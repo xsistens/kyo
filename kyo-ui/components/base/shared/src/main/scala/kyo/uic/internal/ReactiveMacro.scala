@@ -225,7 +225,7 @@ private[kyo] object ReactiveMacro:
             end match
         end onToggle
 
-        val rhs = new TreeMap:
+        val toggled = new TreeMap:
             override def transformTerm(tree: Term)(owner: Symbol): Term = tree match
                 case Apply(Apply(sel @ Select(recv, "when"), List(cond)), List(f)) if isBooleanWhen(sel) && readsOrDefined(cond) =>
                     val recv1 = transformTerm(recv)(owner)
@@ -256,6 +256,45 @@ private[kyo] object ReactiveMacro:
                     end match
                 case _ => super.transformTerm(tree)(owner)
         .transformTerm(written)(lambdaSym)
+
+        // ---- `aria`/`data` entries: a value that reads is the entry's channel ----
+        //
+        // A pair `name -> value` reaches `aria(...)` or `data(...)` through `Entry.entry[V](using AttrValue[V]).apply(pair)`, whose
+        // parameter is the pair, so a read in `value` would be the block's. Where `value` reads (a read, or something the block
+        // defines) and `V` has a prop instance, the pair becomes `Entry.channel[V](name, value)`, whose `value` takes a `UI.Prop[V]`:
+        // the data flow below then decides it as it decides any setter's prop argument, a channel where it only reaches channels,
+        // the run's value where the structure also needs it.
+        val entryModule  = TypeRepr.of[UI.Ast.Entry.type].termSymbol
+        val entryGiven   = entryModule.methodMember("entry").headOption
+        val entryChannel = entryModule.methodMember("channel").headOption.getOrElse(
+            report.errorAndAbort("kyo-ui has no `Entry.channel`: the expansion of `UI.reactive` needs it.")
+        )
+        val tuple2Module = TypeRepr.of[Tuple2.type].termSymbol
+        // The name and the value of a pair written in place: `name -> value` or `(name, value)`.
+        def pairOf(t: Term): Maybe[(Term, Term)] = strip(t) match
+            case Apply(TypeApply(Select(Apply(_, List(name)), "->"), _), List(value))                   => Present((name, value))
+            case Apply(TypeApply(Select(m, "apply"), _), List(name, value)) if m.symbol == tuple2Module => Present((name, value))
+            case _                                                                                      => Absent
+        val rhs = new TreeMap:
+            override def transformTerm(tree: Term)(owner: Symbol): Term = tree match
+                case Apply(Select(Apply(TypeApply(conv, _), _), "apply"), List(pair)) if entryGiven.contains(conv.symbol) =>
+                    pairOf(pair) match
+                        case Present((name, value)) if readsOrDefined(value) =>
+                            // The value's own type, not the conversion's: that one is the instance's (`UI.Prop[Boolean]` for a
+                            // `Boolean`), and the prop of the value's type is what the channel takes.
+                            val tpe = value.tpe.widen
+                            tpe.asType match
+                                case '[a] =>
+                                    Implicits.search(TypeRepr.of[UI.Ast.AttrValue[UI.Prop[a]]]) match
+                                        case ok: ImplicitSearchSuccess =>
+                                            Ref(entryModule).select(entryChannel).appliedToType(tpe)
+                                                .appliedTo(transformTerm(name)(owner), transformTerm(value)(owner))
+                                                .appliedTo(ok.tree)
+                                        case _ => super.transformTerm(tree)(owner)
+                            end match
+                        case _ => super.transformTerm(tree)(owner)
+                case _ => super.transformTerm(tree)(owner)
+        .transformTerm(toggled)(lambdaSym)
 
         // What the block defines, so no read refers to it.
         val local = scala.collection.mutable.Set.empty[Symbol]

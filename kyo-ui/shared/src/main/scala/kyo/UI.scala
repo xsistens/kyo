@@ -2576,6 +2576,12 @@ object UI:
             /** A pair `name -> value` as an entry, where `value`'s type has an [[AttrValue]]. */
             given entry[V](using v: AttrValue[V]): Conversion[(String, V), Entry] = v.conversion
 
+            /** The entry `name -> value` where the value may be a signal: the form `UI.reactive` gives a pair whose value reads, so
+              * that the read is the entry's channel, as it is for any setter that takes a `UI.Prop`.
+              */
+            private[kyo] def channel[V](name: String, value: UI.Prop[V])(using v: AttrValue[UI.Prop[V]]): Entry =
+                new Entry(name, value, v)
+
             /** `a` with each of `entries` written as an attribute of `kind`, in order. */
             private[kyo] def writeAll(a: Attrs, entries: Seq[Entry], kind: AttrKind)(using Frame): Attrs =
                 entries.foldLeft(a)((acc, e) => e.write(acc, kind))
