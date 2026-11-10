@@ -237,6 +237,37 @@ class PasswordTest extends ReactiveValueContract:
         )
     }
 
+    "a signal disabled, readonly, required, size, variant or fluid patches the field, the eye and the wrapper in place" in {
+        def flag(e: UI.Ast.Element, name: String): Boolean < Sync =
+            e.attrs.reactiveBoolAttrs.get(name).fold(Kyo.lift(false))(_.current)
+        for
+            on      <- Signal.initRef(false)
+            size    <- Signal.initRef[Size](Size.Normal)
+            variant <- Signal.initRef[FieldVariant](FieldVariant.Outlined)
+            ui = uic.Password().toggleMask(true).disabled(on).readonly(on).required(on).size(size).variant(variant).fluid(on).render
+            regions <- regionsAbove(ui, "p-password-input")
+            es      <- elements(ui)
+            f    = es.collectFirst { case t: UI.Ast.Element if t.attrs.cssClasses.contains("p-password-input") => t }.get
+            eye  = es.collectFirst { case t: UI.Ast.Element if t.attrs.cssClasses.contains("p-password-toggle-mask-icon") => t }.get
+            root = es.collectFirst { case t: UI.Ast.Element if t.attrs.cssClasses.contains("p-password") => t }.get
+            _      <- on.set(true)
+            _      <- size.set(Size.Small)
+            _      <- variant.set(FieldVariant.Filled)
+            off    <- flag(f, "disabled")
+            ro     <- flag(f, "readonly")
+            req    <- flag(f, "required")
+            small  <- carriesClass(f, "p-inputtext-sm")
+            filled <- carriesClass(f, "p-variant-filled")
+            fluid  <- carriesClass(root, "p-password-fluid")
+            quiet  <- silentNow(eye)
+        yield assert(
+            (regions, off, ro, req, small, filled, fluid, quiet) == (0, true, true, true, true, true, true, true),
+            s"regions above the field, then disabled, readonly, required, small, filled, fluid, a silent eye: " +
+                s"${(regions, off, ro, req, small, filled, fluid, quiet)}"
+        )
+        end for
+    }
+
     /** The field's `type` now: the channel's value where one owns it, else the `type` attribute the field renders. */
     private def typeNow(e: UI.Ast.Element)(using Frame): String < Sync =
         e.attrs.reactiveAttrs.get("type") match
