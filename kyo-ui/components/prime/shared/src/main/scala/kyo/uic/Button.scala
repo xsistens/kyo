@@ -52,7 +52,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
         activate: Maybe[UI.Action]
     )(using Frame): UI =
         val trigger = ariaRaw("haspopup", popup).ariaRaw("expanded", expanded)
-        (if fixed then trigger.ariaDisabled(true) else trigger).render
+        trigger.when(fixed)(_.ariaDisabled(true)).render
     end asPopupTrigger
 
     /** Package-internal composite-widget hooks: the attributes a button needs when it is a CHILD
@@ -163,7 +163,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
         p.extraArias.foldLeft(classed(el, loading))((e, aria) => e.aria(aria._1, aria._2))
             .when(p.access.id)(_.id(_))
             .when(p.role)(_.role(_))
-            .when(p.focusSeed)(_.focusAuto(true).focusRestore(true))
+            .focusAuto(p.focusSeed).focusRestore(p.focusSeed)
             .when(p.onKeyDown)(_.onKeyDown(_))
             .aria("label", p.access.name)
             .aria("labelledby", p.access.nameRef)
