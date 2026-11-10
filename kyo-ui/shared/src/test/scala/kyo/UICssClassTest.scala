@@ -27,6 +27,25 @@ class UICssClassTest extends kyo.test.Test[Any]:
         }
     }
 
+    "cssClass with several names adds them after the element's classes, in order, the bytes of one call per name" in {
+        for
+            several <- renderHtml(UI.div.cssClass("z").cssClass("a", "b", "c"))
+            chained <- renderHtml(UI.div.cssClass("z").cssClass("a").cssClass("b").cssClass("c"))
+        yield assert(several == chained && several.contains("class=\"z a b c\""), s"$several | $chained")
+    }
+
+    "cssClass returns the element's own type, for an svg element and for an element of a type parameter" in {
+        // An svg element is declared outside UI.Ast, where `cssClass` once typed so that no `apply` was found on it.
+        def classed[E <: UI.Ast.Element { type Self = E }](el: E): E = el.cssClass("g", "h")
+        val path: Svg.Path                                           = Svg.path.cssClass("p")
+        val div: UI.Ast.Div                                          = classed(UI.div)
+        for
+            svg   <- renderHtml(Svg.svg(path))
+            plain <- renderHtml(div)
+        yield assert(svg.contains("class=\"p\"") && plain.contains("class=\"g h\""), s"$svg | $plain")
+        end for
+    }
+
     "cssClass coexists with id and data attributes" in {
         renderHtml(UI.div.id("x").data("k", "v").cssClass("c")).map { s =>
             assert(s.contains("id=\"x\""))

@@ -2030,13 +2030,21 @@ object UI:
                 withAttrs(attrs.copy(dataAttrs = attrs.dataAttrs ++ pairs))
             end data
 
-            /** Adds a CSS class to this element (emitted as `class="..."`); repeated calls space-join.
-              * The class is the stable hook a [[kyo.Stylesheet]] class rule ([[kyo.Selector.cls]])
-              * targets, so document-level rules (`@media`, shared component styles, `:hover` against a
-              * named class) apply to it. For per-element one-off styling use [[style]] instead; the two
-              * coexist on one element.
+            /** The element's CSS classes (emitted as `class="..."`), set through the returned [[kyo.UI.Ast.CssClass]]:
+              * `el.cssClass("p-button", "p-component")` adds classes, and the other forms there add a class that follows a
+              * prop. A class is the stable hook a [[kyo.Stylesheet]] class rule ([[kyo.Selector.cls]]) targets, so
+              * document-level rules (`@media`, shared component styles, `:hover` against a named class) apply to it. For
+              * per-element one-off styling use [[style]] instead; the two coexist on one element.
               */
-            def cssClass(name: String): Self = withAttrs(attrs.copy(cssClasses = attrs.cssClasses :+ name))
+            // The full path, not `CssClass[Self]`: seen from an element declared outside `Ast` (the `Svg` ones), the short form
+            // types as `Ast.this.CssClass`, and the compiler then finds no extension `apply` on it (scalac 3.9.0).
+            def cssClass: kyo.UI.Ast.CssClass[Self] = this
+
+            /** The element with `name` added after its classes: the body of `cssClass(name)`. */
+            private[kyo] def addClass(name: String): Self = withAttrs(attrs.copy(cssClasses = attrs.cssClasses :+ name))
+
+            /** The element with `names` added after its classes, in order: the body of `cssClass(names*)`. */
+            private[kyo] def addClasses(names: Seq[String]): Self = withAttrs(attrs.copy(cssClasses = attrs.cssClasses ++ names))
 
             /** Declarative ENTER transition (client-local): when a patch inserts this element newly into the DOM (its
               * `data-kyo-path` was not present before, or at initial mount), the client adds the space-separated `classes`
@@ -2059,21 +2067,12 @@ object UI:
               */
             def leaveTransition(classes: String): Self = withAttrs(attrs.copy(leaveTransition = Present(classes)))
 
-            /** Constant OR reactive class through one union setter. A `Boolean` is static (byte-identical to
-              * `cssClass(name)` resp. omitting it). A `Signal[Boolean]` toggles `name` IN PLACE on emission
-              * (`classList.toggle`, so CSS transitions fire) with no re-render, still chainable (`Self`). Declarative twin of `UI.Commands.bindClassById`.
+            /** The body of `cssClass(name, on)`: a `Boolean` adds `name` or leaves the element as it is, a signal binds it to the
+              * element's class channel.
               */
-            def cssClass(name: String, on: Boolean | Signal[Boolean]): Self = on match
-                case b: Boolean                    => if b then cssClass(name) else withAttrs(attrs)
+            private[kyo] def toggleClass(name: String, on: Boolean | Signal[Boolean]): Self = on match
+                case b: Boolean                    => if b then addClass(name) else withAttrs(attrs)
                 case s: Signal[Boolean] @unchecked => withReactiveClass(name, s)
-
-            /** A class whose NAME a signal holds: the class it holds now, or none for `Absent`. A change takes the class it
-              * held off and puts the one it holds on, in place (two `classList.toggle`s, so CSS transitions fire), with no
-              * re-render. For a prop over a closed set of cases (a size, a severity) this is one channel instead of one
-              * `cssClass(name, on)` per case. The channel owns the names it writes: a fixed class of the same name is taken off
-              * with it.
-              */
-            def cssClass(name: Signal[Maybe[String]]): Self = withReactiveClassName(name)
 
             /** Declarative portal (client-local): after a patch inserts this element, the client physically moves it to
               * `document.body`, leaving an inert placeholder (`data-kyo-portal-slot="<path>"`, hidden) at the logical
@@ -2095,6 +2094,60 @@ object UI:
             private[kyo] def jsProp(name: String, value: String): Self =
                 withAttrs(attrs.copy(jsProps = attrs.jsProps.updated(name, value)))
         end Element
+
+        /** The class setters of an element, what [[kyo.UI.Ast.Element.cssClass]] returns: each one returns the element (`S`, its
+          * own type), so a chain stays an element chain.
+          *
+          * {{{
+          * el.cssClass("p-cascadeselect", "p-component", "p-inputwrapper")
+          * }}}
+          *
+          * `cssClass(names*)` adds the classes after the ones the element has, in the order given, so repeated calls space-join.
+          * A name the element already carries is written again; a class list is a set to the browser, so it changes nothing.
+          *
+          * It is the element itself under another type, so `el.cssClass` allocates nothing, and each setter is an inline
+          * forward to the element's own method. Every setter that writes a class lives here, so the class vocabulary is one
+          * place: a later setter (a prefix or a suffix over a prop, say) is a method of this type rather than an overload of
+          * `cssClass` on every element.
+          *
+          * @tparam S
+          *   the element type the setters return
+          */
+        opaque type CssClass[S] = Element
+
+        object CssClass:
+            extension [S](self: CssClass[S])
+
+                /** Adds the class `name` after the element's classes. */
+                inline def apply(name: String): S =
+                    // Unsafe: `self` is the element whose `cssClass` built it, and `S` is that element's own `Self`.
+                    self.addClass(name).asInstanceOf[S]
+
+                /** Adds the classes `names` after the element's classes, in the order given. */
+                inline def apply(names: String*): S =
+                    // Unsafe: `self` is the element whose `cssClass` built it, and `S` is that element's own `Self`.
+                    self.addClasses(names).asInstanceOf[S]
+
+                /** Constant OR reactive class through one union setter. A `Boolean` is static (byte-identical to
+                  * `cssClass(name)` resp. omitting it). A `Signal[Boolean]` toggles `name` IN PLACE on emission
+                  * (`classList.toggle`, so CSS transitions fire) with no re-render, still chainable. Declarative twin of
+                  * `UI.Commands.bindClassById`.
+                  */
+                inline def apply(name: String, on: Boolean | Signal[Boolean]): S =
+                    // Unsafe: `self` is the element whose `cssClass` built it, and `S` is that element's own `Self`.
+                    self.toggleClass(name, on).asInstanceOf[S]
+
+                /** A class whose NAME a signal holds: the class it holds now, or none for `Absent`. A change takes the class it
+                  * held off and puts the one it holds on, in place (two `classList.toggle`s, so CSS transitions fire), with no
+                  * re-render. For a prop over a closed set of cases (a size, a severity) this is one channel instead of one
+                  * `cssClass(name, on)` per case. The channel owns the names it writes: a fixed class of the same name is taken
+                  * off with it.
+                  */
+                inline def apply(name: Signal[Maybe[String]]): S =
+                    // Unsafe: `self` is the element whose `cssClass` built it, and `S` is that element's own `Self`.
+                    self.withReactiveClassName(name).asInstanceOf[S]
+            end extension
+        end CssClass
 
         // ---- Interactive trait (event handlers + tabIndex) ----
 
