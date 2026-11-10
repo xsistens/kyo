@@ -209,6 +209,10 @@ never the spelled-out `A | Signal[A]`; its generated setter then takes the same 
   same type. A field that was constant only because nobody needed more (Button's icons, a size) becomes a `Prop` too: it reaches a
   channel, or a leaf that draws it (rule 10), so a constant costs nothing and a signal patches in place. A field stays a plain
   value only where it decides the structure (Password's `feedback`, which adds the meter).
+- **A redraw is avoided where it is not needed, not at any price.** A change a reader makes often patches in place; a rare change
+  that needs another element (Input's type crossing to or from `Number`, a different element class) may draw the field again, and
+  then the field is a plain `Prop[A]` that redraws only across that boundary. A union of a constant type and a narrower signal
+  type (`InputType | Signal[UI.TextType]`) only to rule out that redraw is the API paying for the engine; never.
 
 ## 9. A field is a `Maybe` only where unset is not a value; the draw has its scaladoc
 

@@ -8,6 +8,17 @@ import kyo.UI.*
   */
 enum InputType derives CanEqual:
     case Text, Email, Number, Password, Tel, URL
+
+    /** The free-text type kyo-ui writes for this one. `Number` has none: a number field is drawn by its own factory and never
+      * reads it, so it answers `Text`.
+      */
+    private[uic] def textType: UI.TextType = this match
+        case InputType.Text     => UI.TextType.Text
+        case InputType.Email    => UI.TextType.Email
+        case InputType.Password => UI.TextType.Password
+        case InputType.Tel      => UI.TextType.Tel
+        case InputType.URL      => UI.TextType.Url
+        case InputType.Number   => UI.TextType.Text
 end InputType
 
 /** Text input: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's InputText: the component IS the bare
@@ -41,6 +52,12 @@ final class Input private[uic] (private[uic] val p: Input.Props) extends Compone
       * (kyo-ui's `filledClass(name, closest)`), for a host whose stylesheet marks its wrapper ([[Password]]).
       */
     private[uic] def filledOn(cls: String, closest: String): Input = new Input(p.copy(filledUp = Present((cls, closest))))
+
+    /** Package-internal: the field's type follows `sig` through kyo-ui's `textType` channel, in place of [[Input.Props.inputType]],
+      * for a host whose type moves between free-text types alone ([[Password]]'s reveal): it can never cross to `Number`, so it
+      * needs no number flag and the field sits under no region.
+      */
+    private[uic] def revealing(sig: Signal[UI.TextType]): Input = new Input(p.copy(revealedAs = Present(sig)))
 
     private[uic] def accessibility: Accessibility                             = p.access
     private[uic] def withAccessibility(v: Accessibility): Self                = new Input(p.copy(access = v))
@@ -95,13 +112,12 @@ object Input:
         name: Opt[String] = Opt.unset,
         /** Native `maxlength`: caps the number of characters (a negative cap is none at all). */
         maxLength: Opt[Int] = Opt.unset,
-        /** The native input type, [[InputType.Text]] by default. A [[kyo.UI.TextType]] signal switches the type on the field the
-          * page has, in place (kyo-ui's `textType` channel), so the text the reader typed, the caret and focus stay: a password
-          * field that reveals its text is one. The two forms take different types on purpose: a signal names only a free-text
-          * type, since `number` reads its value differently and the field could not switch to or from it without changing what
-          * it holds.
+        /** The native input type, [[InputType.Text]] by default. A signal that moves between the free-text types switches the type
+          * on the field the page has, in place (kyo-ui's `textType` channel), so the text the reader typed, the caret and focus
+          * stay. A change to or from [[InputType.Number]] draws the field again, as a number field: `number` reads its value
+          * differently, so it is another element.
           */
-        inputType: InputType | Signal[UI.TextType] = InputType.Text,
+        inputType: Prop[InputType] = InputType.Text,
         /** Size: `.p-inputtext-sm` / default / `.p-inputtext-lg`, a signal swapping the class in place. */
         size: Prop[Size] = Size.Normal,
         /** Fill variant: `Filled` renders `.p-variant-filled`, `Outlined` is the default; a signal swaps the class in place. */
@@ -140,7 +156,8 @@ object Input:
         @noSetter description: Maybe[Prop[String]] = Absent,
         @noSetter extraClasses: List[String] = Nil,
         @noSetter unheardAs: Controlled.Name = Input.valueName("Input", "onInput or onChange"),
-        @noSetter filledUp: Maybe[(String, String)] = Absent
+        @noSetter filledUp: Maybe[(String, String)] = Absent,
+        @noSetter revealedAs: Maybe[Signal[UI.TextType]] = Absent
     ) derives CanEqual
 
     def apply(): Input = new Input(Props())
@@ -158,7 +175,6 @@ object Input:
       */
     final private[uic] case class Base(
         text: Maybe[Prop[String]],
-        inputType: InputType | Signal[UI.TextType],
         hearsInput: Boolean,
         hearsChange: Boolean,
         blurs: Boolean,
@@ -174,7 +190,8 @@ object Input:
         description: Maybe[Prop[String]],
         extraClasses: List[String],
         unheardAs: Controlled.Name,
-        filledUp: Maybe[(String, String)]
+        filledUp: Maybe[(String, String)],
+        revealedAs: Maybe[Signal[UI.TextType]]
     ) derives CanEqual
 
     private object Base:
@@ -182,7 +199,6 @@ object Input:
         def apply(q: Props): Base =
             Base(
                 q.value.bound.orElse(q.value.start),
-                q.inputType,
                 q.value.hearer.isDefined,
                 q.onChange.isDefined,
                 q.onBlur.isDefined,
@@ -198,7 +214,8 @@ object Input:
                 q.description,
                 q.extraClasses,
                 q.unheardAs,
-                q.filledUp
+                q.filledUp,
+                q.revealedAs
             )
     end Base
 
@@ -207,7 +224,7 @@ object Input:
       *
       * Each place reads the field it shows: the size, the variant, the width, `disabled`, `readonly` and `required` reach the
       * element through its class, attribute and `aria-*` channels, so a run that changes one of them patches it alone. What builds
-      * the element (the [[Base]], among it which factory backs the field) is one `reactive` block, drawn again only when a run
+      * the element (the [[Base]], and whether it is a number field) is one `reactive` block, drawn again only when a run
       * changes it. An input, a commit and a blur read the run's hearers when they come. The card for a signal nobody hears is a
       * block of its own over `disabled` and `readonly`, so it shows only while the reader could edit.
       */
@@ -215,6 +232,10 @@ object Input:
         val base     = props(Base(_))
         val disabled = props(_.disabled)
         val readonly = props(_.readonly)
+        val kind     = props(_.inputType)
+        // What builds the element is only whether it is a number field; between the free-text types the type is a channel.
+        val number   = Prop.map(kind)(_ == InputType.Number)
+        val freeText = Prop.map(kind)(_.textType)
         val heard    = Heard(
             s => props.call(_.value.hearer).map(_.fold(Kyo.unit: UI.Action)(_(s))),
             s => props.call(_.onChange).map(_.fold(Kyo.unit: UI.Action)(_(s))),
@@ -223,16 +244,9 @@ object Input:
         UI.reactive {
             val b         = base.read
             val validity  = FieldValidity(b.validity)
-            val field: UI = b.inputType match
-                case sig: Signal[UI.TextType] @unchecked => shared(constrained(input, b).textType(sig), b, props, validity, heard)
-                case t: InputType                        =>
-                    t match
-                        case InputType.Text     => shared(constrained(input, b), b, props, validity, heard)
-                        case InputType.Email    => shared(constrained(emailInput, b), b, props, validity, heard)
-                        case InputType.Number   => shared(numberInput, b, props, validity, heard)
-                        case InputType.Password => shared(constrained(passwordInput, b), b, props, validity, heard)
-                        case InputType.Tel      => shared(constrained(telInput, b), b, props, validity, heard)
-                        case InputType.URL      => shared(constrained(urlInput, b), b, props, validity, heard)
+            val field: UI =
+                if number.read then shared(numberInput, b, props, validity, heard)
+                else shared(constrained(input, b).textType(b.revealedAs.getOrElse(freeText)), b, props, validity, heard)
             val followed = validity.follow(field)
             if b.unheard then fragment(followed, unheardCard(b.unheardAs, disabled, readonly)) else followed
         }

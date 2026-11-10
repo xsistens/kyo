@@ -236,14 +236,15 @@ class PasswordTest extends ReactiveValueContract:
         )
     }
 
-    /** The field's `type` now: the channel's value where one owns it, else the type its element class writes. */
+    /** The field's `type` now: the channel's value where one owns it, else the `type` attribute the field renders. */
     private def typeNow(e: UI.Ast.Element)(using Frame): String < Sync =
         e.attrs.reactiveAttrs.get("type") match
             case Some(sig) => sig.current
             case None      =>
-                e match
-                    case _: UI.Ast.PasswordInput => Kyo.lift("password")
-                    case _                       => Kyo.lift("text")
+                kyo.internal.HtmlRenderer.render(e, Seq.empty).map(html =>
+                    """ type="([^"]*)"""".r.findFirstMatchIn(html).map(_.group(1))
+                        .getOrElse(throw new AssertionError(s"the field renders no type: $html"))
+                )
 
     "the eye switches the field's type in place, on the field built once, and says so on itself" in {
         // One traversal: the field and the eye of one instance, so the click writes the reveal this field follows.

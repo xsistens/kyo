@@ -55,6 +55,25 @@ class InputTest extends ReactiveValueContract:
         end for
     }
 
+    "a type from a signal patches the field's type between free-text types, and across to Number draws a number field" in {
+        def typeChannel(e: UI.Ast.Element): Maybe[String] < Sync =
+            e.attrs.reactiveAttrs.get("type") match
+                case Some(sig) => sig.current.map(Present(_))
+                case None      => Absent
+        for
+            kind <- Signal.initRef(uic.InputType.Text)
+            ui = uic.Input().inputType(kind).render
+            _      <- kind.set(uic.InputType.Email)
+            email  <- field(ui)
+            shown  <- typeChannel(email)
+            _      <- kind.set(uic.InputType.Number)
+            number <- field(ui)
+        yield
+            assert(shown == Present("email"), s"between free-text types the type is a channel of the field: $shown")
+            assert(number.isInstanceOf[UI.Ast.NumberInput], s"across to Number the field is a number field: $number")
+        end for
+    }
+
     "a value bound one way follows its owner" in {
         for
             held <- Signal.initRef("a")
