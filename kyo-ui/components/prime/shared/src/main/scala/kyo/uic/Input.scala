@@ -20,7 +20,8 @@ end InputType
   * field shows it, and an edit only reports through `onInput`/`onChange`. Validation is Prime's `.p-invalid` model: `invalid`
   * plus the optional `invalidMessage` row below the field.
   */
-final class Input private[uic] (private[uic] val p: Input.Props) extends Component(Setters[Input.Props, Input]), Node, FormControl,
+final class Input private[uic] (private[uic] val p: Input.Props) extends Component(Setters[Input.Props, Input]), Node,
+      GeneratedTextFormControl,
       HasPlaceholder, HasAccessibleNameRef, HasAccessibleDescription:
 
     type Self = Input
