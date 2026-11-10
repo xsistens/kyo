@@ -25,7 +25,7 @@ import kyo.UI.*
   *     server-side in the handler.
   *   - The advanced mode (drag & drop, file list, progress) is deferred.
   *
-  * A [[FileFormControl]] over `Seq[kyo.UI.FilePayload]`, so
+  * A `FormControl[Seq[kyo.UI.FilePayload]]`, so
   * `uic.FileUpload().bind(field)` wires value, validity, message and the blur
   * trigger, and a validator can read the picked files' sizes and extensions
   * because the payload metadata IS the bound value.
@@ -34,7 +34,7 @@ import kyo.UI.*
   * `display:none`, so it keeps its tab stop: Space or Enter on it opens the file dialog, and the choose button
   * shows its focus ring.
   */
-final class FileUpload private[uic] (private[uic] val p: FileUpload.Props) extends Node, FileFormControl, HasProps:
+final class FileUpload private[uic] (private[uic] val p: FileUpload.Props) extends Node, FormControl[Seq[UI.FilePayload]], HasProps:
     import p.*
 
     type Self = FileUpload
@@ -91,8 +91,10 @@ final class FileUpload private[uic] (private[uic] val p: FileUpload.Props) exten
     /** Disables the control: the button dims and the input locks. */
     def disabled(v: Boolean): FileUpload = new FileUpload(p.copy(disabledFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new FileUpload(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                                     = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self                             = new FileUpload(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[Seq[UI.FilePayload]])(using Frame): FileUpload  = value(ref)
+    private[uic] def hearBlur(f: Seq[UI.FilePayload] => UI.Action)(using Frame): FileUpload = onBlur(f)
 
     /** Fired with the picked files' [[kyo.UI.FilePayload]] metadata (name, size, mimeType, content) once a file is
       * chosen, after a two-way [[value]] is written.

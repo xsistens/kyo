@@ -50,7 +50,7 @@ import scala.annotation.targetName
   * `id` lands on the field root, the combobox that holds the tab stop, and the tree derives `$id-list` and
   * `$id-node-<n>` from it (a minted base stands in where none is given).
   */
-final class TreeSelect[K] private[uic] (private[uic] val p: TreeSelect.Props[K]) extends Node, MultiChoiceFormControl[K], HasEmptyContent,
+final class TreeSelect[K] private[uic] (private[uic] val p: TreeSelect.Props[K]) extends Node, FormControl[Set[K]], HasEmptyContent,
       HasTooltip, HasPlaceholder, HasAccessibleNameRef, HasProps:
     import p.*
 
@@ -91,7 +91,6 @@ final class TreeSelect[K] private[uic] (private[uic] val p: TreeSelect.Props[K])
       * the matching nodes. A plain `Signal` or a constant binds one way: the field shows it and a pick only reports the
       * set it asks for to [[onChange]]; with no [[onChange]] that is reported in a card.
       */
-    @targetName("selectionSet")
     def selection(v: Set[K] | Signal[Set[K]]): TreeSelect[K] = new TreeSelect(p.copy(valueSlot = valueSlot.bind(v)))
 
     /** The expanded node ids of the panel's tree (optional; expansion is component-internal otherwise). A `SignalRef`
@@ -158,8 +157,10 @@ final class TreeSelect[K] private[uic] (private[uic] val p: TreeSelect.Props[K])
     /** Spans the full width of its container (`.p-treeselect-fluid`). */
     def fluid(v: Boolean): TreeSelect[K] = new TreeSelect(p.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new TreeSelect(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                           = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self                   = new TreeSelect(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[Set[K]])(using Frame): TreeSelect[K]  = selection(ref)
+    private[uic] def hearBlur(f: Set[K] => UI.Action)(using Frame): TreeSelect[K] = onBlur(f)
 
     /** Fired with the FULL updated node id set after every selection change. */
     @targetName("onChangeSet")
@@ -169,7 +170,6 @@ final class TreeSelect[K] private[uic] (private[uic] val p: TreeSelect.Props[K])
       * `onChange` it fires even when nothing was changed. The form-validation layer
       * wires its `Blur` trigger here.
       */
-    @targetName("onBlurSet")
     def onBlur(f: Set[K] => UI.Action)(using Frame): TreeSelect[K] = new TreeSelect(p.copy(onBlurF = Present(Callback.of(f))))
 
     /** (id, label) pairs of every node in tree order: the trigger-label lookup. */

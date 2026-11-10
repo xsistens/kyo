@@ -38,7 +38,7 @@ import kyo.UI.Ast.HtmlChildVal
   * the page underneath: the field declares `preventScrollKeys` (vertical keys
   * navigate; the caret still moves with Left/Right/Home/End).
   */
-final class AutoComplete[A] private[uic] (private[uic] val p: AutoComplete.Props[A]) extends Node, TextFormControl, HasEmptyContent,
+final class AutoComplete[A] private[uic] (private[uic] val p: AutoComplete.Props[A]) extends Node, FormControl[String], HasEmptyContent,
       HasPlaceholder, HasAccessibleNameRef, HasProps:
     import p.*
 
@@ -155,8 +155,10 @@ final class AutoComplete[A] private[uic] (private[uic] val p: AutoComplete.Props
     /** Spans the full width of its container (`.p-autocomplete-fluid`). */
     def fluid(v: Boolean): AutoComplete[A] = new AutoComplete(p.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new AutoComplete(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                             = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self                     = new AutoComplete(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[String])(using Frame): AutoComplete[A]  = value(ref)
+    private[uic] def hearBlur(f: String => UI.Action)(using Frame): AutoComplete[A] = onBlur(f)
 
     /** Fired on every keystroke with the current text. */
     def onInput(f: String => UI.Action)(using Frame): AutoComplete[A] = new AutoComplete(p.copy(onInputF = Present(Callback.of(f))))

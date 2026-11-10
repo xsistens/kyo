@@ -2,7 +2,6 @@ package kyo.uic
 
 import kyo.*
 import kyo.UI.*
-import scala.annotation.targetName
 
 /** Knob: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Knob
   * anatomy: `div.p-knob.p-component` > `svg[viewBox=0 0 100 100]` with the
@@ -23,7 +22,7 @@ import scala.annotation.targetName
   * is pointer-events:none, so per-frame re-render never detaches the
   * capture.
   *
-  * A [[NumberFormControl]], so `uic.Knob().bind(field)` wires value, validity,
+  * A `FormControl[Double]`, so `uic.Knob().bind(field)` wires value, validity,
   * message, the blur trigger and (for a whole-valued field) the [[integer]]
   * constraint in one call.
   *
@@ -31,7 +30,7 @@ import scala.annotation.targetName
   * `--p-knob-range-background`, `--p-knob-text-color`) and follow the theme;
   * `valueColor`/`rangeColor`/`textColor` accept any CSS color or `var()`.
   */
-final class Knob private[uic] (private[uic] val p: Knob.Props) extends Node, NumberFormControl, HasAccessibleName, HasProps:
+final class Knob private[uic] (private[uic] val p: Knob.Props) extends Node, FormControl[Double], HasAccessibleName, HasProps:
     import p.*
 
     type Self = Knob
@@ -48,7 +47,6 @@ final class Knob private[uic] (private[uic] val p: Knob.Props) extends Node, Num
       * does not opt out of write-back; pass `ref.readOnly` for that. A derived signal is already
       * one-way and is the better answer when the value is computed rather than user-edited.
       */
-    @targetName("valueNumber")
     def value(v: Double | Signal[Double]): Knob = new Knob(p.copy(valueSlot = valueSlot.bind(v)))
 
     /** Lower bound (Prime default 0). */
@@ -95,8 +93,10 @@ final class Knob private[uic] (private[uic] val p: Knob.Props) extends Node, Num
       */
     def disabled(v: Boolean | Signal[Boolean]): Knob = new Knob(p.copy(disabledFlag = Present(ReactiveValue(v))))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Knob(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                  = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self          = new Knob(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[Double])(using Frame): Knob  = value(ref)
+    private[uic] def hearBlur(f: Double => UI.Action)(using Frame): Knob = onBlur(f)
 
     /** Fired with the NEW (clamped) value after the ref write-back, or with the value asked for where the knob is bound one way. */
     def onChange(f: Double => UI.Action)(using Frame): Knob = new Knob(p.copy(valueSlot = valueSlot.hear(f)))
@@ -232,6 +232,10 @@ final class Knob private[uic] (private[uic] val p: Knob.Props) extends Node, Num
 end Knob
 
 object Knob:
+    /** How a typed number field turns on the whole-number constraint: through `integer` ([[HasSetter]]). */
+    given integer: HasSetter[Knob, "integer", Boolean] with
+        def apply(c: Knob, v: Boolean)(using Frame): Knob = c.integer(v)
+
     final private[uic] case class Props(
         valueSlot: Controlled[Double] = Controlled(),
         minV: Double = 0.0,

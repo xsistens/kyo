@@ -36,7 +36,7 @@ import scala.annotation.targetName
   * `id` lands on the text field, and the live picker derives the day grid's `$id-grid` and its cells' `$id-c<n>`
   * from it (a minted base stands in where none is given).
   */
-final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A]) extends Node, OptionalFormControl[A], HasPlaceholder,
+final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A]) extends Node, FormControl[Maybe[A]], HasPlaceholder,
       HasAccessibleNameRef, HasProps:
     import p.*
 
@@ -151,8 +151,10 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
     /** Spans the full width of its container (`.p-datepicker-fluid`). */
     def fluid(v: Boolean): DatePicker[A] = new DatePicker(p.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new DatePicker(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                             = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self                     = new DatePicker(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[Maybe[A]])(using Frame): DatePicker[A]  = value(ref)
+    private[uic] def hearBlur(f: Maybe[A] => UI.Action)(using Frame): DatePicker[A] = onBlur(f)
 
     /** Binds the calendar's visibility. A `SignalRef` binds two way: the field, the dropdown button, a completing pick,
       * the button bar, Escape and an outside click write it, then [[onOpenChange]] hears the new state. A plain `Signal`
@@ -1798,11 +1800,12 @@ end DatePicker
   * the app wrote it. It renders through the picker it was made from, so the two share every display setter, the bounds, the
   * keyboard and the anatomy; the field shows the picked days and is read-only.
   *
-  * It carries the validation vocabulary ([[FormControl]]) but is not a form-bindable control: the form layer's set-valued
-  * trait binds through `selection`, and a second spelling of the binding `values` already made would be a slot with two names.
+  * It carries the validation vocabulary ([[HasValidity]]) but is not a form-bindable control: the form layer's set-valued
+  * controls bind through `selection` (a `FormControl[Set[A]]`), and a second spelling of the binding `values` already made
+  * would be a slot with two names.
   */
 final class MultiDatePicker[A] private[uic] (private[uic] val picker: DatePicker[A])
-    extends Node, FormControl, HasPlaceholder, HasAccessibleNameRef, HasProps:
+    extends Node, HasValidity, HasPlaceholder, HasAccessibleNameRef, HasProps:
     type Self = MultiDatePicker[A]
 
     private[uic] def p: DatePicker[A] = picker
@@ -1899,10 +1902,10 @@ end MultiDatePicker
   * was made from, so the two share every display setter, the bounds, the keyboard and the anatomy; the field shows the
   * range and is read-only.
   *
-  * It carries the validation vocabulary ([[FormControl]]) but no form binding, since no form field holds two refs.
+  * It carries the validation vocabulary ([[HasValidity]]) but no form binding, since no form field holds two refs.
   */
 final class RangeDatePicker[A] private[uic] (private[uic] val picker: DatePicker[A])
-    extends Node, FormControl, HasPlaceholder, HasAccessibleNameRef, HasProps:
+    extends Node, HasValidity, HasPlaceholder, HasAccessibleNameRef, HasProps:
     type Self = RangeDatePicker[A]
 
     private[uic] def p: DatePicker[A] = picker

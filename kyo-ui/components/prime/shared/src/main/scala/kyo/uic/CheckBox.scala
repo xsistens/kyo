@@ -15,7 +15,7 @@ import kyo.UI.*
   * then `onChange` hears the new state), any other signal or a constant binds one way (the box shows it, and a toggle
   * only reports to `onChange`). The checked class and the native `checked` attribute follow the binding either way.
   */
-final class CheckBox private[uic] (private[uic] val p: CheckBox.Props) extends Node, BooleanFormControl, HasAccessibleNameRef, HasProps:
+final class CheckBox private[uic] (private[uic] val p: CheckBox.Props) extends Node, FormControl[Boolean], HasAccessibleNameRef, HasProps:
     import p.*
 
     type Self = CheckBox
@@ -77,8 +77,10 @@ final class CheckBox private[uic] (private[uic] val p: CheckBox.Props) extends N
     /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
     def variant(v: FieldVariant): CheckBox = new CheckBox(p.copy(variantV = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new CheckBox(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                       = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self               = new CheckBox(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[Boolean])(using Frame): CheckBox  = checked(ref)
+    private[uic] def hearBlur(f: Boolean => UI.Action)(using Frame): CheckBox = onBlur(f)
 
     def onChange(f: Boolean => UI.Action)(using Frame): CheckBox = new CheckBox(p.copy(checkedSlot = checkedSlot.hear(f)))
 

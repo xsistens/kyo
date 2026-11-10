@@ -24,7 +24,7 @@ import kyo.UI.*
   * digit] and at least 6 chars; strong = all three and at least 8 chars;
   * anything else weak; empty shows `promptLabel`.
   */
-final class Password private[uic] (private[uic] val p: Password.Props) extends Node, TextFormControl, HasPlaceholder, HasAccessibleName,
+final class Password private[uic] (private[uic] val p: Password.Props) extends Node, FormControl[String], HasPlaceholder, HasAccessibleName,
       HasProps:
     import p.*
 
@@ -84,8 +84,10 @@ final class Password private[uic] (private[uic] val p: Password.Props) extends N
     /** Spans the full container width (`.p-password-fluid`). */
     def fluid(v: Boolean): Password = new Password(p.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Password(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                      = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self              = new Password(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[String])(using Frame): Password  = value(ref)
+    private[uic] def hearBlur(f: String => UI.Action)(using Frame): Password = onBlur(f)
 
     private[uic] def accessibility: Accessibility              = access
     private[uic] def withAccessibility(v: Accessibility): Self = new Password(p.copy(access = v))

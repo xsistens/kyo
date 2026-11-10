@@ -198,7 +198,7 @@ class FieldValidityTest extends UicTest:
       *     is inside: Select, MultiSelect, CascadeSelect and TreeSelect build the row in the region that also works out their
       *     `.p-uic-diagnostic` card, because the row has to sit between the field and that card.
       */
-    private type Control = FormControl { type Self <: FormControl }
+    private type Control = HasValidity { type Self <: HasValidity }
 
     private def controls: Seq[(String, Control, String, Int, Int)] =
         def row(name: String, c: Control, root: String, regions: Int, rowAt: Int) = (name, c, root, regions, rowAt)

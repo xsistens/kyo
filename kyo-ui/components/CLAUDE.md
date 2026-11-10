@@ -12,7 +12,7 @@ A component the rulebook has reached (`Button`, `ToggleButton`, `Input`) also `e
 generated from its props (`RULEBOOK.md` rule 11). The rest still write each setter as below, until their wave reaches them.
 
 ```scala
-final class TextArea private[uic] (private[uic] val p: TextArea.Props) extends Node, TextFormControl, HasProps:
+final class TextArea private[uic] (private[uic] val p: TextArea.Props) extends Node, FormControl[String], HasProps:
     import p.*   // reads in the body stay as they are
     type Self = TextArea
 
@@ -22,6 +22,8 @@ final class TextArea private[uic] (private[uic] val p: TextArea.Props) extends N
     private[uic] def withValidity(v: FieldValidity.Slots): Self = new TextArea(p.copy(validityV = v))
     private[uic] def accessibility: Accessibility               = access
     private[uic] def withAccessibility(v: Accessibility): Self  = new TextArea(p.copy(access = v))
+    private[uic] def bindRef(ref: SignalRef[String])(using Frame): TextArea    = value(ref)
+    private[uic] def hearBlur(f: String => UI.Action)(using Frame): TextArea   = onBlur(f)
 end TextArea
 
 object TextArea:
@@ -160,9 +162,9 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   wearing different clothes. `Select`/`CascadeSelect`/`SelectButton` take `selection(A | Signal[A])` and
   `selection(Maybe[A] | Signal[Maybe[A]])` (one `@targetName`, since both erase to `Object`);
   `MultiSelect`/`MultiSelectButton`/`Listbox`/`TreeSelect`/`Tree` followed with the state slots below. The fields'
-  own values came last, through the traits: `BooleanFormControl.checked(Boolean | Signal[Boolean])` and
-  `TextFormControl.value(String | Signal[String])`, so every field behind either trait (`TextArea`,
-  `Password`, `InputMask`, `InputOtp`, `AutoComplete`, `ColorPicker`, the four boolean fields) widened with it, and `Input`'s generated `value` takes the same `Prop[String]`. A text
+  own values came last: `checked(Boolean | Signal[Boolean])` on the four boolean fields and `value(String | Signal[String])`
+  on the text fields (`TextArea`, `Password`, `InputMask`, `InputOtp`, `AutoComplete`, `ColorPicker`), and `Input`'s generated
+  `value` takes the same `Prop[String]`. A text
   field's CONSTANT is the starting text, the HTML `value` attribute: the reader's edit stays in the field, so it gets
   no card. A boolean field's constant is FIXED, as below. The edit stays only while nothing draws the field again: every
   render gives a field its `value` attribute back (`__kyoMorphAttrs` in kyo-ui's client), and a field drawn with no
@@ -273,12 +275,21 @@ companion, so a rename is one string.
 
 ## Shared slots live in traits, not in every component
 
-A slot several components carry is defined ONCE, in `FormControl.scala` (validity: `invalid`,
+A slot several components carry is defined ONCE, in `FormControl.scala` (`HasValidity`: `invalid`,
 `invalidMessage`) or `Capabilities.scala` (`HasAccessibleName`, `HasAccessibleNameRef`,
 `HasAccessibleDescription`, `HasPlaceholder`, `HasTooltip`, `HasEmptyContent`). The trait carries
 the setter and its scaladoc; a component supplies only the one-line `withX` writer. The slots that form one group
 (validity, accessible name and id) have one reader and one writer for the whole group, see "A component is a class over its state".
 
+- **A control a form binds is a `FormControl[A]` over the value type of its field** (`String`, `Boolean`, `Double`,
+  `Maybe[A]`, `Set[A]`, `Seq[UI.FilePayload]`), never a trait per value type and never a marker: `bind(field: FormField[A])`
+  takes exactly that field, so the value type alone picks the binding and a field of another type is reported against the
+  field the control binds (`FormControlTest`). The control writes `bindRef(ref)` and `hearBlur(f)`, one line each over its own
+  setters, generated (`this.value(ref)`) or written. A setter only some controls of a value type have, the binding asks for
+  through `HasSetter` (a choice's `selection` over the option type, the number binding's `integer`), with an instance in the
+  companion of a component that writes it by hand. A clause with a narrower receiver (`FormControl[Maybe[A]]`, which binds a
+  field that always holds an option too) has ONE `bind` over the field's type, its field picked by evidence (`ChoiceField`):
+  Scala picks the narrower receiver before it reads the field only while one alternative there takes it.
 - **Adding a slot to a component that already has a trait for it means mixing the trait in**, not
   writing another setter. A second spelling of an existing slot is the drift these traits exist to
   stop.
@@ -385,8 +396,9 @@ There is no public setter that takes the key a component compares by. Rules:
 - **A value no option carries is a data error**, named in a `.p-uic-diagnostic` card
   (`Diagnostics.unknown`) and shown in the trigger from the value itself, unless `loading` says the
   options are still arriving.
-- **Forms bind by the option type**: `ChoiceFormControl[A]` / `MultiChoiceFormControl[A]`, so `bind` takes a
-  `FormField[A]`, `FormField[Maybe[A]]` or `FormField[Set[A]]` (whatever its rules refine to).
+- **Forms bind by the option type**: a single choice is a `FormControl[Maybe[A]]` with a `selection` over `A`, a multiple one a
+  `FormControl[Set[A]]`, so `bind` takes a `FormField[A]` or `FormField[Maybe[A]]` (`form.ChoiceField` says which) or a
+  `FormField[Set[A]]` (whatever its rules refine to).
 - **An internal host** that renders inside its own subscription (the DataTable filter menu) passes the held
   option with `current(Maybe[A])` and reads `onChange`; it never reaches for keys.
 - **A model carrying its own id takes the id's type**: `Listbox[K]` / `ListItem[K]`, `Tree[K]` / `TreeNode[K]`,
@@ -427,9 +439,9 @@ what the type already says. Rules:
   callbacks; the wrappers delegate every shared setter to the `DatePicker` they hold and render through it,
   so no logic is duplicated. One type with three callback names, or with arity-one overloads, was the
   alternative: the first leaves dead callbacks possible, the second breaks lambda inference.
-- **Only `DatePicker[A]` binds a form field** (`OptionalFormControl[A]`). The wrappers carry `FormControl`'s
-  validation vocabulary but no form binding: `MultiChoiceFormControl` binds through `selection`, which would
-  be a second name for the set `values` already bound, and no field holds a range's two refs.
+- **Only `DatePicker[A]` binds a form field** (a `FormControl[Maybe[A]]`). The wrappers carry the validation vocabulary
+  (`HasValidity`) but no form binding: a set binds through `selection` (`FormControl[Set[A]]`), which would be a second
+  name for the set `values` already bound, and no field holds a range's two refs.
 
 ## Form rules refine, and submit hands over what they yield
 

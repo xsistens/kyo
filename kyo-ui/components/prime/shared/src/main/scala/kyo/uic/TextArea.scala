@@ -10,7 +10,7 @@ import kyo.UI.*
   * `Bound.Ref`), `onInput`/`onChange`, and the caret-preserving morph path are
   * all inherited. The `value` binding is [[Input]]'s: a `SignalRef` two-way, any other signal one way.
   */
-final class TextArea private[uic] (private[uic] val p: TextArea.Props) extends Node, TextFormControl, HasPlaceholder,
+final class TextArea private[uic] (private[uic] val p: TextArea.Props) extends Node, FormControl[String], HasPlaceholder,
       HasAccessibleNameRef,
       HasProps:
     import p.*
@@ -71,8 +71,10 @@ final class TextArea private[uic] (private[uic] val p: TextArea.Props) extends N
     /** Spans the full width of its container (`.p-textarea-fluid`). */
     def fluid(v: Boolean): TextArea = new TextArea(p.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new TextArea(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                      = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self              = new TextArea(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[String])(using Frame): TextArea  = value(ref)
+    private[uic] def hearBlur(f: String => UI.Action)(using Frame): TextArea = onBlur(f)
 
     def onInput(f: String => UI.Action)(using Frame): TextArea  = new TextArea(p.copy(valueSlot = valueSlot.hear(f)))
     def onChange(f: String => UI.Action)(using Frame): TextArea =

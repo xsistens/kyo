@@ -19,7 +19,7 @@ import kyo.UI.*
   * wires value, validity, message and the blur trigger in one call.
   */
 final class ToggleButton private[uic] (private[uic] val p: ToggleButton.Props)
-    extends Component(Setters[ToggleButton.Props, ToggleButton]), Node, FormControl, HasAccessibleNameRef:
+    extends Component(Setters[ToggleButton.Props, ToggleButton]), Node, FormControl[Boolean], HasAccessibleNameRef:
 
     type Self = ToggleButton
 
@@ -46,8 +46,10 @@ final class ToggleButton private[uic] (private[uic] val p: ToggleButton.Props)
     /** Drops both labels: the label span renders a non-breaking space (icon-only look). */
     def noLabels: ToggleButton = new ToggleButton(p.copy(onLabel = Opt.unset, offLabel = Opt.unset))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = p.validity
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new ToggleButton(p.copy(validity = v))
+    private[uic] def validitySlots: FieldValidity.Slots                           = p.validity
+    private[uic] def withValidity(v: FieldValidity.Slots): Self                   = new ToggleButton(p.copy(validity = v))
+    private[uic] def bindRef(ref: SignalRef[Boolean])(using Frame): ToggleButton  = this.checked(ref)
+    private[uic] def hearBlur(f: Boolean => UI.Action)(using Frame): ToggleButton = this.onBlur(f)
 
     /** One instance per place, drawn once: it holds the state the reader gives an unbound button, and a host region that runs
       * again hands it the run's props instead of starting it over (see [[ToggleButton.drawn]]).

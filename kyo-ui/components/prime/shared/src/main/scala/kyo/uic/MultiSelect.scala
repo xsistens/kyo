@@ -54,7 +54,7 @@ enum MultiSelectDisplay derives CanEqual:
   * `id` lands on the field root, the combobox that holds the tab stop, and the panel derives `$id-list` and
   * `$id-option-<n>` from it (a minted base stands in where none is given).
   */
-final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A]) extends Node, MultiChoiceFormControl[A],
+final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A]) extends Node, FormControl[Set[A]],
       HasEmptyContent,
       HasTooltip, HasPlaceholder, HasAccessibleNameRef, HasProps:
     import p.*
@@ -105,7 +105,6 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
       * own state; with no [[onChange]] that is reported in a card. A member no option carries stays in the set while the
       * others toggle, and the trigger shows it from the value itself.
       */
-    @targetName("selectionSet")
     def selection(v: Set[A] | Signal[Set[A]]): MultiSelect[A] =
         new MultiSelect(p.copy(choice = Present(MultiChoice(ReactiveValue[Set[A]](v)))))
 
@@ -221,8 +220,10 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
     /** Spans the full width of its container (`.p-multiselect-fluid`). */
     def fluid(v: Boolean): MultiSelect[A] = new MultiSelect(p.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new MultiSelect(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                            = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self                    = new MultiSelect(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[Set[A]])(using Frame): MultiSelect[A]  = selection(ref)
+    private[uic] def hearBlur(f: Set[A] => UI.Action)(using Frame): MultiSelect[A] = onBlur(f)
 
     /** Fired with the FULL set of options now held after every selection change (toggle,
       * select-all, chip remove, clear). A gesture that changes nothing fires nothing.
@@ -234,7 +235,6 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
       * `onChange` it fires even when nothing was changed. The form-validation layer
       * wires its `Blur` trigger here.
       */
-    @targetName("onBlurSet")
     def onBlur(f: Set[A] => UI.Action)(using Frame): MultiSelect[A] = new MultiSelect(p.copy(onBlurF = Present(Callback.of(f))))
 
     /** Every selectable option in render order, groups flattened away. The value
