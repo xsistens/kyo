@@ -23,6 +23,12 @@ import kyo.UI.*
   * text with Prime's OWN default rules: medium = two of [lowercase, uppercase,
   * digit] and at least 6 chars; strong = all three and at least 8 chars;
   * anything else weak; empty shows `promptLabel`.
+  *
+  * The text is the reader's: unbound, the instance keeps it in a ref of its own from an empty start, and a constant is where
+  * that ref starts, so the meter judges what was typed and a reveal or a host region that runs again keeps it. A `SignalRef`
+  * binds two way; any other `Signal[String]` binds one way, the field and the meter show it, and an edit only reports through
+  * `onInput` and `onChange`. Validation is Prime's `.p-invalid` model: `invalid` plus the optional `invalidMessage` row below
+  * the field and the meter.
   */
 final class Password private[uic] (private[uic] val p: Password.Props) extends Component(Setters[Password.Props, Password]), Node,
       FormControl[String], HasPlaceholder, HasAccessibleNameRef, HasAccessibleDescription:
