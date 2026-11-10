@@ -32,7 +32,7 @@ end InputType
   * plus the optional `invalidMessage` row below the field.
   */
 final class Input private[uic] (private[uic] val p: Input.Props) extends Component(Setters[Input.Props, Input]), Node,
-      GeneratedTextFormControl,
+      FormControl[String],
       HasPlaceholder, HasAccessibleNameRef, HasAccessibleDescription:
 
     type Self = Input
@@ -65,6 +65,8 @@ final class Input private[uic] (private[uic] val p: Input.Props) extends Compone
     private[uic] def withAccessibleDescription(v: Maybe[Prop[String]]): Input = new Input(p.copy(description = v))
     private[uic] def validitySlots: FieldValidity.Slots                       = p.validity
     private[uic] def withValidity(v: FieldValidity.Slots): Self               = new Input(p.copy(validity = v))
+    private[uic] def bindRef(ref: SignalRef[String])(using Frame): Input      = this.value(ref)
+    private[uic] def hearBlur(f: String => UI.Action)(using Frame): Input     = this.onBlur(f)
 
     /** Fires with the text the field holds when the reader commits it (focus leaving after an edit, or Enter). It hears the value
       * too, so a one-way binding with only an `onChange` says nothing.

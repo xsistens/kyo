@@ -52,7 +52,7 @@ import scala.annotation.targetName
   * `id` lands on the field root, the combobox that holds the tab stop, and the panel derives `$id-list` and
   * `$id-option-<n>` from it (a minted base stands in where none is given).
   */
-final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends Node, ChoiceFormControl[A], HasEmptyContent, HasTooltip,
+final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends Node, FormControl[Maybe[A]], HasEmptyContent, HasTooltip,
       HasPlaceholder, HasAccessibleNameRef, HasProps:
     import p.*
 
@@ -268,8 +268,10 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
     /** Spans the full width of its container (`.p-select-fluid`). */
     def fluid(v: Boolean): Select[A] = new Select(p.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Select(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self                 = new Select(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[Maybe[A]])(using Frame): Select[A]  = selection(ref)
+    private[uic] def hearBlur(f: Maybe[A] => UI.Action)(using Frame): Select[A] = onBlur(f)
 
     /** Fired with the option now chosen, after the write (`Absent` on clear). A pick of the option already chosen changes
       * nothing and fires nothing. Fires before [[onPick]].
@@ -818,6 +820,10 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
 end Select
 
 object Select:
+    /** How a field that always holds an option binds: through `selection` over `A` ([[HasSetter]]). */
+    given selection[A]: HasSetter[Select[A], "selection", UI.Prop[A]] with
+        def apply(c: Select[A], v: UI.Prop[A])(using Frame): Select[A] = c.selection(v)
+
     final private[uic] case class Props[A](
         // The rows the body draws, resolved from `optionSources` by the region that draws them.
         optionsV: List[OptionItem[A]],

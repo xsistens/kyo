@@ -24,7 +24,7 @@ import kyo.UI.*
   * transport attaches) the cells carry no ids and focus stays put; Tab /
   * Shift-Tab and the pointer always work.
   */
-final class InputOtp private[uic] (private[uic] val p: InputOtp.Props) extends Node, TextFormControl, HasAccessibleName, HasProps:
+final class InputOtp private[uic] (private[uic] val p: InputOtp.Props) extends Node, FormControl[String], HasAccessibleName, HasProps:
     import p.*
 
     type Self = InputOtp
@@ -68,8 +68,10 @@ final class InputOtp private[uic] (private[uic] val p: InputOtp.Props) extends N
     /** Fill variant: `Filled` renders `.p-variant-filled` cells. */
     def variant(v: FieldVariant): InputOtp = new InputOtp(p.copy(variantV = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new InputOtp(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                      = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self              = new InputOtp(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[String])(using Frame): InputOtp  = value(ref)
+    private[uic] def hearBlur(f: String => UI.Action)(using Frame): InputOtp = onBlur(f)
 
     /** Fired with the FULL code after a cell write-back. */
     def onChange(f: String => UI.Action)(using Frame): InputOtp = new InputOtp(p.copy(valueSlot = valueSlot.hear(f)))

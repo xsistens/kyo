@@ -13,7 +13,7 @@ import kyo.UI.*
   * handle slot with a per-state glyph riding inside the sliding handle. The `checked`
   * binding mirrors [[CheckBox]].
   */
-final class ToggleSwitch private[uic] (private[uic] val p: ToggleSwitch.Props) extends Node, BooleanFormControl, HasTooltip,
+final class ToggleSwitch private[uic] (private[uic] val p: ToggleSwitch.Props) extends Node, FormControl[Boolean], HasTooltip,
       HasAccessibleNameRef, HasProps:
     import p.*
 
@@ -47,9 +47,11 @@ final class ToggleSwitch private[uic] (private[uic] val p: ToggleSwitch.Props) e
     /** Native `name` for HTML form participation. */
     def name(v: String): ToggleSwitch = new ToggleSwitch(p.copy(nameV = Present(v)))
 
-    private[uic] def validitySlots: FieldValidity.Slots                = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self        = new ToggleSwitch(p.copy(validityV = v))
-    private[uic] def withTooltip(v: Maybe[Prop[String]]): ToggleSwitch = new ToggleSwitch(p.copy(tooltipV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                           = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self                   = new ToggleSwitch(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[Boolean])(using Frame): ToggleSwitch  = checked(ref)
+    private[uic] def hearBlur(f: Boolean => UI.Action)(using Frame): ToggleSwitch = onBlur(f)
+    private[uic] def withTooltip(v: Maybe[Prop[String]]): ToggleSwitch            = new ToggleSwitch(p.copy(tooltipV = v))
 
     /** Prime's handle slot: a glyph rendered inside the sliding
       * `.p-toggleswitch-handle`, `checked` while on, `unchecked` while off.

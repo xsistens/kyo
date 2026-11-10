@@ -69,7 +69,7 @@ end FieldValidity
 
 private[uic] object FieldValidity:
 
-    /** What a control holds of its validity, as its setters stored it (the slots [[FormControl]] offers). The one field
+    /** What a control holds of its validity, as its setters stored it (the slots [[HasValidity]] offers). The one field
       * `validityV` of a control's state; [[apply]] resolves it per render.
       */
     final case class Slots(

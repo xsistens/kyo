@@ -59,7 +59,7 @@ abstract class ReactiveValueContract extends UicTest:
       *   for a component whose fixed state is said by another element than the one the gesture lands on (a wrapper that
       *   takes the click around the control the reader focuses): that element. Absent, the control says it.
       * @param startText
-      *   for a text field (`TextFormControl`), whose constant is the text it starts with (the HTML `value` attribute the
+      *   for a text field (`FormControl[String]`), whose constant is the text it starts with (the HTML `value` attribute the
       *   reader edits) rather than a value meant to stay: such a constant, other than `start` so a case can see it shown.
       *   A constant nobody hears is then shown, editable and not called fixed, with no card; and where the component keeps
       *   the text itself (`keptNatively` absent), a gesture on a constant changes it as it would unbound. Absent, a

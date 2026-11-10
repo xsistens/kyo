@@ -25,16 +25,16 @@ import scala.annotation.targetName
   * uniqueness source, so the `name` attribute is only emitted when set.
   * `onIcon`/`offIcon` swap the star glyphs for any [[IconGlyph]].
   *
-  * A [[NumberFormControl]], so `uic.Rating().bind(field)` wires value, validity,
+  * A `FormControl[Double]`, so `uic.Rating().bind(field)` wires value, validity,
   * message and the blur trigger in one call. The family speaks `Double`; a Rating
   * rounds on the way in and writes whole stars on the way out, which is exactly what
-  * `NumberFormControl.integer` asks for and why that setter has nothing left to do
+  * the number binding's `integer` asks for and why that setter has nothing left to do
   * here.
   *
   * `id` lands on the hidden radio a Tab reaches, since the group itself takes no focus: the checked star's,
   * or the first star's while none is checked.
   */
-final class Rating private[uic] (private[uic] val p: Rating.Props) extends Node, NumberFormControl, HasAccessibleName, HasProps:
+final class Rating private[uic] (private[uic] val p: Rating.Props) extends Node, FormControl[Double], HasAccessibleName, HasProps:
     import p.*
 
     type Self = Rating
@@ -53,7 +53,7 @@ final class Rating private[uic] (private[uic] val p: Rating.Props) extends Node,
       */
     def value(v: Int | Signal[Int]): Rating = new Rating(p.copy(valueSlot = valueSlot.bind(v)))
 
-    /** The `Double`-shaped binding of [[NumberFormControl]], so a Rating can carry a
+    /** The `Double`-shaped binding of a `FormControl[Double]`, so a Rating can carry a
       * `Form.numberField`. The stars remain whole: the value is read rounded and written back as a
       * whole number, which is what [[integer]] asks of this family and what a star count is anyway.
       *
@@ -99,10 +99,12 @@ final class Rating private[uic] (private[uic] val p: Rating.Props) extends Node,
     /** Glyph for the options beyond the value (Prime default: the outline star). */
     def offIcon(glyph: IconGlyph): Rating = new Rating(p.copy(offIconV = Present(glyph)))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Rating(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                    = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self            = new Rating(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[Double])(using Frame): Rating  = value(ref)
+    private[uic] def hearBlur(f: Double => UI.Action)(using Frame): Rating = onBlur(f)
 
-    /** Accepted for the [[NumberFormControl]] contract and satisfied by construction: a
+    /** Accepted for the number binding's whole-number constraint and satisfied by construction: a
       * star count is always whole, so the constraint has nothing left to enforce here.
       * Returns this unchanged rather than storing a flag that could never be false in
       * effect.
@@ -233,6 +235,10 @@ final class Rating private[uic] (private[uic] val p: Rating.Props) extends Node,
 end Rating
 
 object Rating:
+    /** How a typed number field turns on the whole-number constraint: through `integer` ([[HasSetter]]). */
+    given integer: HasSetter[Rating, "integer", Boolean] with
+        def apply(c: Rating, v: Boolean)(using Frame): Rating = c.integer(v)
+
     final private[uic] case class Props(
         valueSlot: Controlled[Int] = Controlled(),
         starsV: Int = 5,

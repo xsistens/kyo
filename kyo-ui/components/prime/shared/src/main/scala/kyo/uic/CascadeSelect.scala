@@ -80,7 +80,7 @@ end CascadeItem
   * `id` lands on the field root, the combobox that holds the tab stop, and the chain derives `$id-list` and the
   * travelling highlight `$id-active` from it (a minted base stands in where none is given).
   */
-final class CascadeSelect[A] private[uic] (private[uic] val p: CascadeSelect.Props[A]) extends Node, ChoiceFormControl[A], HasTooltip,
+final class CascadeSelect[A] private[uic] (private[uic] val p: CascadeSelect.Props[A]) extends Node, FormControl[Maybe[A]], HasTooltip,
       HasPlaceholder, HasAccessibleNameRef, HasProps:
     import p.*
 
@@ -161,8 +161,10 @@ final class CascadeSelect[A] private[uic] (private[uic] val p: CascadeSelect.Pro
     /** Spans the full width of its container (`.p-cascadeselect-fluid`). */
     def fluid(v: Boolean): CascadeSelect[A] = new CascadeSelect(p.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new CascadeSelect(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                                = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self                        = new CascadeSelect(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[Maybe[A]])(using Frame): CascadeSelect[A]  = selection(ref)
+    private[uic] def hearBlur(f: Maybe[A] => UI.Action)(using Frame): CascadeSelect[A] = onBlur(f)
 
     /** Fired with the leaf now chosen, after the write. A pick of the leaf already chosen changes nothing and fires nothing.
       * Fires before [[onPick]].
@@ -540,6 +542,10 @@ final class CascadeSelect[A] private[uic] (private[uic] val p: CascadeSelect.Pro
 end CascadeSelect
 
 object CascadeSelect:
+    /** How a field that always holds an option binds: through `selection` over `A` ([[HasSetter]]). */
+    given selection[A]: HasSetter[CascadeSelect[A], "selection", UI.Prop[A]] with
+        def apply(c: CascadeSelect[A], v: UI.Prop[A])(using Frame): CascadeSelect[A] = c.selection(v)
+
     final private[uic] case class Props[A](
         // The roots the body draws, resolved from `itemSources` by the region that draws them.
         items: List[CascadeItem[A]],

@@ -2,7 +2,6 @@ package kyo.uic
 
 import kyo.*
 import kyo.UI.*
-import scala.annotation.targetName
 
 /** Slider: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Slider anatomy: `div.p-slider.p-component.p-slider-horizontal|-vertical` >
@@ -18,7 +17,7 @@ import scala.annotation.targetName
   * server-side from the bound value ((value − min) / (max − min)), so a ref
   * write from anywhere moves the slider.
   *
-  * A [[NumberFormControl]], so `uic.Slider().bind(field)` wires value, validity,
+  * A `FormControl[Double]`, so `uic.Slider().bind(field)` wires value, validity,
   * message, the blur trigger and (for a whole-valued field) the [[integer]]
   * constraint in one call.
   *
@@ -29,7 +28,7 @@ import scala.annotation.targetName
   * overlapping native inputs fighting for the same pointer surface, so it is deferred
   * rather than approximated.
   */
-final class Slider private[uic] (private[uic] val p: Slider.Props) extends Node, NumberFormControl, HasAccessibleName, HasProps:
+final class Slider private[uic] (private[uic] val p: Slider.Props) extends Node, FormControl[Double], HasAccessibleName, HasProps:
     import p.*
 
     type Self = Slider
@@ -47,7 +46,6 @@ final class Slider private[uic] (private[uic] val p: Slider.Props) extends Node,
       * opt out of write-back; pass `ref.readOnly` for that. A derived signal is already one-way and is
       * the better answer when the value is computed rather than user-edited.
       */
-    @targetName("valueNumber")
     def value(v: Double | Signal[Double]): Slider = new Slider(p.copy(valueSlot = valueSlot.bind(v)))
 
     /** Lower bound (Prime default 0). */
@@ -79,8 +77,10 @@ final class Slider private[uic] (private[uic] val p: Slider.Props) extends Node,
       */
     def readonly(v: Boolean): Slider = new Slider(p.copy(readonlyFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Slider(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                    = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self            = new Slider(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[Double])(using Frame): Slider  = value(ref)
+    private[uic] def hearBlur(f: Double => UI.Action)(using Frame): Slider = onBlur(f)
 
     /** Fired with the NEW (clamped) value after the ref write-back. */
     def onChange(f: Double => UI.Action)(using Frame): Slider = new Slider(p.copy(valueSlot = valueSlot.hear(f)))
@@ -159,6 +159,10 @@ final class Slider private[uic] (private[uic] val p: Slider.Props) extends Node,
 end Slider
 
 object Slider:
+    /** How a typed number field turns on the whole-number constraint: through `integer` ([[HasSetter]]). */
+    given integer: HasSetter[Slider, "integer", Boolean] with
+        def apply(c: Slider, v: Boolean)(using Frame): Slider = c.integer(v)
+
     final private[uic] case class Props(
         valueSlot: Controlled[Double] = Controlled(),
         minV: Double = 0.0,
