@@ -74,6 +74,30 @@ class InputTest extends ReactiveValueContract:
         end for
     }
 
+    "a signal name, maxLength, inputFilter or inputMask that changes reaches the field" in {
+        for
+            name   <- Signal.initRef("a")
+            cap    <- Signal.initRef(3)
+            filter <- Signal.initRef("decimal")
+            mask   <- Signal.initRef("99")
+            ui = uic.Input().name(name).maxLength(cap).inputFilter(filter).inputMask(mask).render
+            _ <- name.set("b")
+            _ <- cap.set(5)
+            _ <- filter.set("int")
+            _ <- mask.set("999")
+            f <- field(ui)
+        yield
+            val shown = f match
+                case c: UI.Ast.ConstrainedInput =>
+                    (f.attrs.jsProps.get("name"), f.attrs.jsProps.get("maxLength"), c.inputFilter, c.inputMask)
+                case other => throw new AssertionError(s"not a free-text field: $other")
+            assert(
+                shown == (Some("b"), Some("5"), Present(UI.InputFilter.Digits), Present("999")),
+                s"name, maxLength, filter and mask after the change: $shown"
+            )
+        end for
+    }
+
     "a value bound one way follows its owner" in {
         for
             held <- Signal.initRef("a")
