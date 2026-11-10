@@ -195,7 +195,7 @@ final class DataView[A] private[uic] (private[uic] val p: DataView.Props[A]) ext
             .cssClass("p-dataview")
             .cssClass("p-component")
             .cssClass(s"p-dataview-${layoutV.token}")
-        el = loadingV.foldFlag(el)(el.cssClass("p-dataview-loading", _))
+        el = loadingV.foldFlag(el)(on => el.when(on)(_.cssClass("p-dataview-loading")))
         el(
             UI.children(loadingOverlay ++ headerSlot ++ (content :: paginatorUI) ++ footerSlot)*
         )

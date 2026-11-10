@@ -286,7 +286,7 @@ final class Carousel[A] private[uic] (private[uic] val p: Carousel.Props[A]) ext
                 .id(s"$stripId-i$i")
                 .role("group")
                 .aria("roledescription", "slide")
-                .cssClass("p-carousel-item-active", r.map(p => inWindow(i, p, n)))
+                .when(r.map(p => inWindow(i, p, n)))(_.cssClass("p-carousel-item-active"))
                 .style(_.flexGrow(0).flexShrink(0).flexBasis(basis(n)))(
                     templateF.map(_(a)).getOrElse(stringToUI(a.toString))
                 )

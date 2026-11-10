@@ -100,7 +100,7 @@ final class Panel private[uic] (private[uic] val p: Panel.Props) extends Node, H
         val on = toggleOn
         on match
             case ReactiveValue.Const(b) => if b then shell = shell.cssClass("p-panel-toggleable")
-            case ReactiveValue.Dyn(sig) => shell = shell.cssClass("p-panel-toggleable", sig)
+            case ReactiveValue.Dyn(sig) => shell = shell.when(sig)(_.cssClass("p-panel-toggleable"))
         access.name.foreach(n => shell = shell.aria("label", n))
 
         // The header slot content: a custom UI wins over the plain title text.

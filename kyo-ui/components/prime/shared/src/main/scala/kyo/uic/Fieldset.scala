@@ -87,7 +87,7 @@ final class Fieldset private[uic] (private[uic] val p: Fieldset.Props) extends N
         val on = toggleOn
         on match
             case ReactiveValue.Const(b) => if b then shell = shell.cssClass("p-fieldset-toggleable")
-            case ReactiveValue.Dyn(sig) => shell = shell.cssClass("p-fieldset-toggleable", sig)
+            case ReactiveValue.Dyn(sig) => shell = shell.when(sig)(_.cssClass("p-fieldset-toggleable"))
         // A constant nobody hears is fixed: the toggle stays a tab stop and says it changes nothing.
         val fixed = collapsedSlot.fixed
 

@@ -198,8 +198,8 @@ object Password:
         // The eye offers what a press does: to reveal while masked, to mask while revealed. Disabled, it is silent.
         val eye = span
             .cssClass("p-password-toggle-mask-icon")
-            .cssClass("p-password-mask-icon", revealed)
-            .cssClass("p-password-unmask-icon", revealed.map(!_))
+            .when(revealed)(_.cssClass("p-password-mask-icon"))
+            .when(revealed.map(!_))(_.cssClass("p-password-unmask-icon"))
             .role("button")
             .tabIndex(0)
             .aria("label", revealed.map(on => if on then "Hide password" else "Show password"))
@@ -243,8 +243,8 @@ object Password:
                 .cssClass("p-password")
                 .cssClass("p-component")
                 .cssClass("p-inputwrapper")
-                .cssClass("p-inputwrapper-filled", UI.reactive(b.text.read.nonEmpty))
-                .cssClass("p-password-fluid", fluid)(UI.children(field.renderInPlace, Maybe.when(b.eye)(eye))*)
+                .when(UI.reactive(b.text.read.nonEmpty))(_.cssClass("p-inputwrapper-filled"))
+                .when(fluid)(_.cssClass("p-password-fluid"))(UI.children(field.renderInPlace, Maybe.when(b.eye)(eye))*)
             // The inline strength meter (see the class doc for the deviation): the one region, over the text.
             val body = if b.meter then fragment(root, UI.reactive(meter(props, b.text.read))) else root
             validity.follow(body)

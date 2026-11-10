@@ -137,7 +137,7 @@ final class ToggleSwitch private[uic] (private[uic] val p: ToggleSwitch.Props) e
 
         var root = div.cssClass("p-toggleswitch").cssClass("p-component")
         if isChecked then root = root.cssClass("p-toggleswitch-checked")
-        root = disabledFlag.foldFlag(root)(root.cssClass("p-disabled", _))
+        root = disabledFlag.foldFlag(root)(on => root.when(on)(_.cssClass("p-disabled")))
         root = validity.markClass(root)
         root = root.title(tooltipV)
 

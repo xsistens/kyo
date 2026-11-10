@@ -258,7 +258,7 @@ final class Accordion[K] private[uic] (private[uic] val p: Accordion.Props[K]) e
         Frame
     ): UI =
         val active = open.map(_.contains(p.p.id))
-        var shell  = div.cssClass("p-accordionpanel").id(shellId(base, p.p.id)).cssClass("p-accordionpanel-active", active)
+        var shell  = div.cssClass("p-accordionpanel").id(shellId(base, p.p.id)).when(active)(_.cssClass("p-accordionpanel-active"))
         if p.p.disabled then shell = shell.cssClass("p-disabled")
 
         val headerSlot: UI = p.p.headerUI match
@@ -292,7 +292,7 @@ final class Accordion[K] private[uic] (private[uic] val p: Accordion.Props[K]) e
         // Content is ALWAYS present: the grid 0fr row hides a collapsed panel.
         val contentEl: UI =
             div.cssClass("p-accordioncontent").role("region").cssClass("p-uic-collapse").id(contentId(base, p.p.id))
-                .cssClass("p-uic-collapsed", active.map(!_))(
+                .when(active.map(!_))(_.cssClass("p-uic-collapsed"))(
                     div.cssClass("p-accordioncontent-wrapper")(
                         div.cssClass("p-accordioncontent-content")(p.p.content)
                     )
