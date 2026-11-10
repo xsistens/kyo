@@ -87,7 +87,7 @@ region that runs again must not start a component over and take the reader's sta
   subscription, and a mount per option would be a mount inside a mount.
 - **A native field whose chrome follows its own state switches in place, never draws itself again** (Password): its text is always a
   channel (the instance's own ref, or the caller's binding, never a stated constant), its `type` follows the reveal through kyo-ui's
-  `textType` channel (`Input.inputType(Signal[UI.TextType])`), and only what is drawn from the text (the meter) is a region, a sibling of
+  `textType` channel (the package-private `Input.revealing`, which needs no number flag and so no region), and only what is drawn from the text (the meter) is a region, a sibling of
   the field. SplitButton builds both segments once and draws only its menu panel as a region.
 - **Nothing under a region that runs again may state what the reader changes** (T13, `UI.Loss`). A run keeps every element in place
   (focus, caret, typed text and ticks survive it), but a native field's `value`, `checked` or `selected` stated as a constant is put
