@@ -237,11 +237,8 @@ object Input:
         val maxLength   = props(_.maxLength)
         val inputFilter = props(_.inputFilter)
         val inputMask   = props(_.inputMask)
-        val heard       = Heard(
-            s => props.call(_.value.hearer).map(_.fold(Kyo.unit: UI.Action)(_(s))),
-            s => props.call(_.onChange).map(_.fold(Kyo.unit: UI.Action)(_(s))),
-            (_, s) => props.call(_.onBlur).map(_.fold(Kyo.unit: UI.Action)(_(s)))
-        )
+        val blur        = props.hearing(_.onBlur)
+        val heard       = Heard(props.hearing(_.value.hearer), props.hearing(_.onChange), (_, s) => blur(s))
         UI.reactive {
             val b         = base.read
             val validity  = FieldValidity(b.validity)
