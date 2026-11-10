@@ -108,10 +108,12 @@ object Input:
         readonly: Prop[Boolean] = false,
         /** Marks the field required (the native constraint and `aria-required`). A signal toggles both in place. */
         required: Prop[Boolean] = false,
-        /** Native `name` for HTML form participation. */
-        name: Opt[String] = Opt.unset,
-        /** Native `maxlength`: caps the number of characters (a negative cap is none at all). */
-        maxLength: Opt[Int] = Opt.unset,
+        /** Native `name` for HTML form participation. A signal draws the field again when it changes. */
+        name: Opt[Prop[String]] = Opt.unset,
+        /** Native `maxlength`: caps the number of characters (a negative cap is none at all). A signal draws the field again
+          * when it changes.
+          */
+        maxLength: Opt[Prop[Int]] = Opt.unset,
         /** The native input type, [[InputType.Text]] by default. A signal that moves between the free-text types switches the type
           * on the field the page has, in place (kyo-ui's `textType` channel), so the text the reader typed, the caret and focus
           * stay. A change to or from [[InputType.Number]] draws the field again, as a number field: `number` reads its value
@@ -136,15 +138,15 @@ object Input:
           * whitelist charset. The client rejects disallowed `beforeinput` keystrokes before they reach the field, so an invalid
           * character never becomes visible, and the filtered value is what reaches `onInput` and the ref. The string stays this
           * library's surface; kyo takes a typed [[kyo.UI.InputFilter]], which `Input.asInputFilter` maps onto. Not on a `Number`
-          * field, which constrains its content through its type.
+          * field, which constrains its content through its type. A signal draws the field again when it changes.
           */
-        inputFilter: Opt[String] = Opt.unset,
+        inputFilter: Opt[Prop[String]] = Opt.unset,
         /** Client-local input mask, e.g. `"(999) 999-9999"`: `9` = digit, `a` = letter, `*` = alphanumeric; every other character
           * is a literal. The client formats the field as the reader types and the MASKED value is what reaches `onInput`,
           * `onChange` and the ref. Prefer the dedicated [[InputMask]] component for phone, date and ssn fields. Not on a `Number`
-          * field.
+          * field. A signal draws the field again when it changes.
           */
-        inputMask: Opt[String] = Opt.unset,
+        inputMask: Opt[Prop[String]] = Opt.unset,
         onChange: Maybe[String => UI.Action] = Absent,
         /** Fires on focus loss (native `blur`) with the text the field holds as focus leaves it, which kyo-ui's blur carries: what
           * the reader typed, also when nothing binds the field or it started from a constant. Unlike `onChange` it fires even when
@@ -180,11 +182,7 @@ object Input:
         blurs: Boolean,
         unheard: Boolean,
         placeholder: Maybe[Prop[String]],
-        name: Maybe[String],
-        maxLength: Maybe[Int],
         focusAuto: Boolean,
-        inputFilter: Maybe[String],
-        inputMask: Maybe[String],
         validity: FieldValidity.Slots,
         access: Accessibility,
         description: Maybe[Prop[String]],
@@ -204,11 +202,7 @@ object Input:
                 q.onBlur.isDefined,
                 q.value.deaf,
                 q.placeholder,
-                q.name,
-                q.maxLength,
                 q.focusAuto,
-                q.inputFilter,
-                q.inputMask,
                 q.validity,
                 q.access,
                 q.description,
@@ -236,7 +230,12 @@ object Input:
         // What builds the element is only whether it is a number field; between the free-text types the type is a channel.
         val number   = Prop.map(kind)(_ == InputType.Number)
         val freeText = Prop.map(kind)(_.textType)
-        val heard    = Heard(
+        // The native attributes have no channel: a signal among them is read where the field is built, so it draws the field again.
+        val name        = props(_.name)
+        val maxLength   = props(_.maxLength)
+        val inputFilter = props(_.inputFilter)
+        val inputMask   = props(_.inputMask)
+        val heard       = Heard(
             s => props.call(_.value.hearer).map(_.fold(Kyo.unit: UI.Action)(_(s))),
             s => props.call(_.onChange).map(_.fold(Kyo.unit: UI.Action)(_(s))),
             (_, s) => props.call(_.onBlur).map(_.fold(Kyo.unit: UI.Action)(_(s)))
@@ -244,13 +243,19 @@ object Input:
         UI.reactive {
             val b         = base.read
             val validity  = FieldValidity(b.validity)
+            val native    = Native(name.read, maxLength.read)
             val field: UI =
-                if number.read then shared(numberInput, b, props, validity, heard)
-                else shared(constrained(input, b).textType(b.revealedAs.getOrElse(freeText)), b, props, validity, heard)
+                if number.read then shared(numberInput, b, native, props, validity, heard)
+                else
+                    val typed = constrained(input, inputFilter.read, inputMask.read).textType(b.revealedAs.getOrElse(freeText))
+                    shared(typed, b, native, props, validity, heard)
             val followed = validity.follow(field)
             if b.unheard then fragment(followed, unheardCard(b.unheardAs, disabled, readonly)) else followed
         }
     end drawn
+
+    /** The native attributes as this run of the block reads them. */
+    final private case class Native(name: Maybe[String], maxLength: Maybe[Int])
 
     /** The run's hearers, read when their event comes. */
     final private case class Heard(input: String => UI.Action, change: String => UI.Action, blur: (UI.MouseEvent, String) => UI.Action)
@@ -261,6 +266,7 @@ object Input:
     private def shared[E <: (UI.Ast.TextInput & UI.Ast.Interactive) { type Self = E }](
         el: E,
         b: Base,
+        native: Native,
         props: UI.Live[Props],
         validity: FieldValidity,
         heard: Heard
@@ -284,8 +290,8 @@ object Input:
             .readOnly(props(_.readonly))
             .required(required)
             .ariaFlag("required", required)
-            .when(b.name)(_.jsProp("name", _))
-            .when(b.maxLength)((e, n) => e.jsProp("maxLength", math.max(0, n).toString))
+            .when(native.name)(_.jsProp("name", _))
+            .when(native.maxLength)((e, n) => e.jsProp("maxLength", math.max(0, n).toString))
             .aria("label", b.access.name)
             .aria("labelledby", b.access.nameRef)
             .aria("description", b.description)
@@ -298,8 +304,12 @@ object Input:
       * in, because a `number` field reads its value as the empty string while the content is not a valid number, so a
       * character-level filter cannot see what it is filtering. It constrains its content through `type`, `min`, `max` and `step`.
       */
-    private def constrained[E <: UI.Ast.ConstrainedInput { type Self = E }](el: E, b: Base): E =
-        el.when(b.inputFilter)((e, f) => e.inputFilter(asInputFilter(f))).when(b.inputMask)(_.inputMask(_))
+    private def constrained[E <: UI.Ast.ConstrainedInput { type Self = E }](
+        el: E,
+        inputFilter: Maybe[String],
+        inputMask: Maybe[String]
+    ): E =
+        el.when(inputFilter)((e, f) => e.inputFilter(asInputFilter(f))).when(inputMask)(_.inputMask(_))
 
     /** Only a signal nobody hears is a mistake worth a card, and only while the reader could edit. Its own block, so the flags it
       * reads stay channels of the field.
