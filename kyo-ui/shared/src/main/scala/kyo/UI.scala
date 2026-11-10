@@ -2110,8 +2110,9 @@ object UI:
               * Use for floating panels (overlays, menus, toasts) that must escape ancestor `overflow` clipping and
               * `transform`/`filter` containing blocks. Stacking (z-index) stays the consumer's CSS. Client-only:
               * SSR/SSG render the element inline at its logical position. Emits `data-kyo-portal="1"`.
+              * `false` leaves it unset, so a later `portal(false)` takes an earlier `true` back.
               */
-            def portal(v: Boolean): Self = withAttrs(attrs.copy(portal = Present(v)))
+            def portal(v: Boolean): Self = withAttrs(attrs.copy(portal = Maybe.when(v)(true)))
 
             // Internal JS property setter (used by Checkbox.indeterminate, etc.)
             private[kyo] def jsProp(name: String, value: String): Self =
@@ -2384,8 +2385,13 @@ object UI:
 
         /** Capability trait for elements that accept event handlers (`onClick`, `onKeyDown`, ...) and `tabIndex`/focus-group settings. */
         sealed trait Interactive extends Element:
-            def tabIndex(v: Int): Self       = withAttrs(attrs.copy(tabIndex = Present(v)))
-            def focusTrap(v: Boolean): Self  = withAttrs(attrs.copy(focusTrap = Present(v)))
+            def tabIndex(v: Int): Self = withAttrs(attrs.copy(tabIndex = Present(v)))
+
+            /** Tab pressed inside this element wraps focus within its focusable children (`data-kyo-focus-trap="1"`), as a modal
+              * needs; `false` leaves it unset.
+              */
+            def focusTrap(v: Boolean): Self = withAttrs(attrs.copy(focusTrap = Maybe.when(v)(true)))
+
             def focusGroup(id: String): Self = withAttrs(attrs.copy(focusGroup = Present(id)))
 
             /** Declarative focus seeding: when a re-render inserts this element newly into the DOM (its `data-kyo-path` was
@@ -2394,14 +2400,16 @@ object UI:
               * restore-to-trigger; on initial load any focus-auto element is seeded (like native autofocus). Does not make
               * the element focusable, pair with `tabIndex(-1)` for non-natively-focusable elements. The previously focused
               * element is recorded for [[focusRestore]].
+              * `false` leaves it unset, so a later `focusAuto(false)` takes an earlier `true` back.
               */
-            def focusAuto(v: Boolean): Self = withAttrs(attrs.copy(focusAuto = Present(v)))
+            def focusAuto(v: Boolean): Self = withAttrs(attrs.copy(focusAuto = Maybe.when(v)(true)))
 
             /** Declarative focus return: when this focus-seeded element (see [[focusAuto]]) leaves the document, the client
               * focuses whatever was focused just before seeding (located by `data-kyo-path`, skipped silently if gone). Only
               * meaningful with `focusAuto(true)`; typical use is a modal that returns focus to its trigger on close.
+              * `false` leaves it unset.
               */
-            def focusRestore(v: Boolean): Self = withAttrs(attrs.copy(focusRestore = Present(v)))
+            def focusRestore(v: Boolean): Self = withAttrs(attrs.copy(focusRestore = Maybe.when(v)(true)))
 
             /** Declarative scroll-into-view: whenever a patch leaves this element carrying the flag and the element that
               * carried it before was a different one (or none), the client scrolls it into view with `block: "nearest"`,
@@ -2423,8 +2431,9 @@ object UI:
               * left alone, because the document's position is what the browser restores on reload and on back. A flag
               * inside a scroll container of the page's own (a list opened on its selected row, a navigation rail opened
               * on a deep link) is brought into view, and only that container moves.
+              * `false` leaves it unset.
               */
-            def scrollAuto(v: Boolean): Self = withAttrs(attrs.copy(scrollAuto = Present(v)))
+            def scrollAuto(v: Boolean): Self = withAttrs(attrs.copy(scrollAuto = Maybe.when(v)(true)))
 
             /** Opt-in per-level event consumption: when the dispatch walk (innermost target first, then ancestors) reaches
               * this element AND it declared a handler for the event's type, the event stops here so handlers on elements
@@ -2432,7 +2441,7 @@ object UI:
               * default (unset/`false`) keeps bubble-through. Applies to bubbling events (click, keydown, keyup, hover,
               * unhover, scroll). Typical use: nested overlays where Escape closes only the innermost layer.
               */
-            def stopPropagation(v: Boolean): Self = withAttrs(attrs.copy(stopPropagation = Present(v)))
+            def stopPropagation(v: Boolean): Self = withAttrs(attrs.copy(stopPropagation = Maybe.when(v)(true)))
 
             /** Picks the [[kyo.UI.Reaction]] for a failure the handlers of this element, or of any element inside it, leave
               * unhandled. A failure the rules do not match goes on outward: to the elements around this one, then to the enclosing
