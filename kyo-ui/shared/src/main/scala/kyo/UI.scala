@@ -1805,8 +1805,9 @@ object UI:
             def children: Chunk[UI]
             private[kyo] def withAttrs(a: Attrs): Self
 
-            /** The element with `f` applied where `cond` holds, and as it is where not, so a setter that depends on a condition
-              * stays in the chain: `button.when(disabled)(_.disabled(true)).when(blurs)(_.onBlur(blur))`.
+            /** The element with `f` applied where `cond` holds, and as it is where not, so a setter called only under a condition
+              * stays in the chain: `input.when(blurs)(_.onBlur(blur)).when(editable)(_.onInput(typed))`. A setter that takes the
+              * condition itself gets it directly (`disabled(off)`).
               *
               * Inside a `UI.reactive` block `f` is a lambda, so a `.read` in it is refused; read into a `val` first, or pass the
               * prop to the setter, which takes it as a channel.

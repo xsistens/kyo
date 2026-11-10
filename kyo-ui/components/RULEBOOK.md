@@ -98,10 +98,15 @@ that builds two different chains is a `val` of an `if`, not a `var` set in each 
 ```scala
 classed(el, loading)
     .when(p.access.id)(_.id(_))
-    .when(p.focusSeed)(_.focusAuto(true).focusRestore(true))
+    .focusAuto(p.focusSeed).focusRestore(p.focusSeed)
     .when(p.onKeyDown)(_.onKeyDown(_))
     .aria("label", p.access.name)
 ```
+
+- **A setter that takes the condition gets it directly** (`focusAuto(p.focusSeed)`, `disabled(off)`); `when` is for a setter
+  that is called only under a condition (`when(blurs)(_.onBlur(blur))`), and for one whose value the element may already carry
+  from elsewhere: Button's popup trigger is the host's own Button, so `trigger.when(fixed)(_.ariaDisabled(true))` keeps a
+  host's `ariaDisabled` where `ariaDisabled(fixed)` would reset it.
 
 - In a migration rule 4 comes first (phase 2), so no step of the chain is a match over a value's form. Where a step still needs a
   `def`, it is a small local `def step(e: E): E`, applied in the chain.
@@ -261,10 +266,12 @@ says decides the setter:
 - **A `UI.Ownable` field** (`Controlled[A]`) binds: `checked(v: Prop[Boolean])`, a ref two way and anything else one way, and it
   has an event setter that hears every change, `onCheckedChange`, or the name `@eventName("onChange")` gives.
 - **A callback field** (`Maybe[A => UI.Action]`, `Maybe[(A, B) => UI.Action]`) takes the function itself: `onBlur(f)`.
-- A function handed to an event or a callback runs under `UI.attempt`, so its failure reaches the `onFailure` rules where it ran
-  and the component's own work after it still happens. A hand-written callback setter does the same.
+- **An action field** (`Maybe[UI.Action]`) takes the action by name: Button's `onClick(action: => UI.Action)`, built each time
+  its event comes and never where the setter is called.
+- A function handed to an event or a callback, and an action, runs under `UI.attempt`, so its failure reaches the `onFailure`
+  rules where it ran and the component's own work after it still happens. A hand-written callback setter does the same.
 
-The class writes a setter by hand only where it does more than store what it is given (Button's `onClick` and `ariaDisabled`),
+The class writes a setter by hand only where it does more than store what it is given (Button's `ariaDisabled`, with its gate),
 under the field's name, and that member takes the generated one's place. A field a host, a shared trait or a setter of another
 name writes is `@noSetter` (`access`, `validity`, `radio`). Generic code that has to call a setter it cannot name (the number
 binding's `integer`) asks for a `HasSetter[X, "integer", Boolean]`: one is found in `Fields`, and a component that writes the setter
