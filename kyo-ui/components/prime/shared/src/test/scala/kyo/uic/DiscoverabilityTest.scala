@@ -1826,6 +1826,10 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheck(
             preamble + """def x(r: SignalRef[String])(using Frame): uic.Password = uic.Password().value(r).toggleMask(true).feedback(true).promptLabel("Type").weakLabel("W").mediumLabel("M").strongLabel("S").placeholder("Password").fluid(true).invalid(true)"""
         )
+        // The field's accessible name reference and description, as Input's, and its flags and size from a signal.
+        typeCheck(
+            preamble + """def x(b: Signal[Boolean], s: Signal[uic.Size])(using Frame): uic.Password = uic.Password().accessibleNameRef("lead").accessibleDescription("d").disabled(b).readonly(b).required(b).fluid(b).size(s)"""
+        )
         typeCheckFailure(preamble + """def x(r: SignalRef[Double]) = uic.Password().value(r)""")
         typeCheckFailure(preamble + """def x = uic.Password().appendTo("body")""")
         typeCheckFailure(preamble + """def x = uic.Password().overlayVisible(true)""")

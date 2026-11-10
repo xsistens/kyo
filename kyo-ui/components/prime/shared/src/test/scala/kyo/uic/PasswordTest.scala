@@ -237,6 +237,16 @@ class PasswordTest extends ReactiveValueContract:
         )
     }
 
+    "the accessible name reference and the description reach the field, a signal description patching it in place" in {
+        for
+            said <- Signal.initRef("first")
+            f    <- field(uic.Password().toggleMask(true).accessibleNameRef("lead").accessibleDescription(said).render)
+            _    <- said.set("second")
+            ref  <- ariaNow(f, "labelledby")
+            desc <- ariaNow(f, "description")
+        yield assert((ref, desc) == (Present("lead"), Present("second")), s"aria-labelledby, aria-description: ${(ref, desc)}")
+    }
+
     "a signal disabled, readonly, required, size, variant or fluid patches the field, the eye and the wrapper in place" in {
         def flag(e: UI.Ast.Element, name: String): Boolean < Sync =
             e.attrs.reactiveBoolAttrs.get(name).fold(Kyo.lift(false))(_.current)
