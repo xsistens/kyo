@@ -56,8 +56,8 @@ final class Badge private[uic] (private[uic] val p: Badge.Props) extends Node, H
         severityV match
             case Present(SeverityValue.Const(s)) => badgeToken(s).foreach(t => el = el.cssClass(s"p-badge-$t"))
             case Present(SeverityValue.Dyn(sig)) =>
-                // One reactive class per token-bearing severity; only the active one is present, swapped in place.
-                Severity.values.foreach(s => badgeToken(s).foreach(t => el = el.cssClass(s"p-badge-$t", sig.map(_ == s))))
+                // The class of the severity the signal holds, swapped in place.
+                el = el.cssClass.matching(sig)(s => badgeToken(s).map(t => s"p-badge-$t"))
             case Absent => ()
         end match
         sizeV match

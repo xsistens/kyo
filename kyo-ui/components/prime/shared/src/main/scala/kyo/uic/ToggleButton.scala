@@ -187,7 +187,16 @@ object ToggleButton:
                     .cssClass("p-togglebutton-checked", checked)
             )
             val shaped = marked
-                .classFor(size)(_.cls("p-togglebutton")).classFor(size)(_.cls("p-inputfield"))
+                .cssClass.matching(size) {
+                    case Size.Small  => "p-togglebutton-sm"
+                    case Size.Normal => Absent
+                    case Size.Large  => "p-togglebutton-lg"
+                }
+                .cssClass.matching(size) {
+                    case Size.Small  => "p-inputfield-sm"
+                    case Size.Normal => Absent
+                    case Size.Large  => "p-inputfield-lg"
+                }
                 .cssClass("p-togglebutton-fluid", props(_.fluid)).jsProp("type", "button")
             // One state per role: a radio reports `aria-checked`, a toggle button `aria-pressed`, and
             // a control carrying both tells a screen reader two different stories about itself.

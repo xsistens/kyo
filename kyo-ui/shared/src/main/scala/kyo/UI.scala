@@ -2074,6 +2074,17 @@ object UI:
                 case b: Boolean                    => if b then addClass(name) else withAttrs(attrs)
                 case s: Signal[Boolean] @unchecked => withReactiveClass(name, s)
 
+            /** The body of `cssClass.matching`: a constant adds the class its case names (or none), a signal binds the
+              * element's class-name channel to the class of the case it holds.
+              */
+            private[kyo] def matchClass[A](v: Prop[A], f: A => String | Maybe[String]): Self = v match
+                case sig: Signal[A] @unchecked =>
+                    given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
+                    withReactiveClassName(sig.map(a => CssClass.named(f(a)))(using summon, frame))
+                case a =>
+                    // Unsafe: a prop that is no signal is the value itself, and every element is its own `Self`.
+                    CssClass.named(f(a.asInstanceOf[A])).fold(this.asInstanceOf[Self])(addClass)
+
             /** Declarative portal (client-local): after a patch inserts this element, the client physically moves it to
               * `document.body`, leaving an inert placeholder (`data-kyo-portal-slot="<path>"`, hidden) at the logical
               * position. The element keeps its `data-kyo-path`, so it stays the document's only carrier of that path:
@@ -2100,10 +2111,22 @@ object UI:
           *
           * {{{
           * el.cssClass("p-cascadeselect", "p-component", "p-inputwrapper")
+          * el.cssClass.matching(p.size) {
+          *     case Size.Small  => "p-button-sm"
+          *     case Size.Large  => "p-button-lg"
+          *     case Size.Normal => Absent
+          * }
           * }}}
           *
           * `cssClass(names*)` adds the classes after the ones the element has, in the order given, so repeated calls space-join.
           * A name the element already carries is written again; a class list is a set to the browser, so it changes nothing.
+          *
+          * `matching(prop)(f)` adds the class of the case a prop holds, for a prop over a closed set of cases (a size, a
+          * severity, a variant): `f` names the class of each case, or `Absent` for a case that has none. A constant writes that
+          * class statically, the bytes of `cssClass(name)` or of nothing. A signal is one class-name channel: the render writes
+          * the class of the case it holds, after the element's fixed classes, and a change takes the old class off and puts the
+          * new one on in place, with nothing drawn again. `f` is a match over the cases, so under the build's `-Werror` a case it
+          * leaves out does not compile.
           *
           * It is the element itself under another type, so `el.cssClass` allocates nothing, and each setter is an inline
           * forward to the element's own method. Every setter that writes a class lives here, so the class vocabulary is one
@@ -2137,16 +2160,23 @@ object UI:
                     // Unsafe: `self` is the element whose `cssClass` built it, and `S` is that element's own `Self`.
                     self.toggleClass(name, on).asInstanceOf[S]
 
-                /** A class whose NAME a signal holds: the class it holds now, or none for `Absent`. A change takes the class it
-                  * held off and puts the one it holds on, in place (two `classList.toggle`s, so CSS transitions fire), with no
-                  * re-render. For a prop over a closed set of cases (a size, a severity) this is one channel instead of one
-                  * `cssClass(name, on)` per case. The channel owns the names it writes: a fixed class of the same name is taken
-                  * off with it.
+                /** The class of the case `v` holds, as `f` names it, or none where `f` gives `Absent`. A constant is a static
+                  * class; a signal is the element's class-name channel, which swaps the class in place (two `classList.toggle`s,
+                  * so CSS transitions fire) with no re-render. The channel owns the names it writes: a fixed class of the same
+                  * name is taken off with it.
                   */
-                inline def apply(name: Signal[Maybe[String]]): S =
+                inline def matching[A](v: Prop[A])(f: A => String | Maybe[String]): S =
                     // Unsafe: `self` is the element whose `cssClass` built it, and `S` is that element's own `Self`.
-                    self.withReactiveClassName(name).asInstanceOf[S]
+                    self.matchClass(v, f).asInstanceOf[S]
             end extension
+
+            /** The class a case names: a name is that class, a `Maybe` is what it holds. A `Present` name is the bare string at
+              * run time, so it takes the first case, which gives it back as it was.
+              */
+            private[kyo] def named(v: String | Maybe[String]): Maybe[String] = v match
+                case s: String => Present(s)
+                // Unsafe: what is no string here is the `Maybe` the union names.
+                case m => m.asInstanceOf[Maybe[String]]
         end CssClass
 
         // ---- Interactive trait (event handlers + tabIndex) ----
@@ -2857,7 +2887,7 @@ object UI:
             // Attributes a signal may leave out (ariaFlag(sig)): the value while Present, no attribute while Absent.
             reactiveMaybeAttrs: Map[String, Signal[Maybe[String]]] = Map.empty,
             reactiveClasses: Map[String, Signal[Boolean]] = Map.empty,
-            // Classes whose name a signal holds (cssClass(sig)), written after the toggled ones, in the order they were set.
+            // Classes whose name a signal holds (cssClass.matching(sig)), written after the toggled ones, in the order they were set.
             reactiveClassNames: Chunk[Signal[Maybe[String]]] = Chunk.empty,
             // The inline-style channel (inlineStyle(sig)): its declarations are written inline at render and patched with
             // HtmlOp.SetStyleByPath on emission.

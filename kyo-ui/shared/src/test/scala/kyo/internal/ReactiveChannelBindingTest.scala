@@ -65,7 +65,12 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
     /** A class whose name the signal holds; moving from no class to one is one patch, as for the others. */
     private def classNameChannel(using Frame): Channel < Sync =
         Signal.initRef[Maybe[String]](Absent).map(ref =>
-            Channel("class-name", UI.div(UI.span("x").cssClass(ref: Signal[Maybe[String]])), ref.set(Present("hot")).unit, ref.waiters)
+            Channel(
+                "class-name",
+                UI.div(UI.span("x").cssClass.matching(ref: Signal[Maybe[String]])(identity)),
+                ref.set(Present("hot")).unit,
+                ref.waiters
+            )
         )
 
     /** An aria flag: off is no attribute, so moving it on is one attribute patch, as for the others. */
@@ -189,7 +194,7 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
                 def classes  = exchange.recorded.collect { case op: Op.Class => (op.name, op.on) }
                 for
                     size <- Signal.initRef[Maybe[String]](Present("p-sm"))
-                    root <- ReactiveUI.normalize(UI.div(UI.span("x").cssClass(size: Signal[Maybe[String]])), Seq.empty)
+                    root <- ReactiveUI.normalize(UI.div(UI.span("x").cssClass.matching(size: Signal[Maybe[String]])(identity)), Seq.empty)
                     _    <- ReactiveUI.subscribe(root, exchange)
                     _    <- size.set(Present("p-lg"))
                     _    <- assertEventually(Sync.defer(classes.size == 2))
