@@ -8,7 +8,7 @@ module's `README.md`.
 
 ## A component is a class over its props
 
-A component the rulebook has reached (`Button`, `ToggleButton`, `Input`) also `extends Component(Setters[X.Props, X])` and has its setters
+A component the rulebook has reached (`Button`, `ToggleButton`, `Input`, `Password`) also `extends Component(Setters[X.Props, X])` and has its setters
 generated from its props (`RULEBOOK.md` rule 11). The rest still write each setter as below, until their wave reaches them.
 
 ```scala
@@ -173,7 +173,8 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   cells, Paginator's jump field, DataTable's filter fields) calls its `renderInPlace`. So a plain field leaves an unbound text to the browser, but a field that draws anything
   from its text after the page is shown (AutoComplete's suggestions, Password's meter and reveal) or builds its value
   from several controls (InputOtp's cells, ColorPicker's sliders) keeps the text itself, unbound and from a constant
-  (`Controlled.owningFrom`), and its handlers read the value live, since a keystroke can land before the render of the one
+  (`Controlled.owningFrom`; Password, which the rulebook reached, through a `Controlled` whose `start` the engine binds, with or
+  without its meter and eye), and its handlers read the value live, since a keystroke can land before the render of the one
   before it. `ReactiveValueContract.nativeText` and the `startText`/`keptNatively` slot fields hold them to it. A text
   field's `onBlur` reports the text kyo-ui's blur carries (kyo-ui's two-parameter `onBlur((e, text) => ...)`, read off the field as focus leaves it), never
   its binding: unbound or from a constant the binding does not have the reader's text at all. `ReactiveValueContract.blurs`
@@ -947,7 +948,7 @@ refs themselves held the correct result.
   one, and a region over a ref draws the field again on every keystroke. Input, TextArea and InputMask (through its
   Input) mark `p-filled` on the field; Password and InputNumber mark Prime's `p-inputwrapper-filled` on their wrapper
   (`filledClass(name, closest)`, `Input.filledOn`), and since the static render cannot reach an ancestor, the wrapper
-  stamps the starting class itself (Password's ref path and InputNumber's text ref through a class channel, which agrees
+  stamps the starting class itself (Password's and InputNumber's text ref through a class channel, which agrees
   with the client because the ref holds the field's text). AutoComplete keeps its stamp: it draws its field from the
   text it owns on every keystroke, so the stamp is never behind. The browser half is held in kyo-ui
   (`FilledClassTest`, `DomBackendFilledTest`); the JVM suites here check the marker and the starting class.
