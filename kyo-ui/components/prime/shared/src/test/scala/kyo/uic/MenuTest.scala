@@ -162,7 +162,7 @@ class MenuTest extends ReactiveValueContract:
         // The contrast with `disabled` directly above is the point. Resolving a reactive
         // `disabled` must cost a region, because the navigable index set, `MenuNav.skip` and
         // whether an activate effect is attached all read it as a plain Boolean. Being current
-        // changes none of those, so it goes through `when(sig)(_.cssClass(name))` and `aria(name, sig)`,
+        // changes none of those, so it goes through `when(sig)(_.cssClass(name))` and `aria(name -> sig)`,
         // patched in place. That is what lets a nav be built ONCE: were this a region, every
         // navigation would rebuild the strip and throw away the reader's keyboard position.
         for

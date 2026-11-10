@@ -74,7 +74,7 @@ final class Avatar private[uic] (private[uic] val p: Avatar.Props) extends Node,
         end match
         val showsImage = initialsV.isEmpty && iconV.isEmpty && imageV.isDefined
         if showsImage then el = el.cssClass("p-avatar-image")
-        if disabledFlag then el = el.cssClass("p-disabled").aria("disabled", "true")
+        if disabledFlag then el = el.cssClass("p-disabled").aria("disabled" -> "true")
 
         // Prime content precedence: label > icon > image.
         val content: UI =
@@ -86,8 +86,8 @@ final class Avatar private[uic] (private[uic] val p: Avatar.Props) extends Node,
         val badgeChild: List[UI] = badgeV.toList.map(b => span.cssClass("p-uic-avatar-badge")(b))
 
         val withA11y =
-            if interactiveFlag then el.cssClass("p-uic-clickable").role("button").aria("label", accName)
-            else el.role("img").aria("label", accName)
+            if interactiveFlag then el.cssClass("p-uic-clickable").role("button").aria("label" -> accName)
+            else el.role("img").aria("label"                                                   -> accName)
         // Enter/Space keyboard activation mirrors Button's native behaviour.
         val withEvt =
             if interactiveFlag && !disabledFlag then

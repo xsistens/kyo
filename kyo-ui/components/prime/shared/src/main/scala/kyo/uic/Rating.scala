@@ -184,7 +184,7 @@ final class Rating private[uic] (private[uic] val p: Rating.Props) extends Node,
             var hidden = radio
                 .checked(Controlled.mapNative[Int, Boolean](native)(_ == i))
                 .jsProp("value", i.toString)
-                .aria("label", if i == 1 then "1 star" else s"$i stars")
+                .aria("label" -> (if i == 1 then "1 star" else s"$i stars"))
             // Unnamed (the page as first rendered, before the mount mints a name), the browser does not
             // group the radios, so every star would be a tab stop of its own; the group is one stop
             // already, on the star the named group will tab to.
@@ -217,10 +217,10 @@ final class Rating private[uic] (private[uic] val p: Rating.Props) extends Node,
         // The radios inside form one group, so the box around them says so: an `aria-label` on a
         // roleless div labels nothing in particular.
         var el = div.cssClass("p-rating").cssClass("p-component").role("radiogroup")
-        if readonlyFlag then el = el.cssClass("p-readonly").aria("readonly", "true").preventActivation
+        if readonlyFlag then el = el.cssClass("p-readonly").aria("readonly" -> "true").preventActivation
         if disabledFlag.constTrue then el = el.cssClass("p-disabled")
         el = validity.mark(el)
-        access.name.foreach(v => el = el.aria("label", v))
+        access.name.foreach(v => el = el.aria("label" -> v))
         onBlurDoubleF.foreach { f =>
             el = el.onBlur(valueSlot.writable match
                 case Present(r) => r.use(i => f(i.toDouble))

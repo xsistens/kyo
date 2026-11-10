@@ -114,7 +114,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
                     val says = p.ariaDisabled.read && !off
                     renderButton(busy).disabled(off)
                         .when(p.onClick)(_.onClick(_))
-                        .ariaFlag("disabled", says)
+                        .aria("disabled" -> says)
                         .when(says)(_.cssClass("p-uic-aria-disabled"))(contentChildren(busy)*)
                 }
         end match
@@ -154,16 +154,16 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
       * description, the tooltip, the host's role, focus seeding and key handler, and `aria-busy` while loading.
       */
     private def shared[E <: (UI.Ast.Element & UI.Ast.Interactive) { type Self = E }](el: E, loading: Boolean)(using Frame): E =
-        p.extraArias.foldLeft(classed(el, loading))((e, aria) => e.aria(aria._1, aria._2))
+        p.extraArias.foldLeft(classed(el, loading))((e, aria) => e.aria(aria))
             .when(p.access.id)(_.id(_))
             .when(p.role)(_.role(_))
             .focusAuto(p.focusSeed).focusRestore(p.focusSeed)
             .when(p.onKeyDown)(_.onKeyDown(_))
-            .aria("label", p.access.name)
-            .aria("labelledby", p.access.nameRef)
-            .aria("description", p.description)
+            .aria("label" -> p.access.name)
+            .aria("labelledby" -> p.access.nameRef)
+            .aria("description" -> p.description)
             .title(p.tooltip)
-            .when(loading)(_.aria("busy", "true"))
+            .when(loading)(_.aria("busy" -> "true"))
     end shared
 
     /** The `<button>` with what only it carries besides its flags: the form type, its own role, the tab stop and the form. */
@@ -171,7 +171,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
         // The form type and the button's own role come first, so the host's role (in `shared`) wins over `accessibleRole`.
         val typed = button.jsProp("type", p.buttonType.token.toLowerCase)
             .when(p.accessibleRole == ButtonAccessibleRole.Link)(_.role("link"))
-        shared(typed, loading).when(p.tabIndex)(_.tabIndex(_)).when(p.form)(_.data("uic-form", _))
+        shared(typed, loading).when(p.tabIndex)(_.tabIndex(_)).data("uic-form" -> p.form)
     end renderButton
 
     /** Button skin on a client-routed anchor (SPA `Href.Path`). The anchor keeps its
@@ -184,7 +184,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
         // A disabled link leaves the tab order outright, so the host's roving tabindex has
         // nothing left to say about it.
         val linked =
-            if loading || disabled then el.cssClass("p-disabled").aria("disabled", "true").tabIndex(-1)
+            if loading || disabled then el.cssClass("p-disabled").aria("disabled" -> "true").tabIndex(-1)
             else el.when(p.tabIndex)(_.tabIndex(_)).href(Href.Path(h)).when(p.onClick)(_.onClick(_))
         linked(contentChildren(loading)*)
     end renderAnchor

@@ -103,13 +103,13 @@ final class RadioButton private[uic] (private[uic] val p: RadioButton.Props) ext
         box = access.id.map(v => box.id(v)).getOrElse(box)
         box = groupName.map(box.name(_)).getOrElse(box)
         box = valueV.map(v => box.jsProp("value", v)).getOrElse(box)
-        if requiredFlag.getOrElse(false) then box = box.jsProp("required", "true").aria("required", "true")
+        if requiredFlag.getOrElse(false) then box = box.jsProp("required", "true").aria("required" -> "true")
         box = validity.markAria(box)
-        if isReadonly then box = box.aria("disabled", "true")
+        if isReadonly then box = box.aria("disabled" -> "true")
         box = access.name match
-            case Present(v) => box.aria("label", v)
+            case Present(v) => box.aria("label" -> v)
             case _          => box
-        box = access.nameRef.map(v => box.aria("labelledby", v)).getOrElse(box)
+        box = access.nameRef.map(v => box.aria("labelledby" -> v)).getOrElse(box)
         // readonly keeps the radio FOCUSABLE and refuses to select it: the client declines the
         // browser's own selection (`preventActivation`) and the handler is not wired. Disabling the
         // native input instead took it out of the tab order (see CheckBox). Only `disabled` is

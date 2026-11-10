@@ -34,7 +34,7 @@ final class Title private[uic] (private[uic] val p: Title.Props) extends Node, H
             .cssClass("p-uic-title")
             .cssClass(s"p-uic-title--${visual.token.toLowerCase}")
             .role("heading")
-            .aria("level", levelV.token.stripPrefix("H"))
+            .aria("level" -> levelV.token.stripPrefix("H"))
         if !wrapFlag then el = el.cssClass("p-uic-title--nowrap")
         el(UI.children(kids)*)
     end render

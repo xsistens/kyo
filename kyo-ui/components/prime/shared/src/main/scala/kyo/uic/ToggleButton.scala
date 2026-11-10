@@ -202,19 +202,19 @@ object ToggleButton:
             // a control carrying both tells a screen reader two different stories about itself.
             val roled = b.radio match
                 case Present(r) =>
-                    shaped.role("radio").aria("checked", checked.read.toString).tabIndex(if r.tabbable then 0 else -1)
+                    shaped.role("radio").aria("checked" -> checked.read).tabIndex(if r.tabbable then 0 else -1)
                         .onKeyDown(r.onKey)
-                case Absent => shaped.aria("pressed", checked.read.toString)
+                case Absent => shaped.aria("pressed" -> checked.read)
             // readonly keeps the normal look and focusability, but never toggles. It says so as
             // `aria-disabled`, not `aria-readonly`: this is a `role="button"`, and that role has no
             // readonly state to report. Disabled or readonly, the button is silent: its handlers check nothing, it lists
             // no event while locked, and a change patches that in place.
             val el = roled
-                .aria("label", b.access.name)
-                .aria("labelledby", b.access.nameRef)
+                .aria("label" -> b.access.name)
+                .aria("labelledby" -> b.access.nameRef)
                 .disabled(off)
                 .silent(inert)
-                .ariaFlag("disabled", !off && inert)
+                .aria("disabled" -> (!off && inert))
                 .when(b.editable)(_.onClick(toggle))
                 .when(b.blurs)(_.onBlur(blur))
             val field = validity.follow(el(span.cssClass("p-togglebutton-content")(content)))

@@ -113,13 +113,27 @@ private[kyo] object ReactiveMacro:
                 case _ => None
         end Read
 
+        // The entry an `aria(...)` or `data(...)` pair converts to, and its parts (see the entry pass below).
+        val entryModule  = TypeRepr.of[UI.Ast.Entry.type].termSymbol
+        val entryGiven   = entryModule.methodMember("entry").headOption
+        val entryChannel = entryModule.methodMember("channel").headOption.getOrElse(
+            report.errorAndAbort("kyo-ui has no `Entry.channel`: the expansion of `UI.reactive` needs it.")
+        )
+        val tuple2Module = TypeRepr.of[Tuple2.type].termSymbol
+        // The name and the value of a pair written in place: `name -> value` or `(name, value)`.
+        def pairOf(t: Term): Maybe[(Term, Term)] = strip(t) match
+            case Apply(TypeApply(Select(Apply(_, List(name)), "->"), _), List(value))                   => Present((name, value))
+            case Apply(TypeApply(Select(m, "apply"), _), List(name, value)) if m.symbol == tuple2Module => Present((name, value))
+            case _                                                                                      => Absent
+
         // ---- `when(Boolean)` over toggle setters: the toggle form, so its condition is decided as a channel ----
         //
         // `el.when(cond)(f)` with a `Boolean` condition takes `f: Self => Self`, so a read there is the block's, and the block a
-        // region over it. Where `f` only sets what a `UI.Ast.Toggle` has (classes, `aria`, `data`, `role`, `hidden`, `silent`,
-        // `disabled`, `readOnly`, `required`, each with plain values) and the condition reads (a read, or something the block
-        // defines), the call becomes `when(cond: Prop[Boolean])` with `f` rebuilt on the toggle. That overload takes a `Prop`,
-        // so the data flow below decides the condition as it decides any setter's: a read, or a `val` that only reaches
+        // region over it. Where `f` only sets what a `UI.Ast.Toggle` has (classes, `aria` and `data` entries, `role`, `hidden`,
+        // `silent`, `disabled`, `readOnly`, `required`, each with plain values, for an entry a value of a type with no signal
+        // in it) and the condition reads (a read, or something the block defines), the call becomes `when(cond: Prop[Boolean])`
+        // with `f` rebuilt on the toggle. That overload takes a `Prop`, so the data flow below decides the condition as it
+        // decides any setter's: a read, or a `val` that only reaches
         // channels, is the toggle's channel, and a value the structure also needs stays the region's, where the toggle applies
         // `f` as the constant it is (the bytes of `when(Boolean)`). Any other `f` is left as written, its condition the block's.
         val elementClass   = TypeRepr.of[UI.Ast.Element].typeSymbol
@@ -127,10 +141,9 @@ private[kyo] object ReactiveMacro:
         val cssClassModule = TypeRepr.of[UI.Ast.CssClass.type].termSymbol
         val stringType     = TypeRepr.of[String]
         val booleanType    = TypeRepr.of[Boolean]
-        // What each toggle setter takes, by name; the element's setter of that name takes these values too.
+        // What each toggle setter takes, by name; the element's setter of that name takes these values too. `aria` and `data`
+        // take entries, each a pair converted where it is written (see `constantEntry`).
         val toggleSetters = Map(
-            "aria"     -> List(stringType, stringType),
-            "data"     -> List(stringType, stringType),
             "role"     -> List(stringType),
             "hidden"   -> List(booleanType),
             "silent"   -> List(booleanType),
@@ -138,6 +151,18 @@ private[kyo] object ReactiveMacro:
             "readOnly" -> List(booleanType),
             "required" -> List(booleanType)
         )
+        val signalSymbol = TypeRepr.of[Signal[Any]].typeSymbol
+        // Whether a value of type `t` may hold a signal: a signal, or a union or a type argument that may.
+        def holdsSignal(t: TypeRepr): Boolean = t.widen.dealias match
+            case OrType(a, b)         => holdsSignal(a) || holdsSignal(b)
+            case AppliedType(c, args) => c.typeSymbol == signalSymbol || c.baseClasses.contains(signalSymbol) || args.exists(holdsSignal)
+            case other                => other.baseClasses.contains(signalSymbol)
+        // An entry argument a toggle takes as written: a pair converted in place whose value's type holds no signal. The value's
+        // own type, as the conversion's is the instance's (`UI.Prop[Boolean]` for a `Boolean`).
+        def constantEntry(e: Term): Boolean = strip(e) match
+            case Apply(Select(Apply(TypeApply(conv, _), _), "apply"), List(pair)) if entryGiven.contains(conv.symbol) =>
+                pairOf(pair).fold(!holdsSignal(pair.tpe))((_, value) => !holdsSignal(value.tpe))
+            case _ => false
         def whenParams(m: Symbol): List[TypeRepr] = TypeRepr.of[UI.Ast.Element].memberType(m) match
             case MethodType(_, params, _) => params
             case _                        => Nil
@@ -217,6 +242,11 @@ private[kyo] object ReactiveMacro:
                     val names = spread(args)
                     if plain(names, names.map(_ => stringType)) then onToggle(inner, p, recv).flatMap(toggleCall(_, "cssClass", names))
                     else Absent
+                case Apply(sel @ Select(inner, name), args) if (name == "aria" || name == "data") && sel.symbol.owner == elementClass =>
+                    val entries = spread(args)
+                    if entries.forall(e => constantEntry(e) && !mentions(p)(e)) then
+                        onToggle(inner, p, recv).flatMap(toggleCall(_, name, entries))
+                    else Absent
                 case Apply(sel @ Select(inner, name), args) if setterOwners.contains(sel.symbol.owner) =>
                     toggleSetters.get(name) match
                         case Some(types) if plain(args, types) => onToggle(inner, p, recv).flatMap(toggleCall(_, name, args))
@@ -264,17 +294,6 @@ private[kyo] object ReactiveMacro:
         // defines) and `V` has a prop instance, the pair becomes `Entry.channel[V](name, value)`, whose `value` takes a `UI.Prop[V]`:
         // the data flow below then decides it as it decides any setter's prop argument, a channel where it only reaches channels,
         // the run's value where the structure also needs it.
-        val entryModule  = TypeRepr.of[UI.Ast.Entry.type].termSymbol
-        val entryGiven   = entryModule.methodMember("entry").headOption
-        val entryChannel = entryModule.methodMember("channel").headOption.getOrElse(
-            report.errorAndAbort("kyo-ui has no `Entry.channel`: the expansion of `UI.reactive` needs it.")
-        )
-        val tuple2Module = TypeRepr.of[Tuple2.type].termSymbol
-        // The name and the value of a pair written in place: `name -> value` or `(name, value)`.
-        def pairOf(t: Term): Maybe[(Term, Term)] = strip(t) match
-            case Apply(TypeApply(Select(Apply(_, List(name)), "->"), _), List(value))                   => Present((name, value))
-            case Apply(TypeApply(Select(m, "apply"), _), List(name, value)) if m.symbol == tuple2Module => Present((name, value))
-            case _                                                                                      => Absent
         val rhs = new TreeMap:
             override def transformTerm(tree: Term)(owner: Symbol): Term = tree match
                 case Apply(Select(Apply(TypeApply(conv, _), _), "apply"), List(pair)) if entryGiven.contains(conv.symbol) =>
