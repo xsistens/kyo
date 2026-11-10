@@ -42,13 +42,14 @@ final private[uic] case class Controlled[A](
     constantStarts: Boolean = false
 ) extends UI.Ownable[A]:
     /** The slot bound as the caller says: a ref two way, a signal one way, anything else a constant; where a constant only
-      * starts the slot ([[constantStarts]]), a constant is its start and a signal binds with no start of its own.
+      * starts the slot ([[constantStarts]]), a constant is its start and a signal binds, keeping the start, so an instance still
+      * holds a value of its own to carry on from when a later run stops binding it.
       */
     def bind(v: Prop[A]): Controlled[A] =
         if !constantStarts then copy(bound = Present(v))
         else
             v match
-                case s: Signal[A] @unchecked => copy(bound = Present(s), start = Absent)
+                case s: Signal[A] @unchecked => copy(bound = Present(s))
                 case a: A @unchecked         => copy(bound = Absent, start = Present(a))
 
     /** The slot with nothing bound: the component's own. */
