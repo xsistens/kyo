@@ -40,6 +40,19 @@ abstract class Component[P, Self, S <: Setters[P, Self]](private[uic] val setter
     override def toString: String = s"${getClass.getSimpleName}($p)"
 end Component
 
+object Component:
+    /** The chain kyo-ui's `Element.when` gives an element, for a host that builds a component in one chain: a step taken only
+      * where `cond` holds. An extension found through this companion, so it adds no member to any component and never shadows
+      * kyo-ui's `UI.when` in a component's body.
+      */
+    extension [C <: Component[?, C, ?]](c: C)
+        private[uic] def when(cond: Boolean)(f: C => C): C = if cond then f(c) else c
+
+        /** A step taken with the value of `v` where it is present. */
+        private[uic] def when[A](v: Maybe[A])(f: (C, A) => C): C = v.fold(c)(f(c, _))
+    end extension
+end Component
+
 /** Evidence that a component `C` has a setter named `N` that takes an `A`, and the way to call it, so generic code (a form's `bind`)
   * can write through a setter without knowing whether `Setters` generated it or the class wrote it by hand.
   */
