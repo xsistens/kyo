@@ -2683,17 +2683,26 @@ object UI:
               */
             def inputMask(v: String): Self
 
-            /** The field's `type` follows `sig`, patched IN PLACE on emission: the client switches the attribute on the element
-              * it has, with no re-render, so the text the reader typed, the caret and focus stay. The type the factory wrote
-              * gives way to it, in the static render as in the client, so the field carries one `type`, at the value `sig`
-              * holds.
+            /** The constant type set with [[textType]], in place of the factory's own; `Absent` where the factory's stands. */
+            def textType: Maybe[TextType]
+
+            private[kyo] def withTextType(v: TextType): Self
+
+            /** The field's `type`. A constant is written where the factory writes its own, so a field of any free-text factory
+              * given a constant reads as the factory of that type would draw it. A signal is patched IN PLACE on emission: the
+              * client switches the attribute on the element it has, with no re-render, so the text the reader typed, the caret
+              * and focus stay. The type the factory wrote gives way to it, in the static render as in the client, so the field
+              * carries one `type`, at the value the signal holds.
               *
-              * For a field that changes type on the page, such as a password field that reveals its text. A field with one
-              * type needs no signal: its factory writes it.
+              * A signal is for a field that changes type on the page, such as a password field that reveals its text. A
+              * component whose type is a prop hands it on as it is, constant or signal, and keeps one factory.
               */
-            def textType(sig: Signal[TextType]): Self =
+            def textType(v: Prop[TextType]): Self =
                 given Frame = frame
-                withReactiveAttr("type", sig.map(_.attr))
+                v match
+                    case sig: Signal[TextType] @unchecked => withReactiveAttr("type", sig.map(_.attr))
+                    case t: TextType                      => withTextType(t)
+            end textType
         end ConstrainedInput
 
         /** Capability trait for picker inputs that carry a `String` `value` and an `onChange` but no free-text typing (`select`, date/time/color, ...). */
@@ -3265,6 +3274,9 @@ object UI:
             def onBlur(f: (MouseEvent, String) => Action): Textarea = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
             def inputFilter(v: InputFilter): Textarea               = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): Textarea                      = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
+            // A textarea has no `type`: the constant is kept, and the renderer writes none for it.
+            def textType: Maybe[TextType]                        = textInputAttrs.textType
+            private[kyo] def withTextType(v: TextType): Textarea = copy(textInputAttrs = textInputAttrs.copy(textType = Present(v)))
         end Textarea
 
         final case class Select(
@@ -3413,7 +3425,8 @@ object UI:
             onChange: Maybe[String => Action] = Absent,
             onBlurText: Maybe[(MouseEvent, String) => Action] = Absent,
             inputFilter: Maybe[InputFilter] = Absent,
-            inputMask: Maybe[String] = Absent
+            inputMask: Maybe[String] = Absent,
+            textType: Maybe[TextType] = Absent
         )
 
         final case class Input(
@@ -3444,6 +3457,8 @@ object UI:
             def onBlur(f: (MouseEvent, String) => Action): Input = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
             def inputFilter(v: InputFilter): Input               = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): Input                      = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
+            def textType: Maybe[TextType]                        = textInputAttrs.textType
+            private[kyo] def withTextType(v: TextType): Input    = copy(textInputAttrs = textInputAttrs.copy(textType = Present(v)))
         end Input
 
         final case class PasswordInput(
@@ -3474,8 +3489,10 @@ object UI:
             def onChange(f: String => Action): PasswordInput             = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def onBlur(f: (MouseEvent, String) => Action): PasswordInput =
                 copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
-            def inputFilter(v: InputFilter): PasswordInput = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
-            def inputMask(v: String): PasswordInput        = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
+            def inputFilter(v: InputFilter): PasswordInput            = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
+            def inputMask(v: String): PasswordInput                   = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
+            def textType: Maybe[TextType]                             = textInputAttrs.textType
+            private[kyo] def withTextType(v: TextType): PasswordInput = copy(textInputAttrs = textInputAttrs.copy(textType = Present(v)))
         end PasswordInput
 
         final case class EmailInput(
@@ -3506,6 +3523,8 @@ object UI:
             def onBlur(f: (MouseEvent, String) => Action): EmailInput = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
             def inputFilter(v: InputFilter): EmailInput               = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): EmailInput                      = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
+            def textType: Maybe[TextType]                             = textInputAttrs.textType
+            private[kyo] def withTextType(v: TextType): EmailInput    = copy(textInputAttrs = textInputAttrs.copy(textType = Present(v)))
         end EmailInput
 
         final case class TelInput(
@@ -3536,6 +3555,8 @@ object UI:
             def onBlur(f: (MouseEvent, String) => Action): TelInput = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
             def inputFilter(v: InputFilter): TelInput               = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): TelInput                      = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
+            def textType: Maybe[TextType]                           = textInputAttrs.textType
+            private[kyo] def withTextType(v: TextType): TelInput    = copy(textInputAttrs = textInputAttrs.copy(textType = Present(v)))
         end TelInput
 
         final case class UrlInput(
@@ -3566,6 +3587,8 @@ object UI:
             def onBlur(f: (MouseEvent, String) => Action): UrlInput = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
             def inputFilter(v: InputFilter): UrlInput               = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): UrlInput                      = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
+            def textType: Maybe[TextType]                           = textInputAttrs.textType
+            private[kyo] def withTextType(v: TextType): UrlInput    = copy(textInputAttrs = textInputAttrs.copy(textType = Present(v)))
         end UrlInput
 
         final case class SearchInput(
@@ -3594,8 +3617,10 @@ object UI:
             def onInput(f: String => Action): SearchInput            = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
             def onChange(f: String => Action): SearchInput           = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def onBlur(f: (MouseEvent, String) => Action): SearchInput = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
-            def inputFilter(v: InputFilter): SearchInput = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
-            def inputMask(v: String): SearchInput        = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
+            def inputFilter(v: InputFilter): SearchInput            = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
+            def inputMask(v: String): SearchInput                   = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
+            def textType: Maybe[TextType]                           = textInputAttrs.textType
+            private[kyo] def withTextType(v: TextType): SearchInput = copy(textInputAttrs = textInputAttrs.copy(textType = Present(v)))
         end SearchInput
 
         final case class NumberInput(

@@ -202,6 +202,33 @@ class TextInputTest extends UITest:
             assert(types == List("text", "text"), html)
     }
 
+    "a constant type is written where the factory writes its own, as the factory of that type would" in {
+        val typed: List[UI.TextType => UI] = List(
+            t => UI.input.id("f").value("v").placeholder("p").textType(t),
+            t => UI.passwordInput.id("f").value("v").placeholder("p").textType(t),
+            t => UI.emailInput.id("f").value("v").placeholder("p").textType(t),
+            t => UI.telInput.id("f").value("v").placeholder("p").textType(t),
+            t => UI.urlInput.id("f").value("v").placeholder("p").textType(t),
+            t => UI.searchInput.id("f").value("v").placeholder("p").textType(t)
+        )
+        def plain(t: UI.TextType): UI = t match
+            case UI.TextType.Text     => UI.input.id("f").value("v").placeholder("p")
+            case UI.TextType.Password => UI.passwordInput.id("f").value("v").placeholder("p")
+            case UI.TextType.Email    => UI.emailInput.id("f").value("v").placeholder("p")
+            case UI.TextType.Tel      => UI.telInput.id("f").value("v").placeholder("p")
+            case UI.TextType.Url      => UI.urlInput.id("f").value("v").placeholder("p")
+            case UI.TextType.Search   => UI.searchInput.id("f").value("v").placeholder("p")
+        def html(ui: UI): String < Sync = kyo.internal.HtmlRenderer.render(ui, Seq.empty)
+        for
+            pairs <- Kyo.foreach(Chunk.from(for f <- typed; t <- UI.TextType.values.toList yield (f, t)))((f, t) =>
+                html(f(t)).map(got => html(plain(t)).map(want => (t, got, want)))
+            )
+        yield
+            val wrong = pairs.filter((_, got, want) => got != want)
+            assert(wrong.isEmpty, wrong.map((t, got, want) => s"$t: $got, its factory writes $want").mkString("; "))
+        end for
+    }
+
     "two different types independent" in {
         val app: UI < Async =
             for
