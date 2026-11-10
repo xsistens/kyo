@@ -274,7 +274,7 @@ object Input:
         validity.mark(
             b.extraClasses.foldLeft(el.cssClass("p-inputtext").cssClass("p-component"))(_.cssClass(_))
                 .when(b.access.id)(_.id(_))
-                .when(b.focusAuto)(_.focusAuto(true))
+                .focusAuto(b.focusAuto)
                 .cssClass.matching(props(_.size)) {
                     case Size.Small  => "p-inputtext-sm"
                     case Size.Normal => Absent
