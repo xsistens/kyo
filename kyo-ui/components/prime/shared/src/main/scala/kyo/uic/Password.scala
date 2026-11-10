@@ -33,8 +33,8 @@ final class Password private[uic] (private[uic] val p: Password.Props) extends N
     /** The value. A `SignalRef` binds TWO-WAY: edits write back, ref changes update the field (and the strength meter
       * when `feedback(true)`). Any other signal binds ONE-WAY: the field and the meter show it, and an edit writes
       * nothing and only reports through [[onInput]] and [[onChange]]; with neither, a card says the reader cannot change
-      * it. A constant is the starting text. With the meter or the mask toggle on, the field keeps the text itself, from a
-      * constant and, with the meter, unbound too: the meter judges what the reader typed, and a reveal keeps it.
+      * it. A constant is the starting text. Unbound or from a constant, the field keeps the text itself, in the instance's
+      * own ref: the meter judges what the reader typed, and a reveal or a host region that runs again keeps it.
       * `ref.readOnly` opts a ref out.
       */
     def value(v: String | Signal[String]): Password = new Password(p.copy(valueSlot = valueSlot.bind(v)))
@@ -103,27 +103,21 @@ final class Password private[uic] (private[uic] val p: Password.Props) extends N
       */
     def onBlur(f: String => UI.Action)(using Frame): Password = new Password(p.copy(onBlurSF = Present(Callback.of(f))))
 
-    /** The meter is drawn from the text and the eye keeps a reveal, so with either on the field is an instance, one per place,
-      * drawn once: it holds the text (from a constant, and with the meter unbound too) and the reveal, and a host region that runs
-      * again hands it the run's props instead of starting it over. The field is built once over a small value of the structural
-      * props (what binds the text, the switches, the attributes, never a hearer), its text always a channel, its type a channel
-      * over the reveal, and only the meter is a region, over the text. Unbound without the meter or the eye, the field keeps
-      * nothing, draws no value and leaves the text to the browser, so it has no instance.
+    /** One instance per place, drawn once: it holds the reader's text (unbound in the instance's own ref from an empty start,
+      * from a constant in that ref from the constant) and the reveal, and a host region that runs again hands it the run's
+      * props instead of starting it over (see [[Password.drawnWith]]).
       */
     private[uic] def render(using Frame): UI =
-        if !Password.keepsOwnText(p) && !toggleMaskFlag then Password.drawn(new UI.Live(p, Absent), Absent, Absent)
-        else UI.mountedWith(p)(Password.instance(_, Absent))
+        UI.mountedWith(p)(Password.drawn)
 
-    /** The instance with its reveal handed in (golden-test seam): the internal reveal state driving the password/text type
-      * switch.
-      */
+    /** The instance with its reveal handed in (golden-test seam): the same draw, over a reveal the test holds. */
     private[uic] def wired(revealed: SignalRef[Boolean])(using Frame): UI =
-        UI.mountedWith(p)(Password.instance(_, Present(revealed)))
+        UI.mountedWith(p)(Password.drawnWith(_, revealed))
 end Password
 
 object Password:
     final private[uic] case class Props(
-        valueSlot: Controlled[String] = Controlled(),
+        valueSlot: Controlled[String] = Controlled(start = Present(""), constantStarts = true),
         toggleMaskFlag: Boolean = false,
         feedbackFlag: Boolean = false,
         promptLabelV: Prop[String] = "Enter a password",
@@ -147,158 +141,131 @@ object Password:
 
     def apply(): Password = new Password(Props())
 
-    /** What builds the field and has no channel, read as one value: a run that only brings new hearers or new labels leaves it
-      * equal, so the field is not built again. `text` is what the field shows: the caller's signal, the instance's own text, a
-      * constant to start from, or nothing.
+    /** What of the props builds the field and has no channel of its own, read as one value: no hearer is in it, so a run that
+      * only brings new hearers or new labels leaves it equal and draws nothing again.
+      *
+      * @param eye
+      *   the eye toggle is drawn
+      * @param meter
+      *   the strength meter is drawn
+      * @param text
+      *   what the field's value binds: the caller's binding, or the instance's own ref, which the engine binds where the run
+      *   binds nothing
+      * @param placeholder
+      *   whether the field has a placeholder, and the prop it shows, whose signal patches in place
       */
-    final private case class Base(
-        toggleMask: Boolean,
-        feedback: Boolean,
-        disabled: Boolean,
-        readonly: Maybe[Prop[Boolean]],
-        required: Boolean,
-        name: Maybe[String],
-        maxLength: Maybe[Int],
-        size: Size,
-        variant: FieldVariant,
-        fluid: Boolean,
-        validity: FieldValidity.Slots,
-        access: Accessibility,
-        placeholder: Maybe[Prop[String]],
-        text: Maybe[Prop[String]],
+    final private[uic] case class Base(
+        eye: Boolean,
+        meter: Boolean,
+        text: Prop[String],
         hearsInput: Boolean,
         hearsChange: Boolean,
-        hearsBlur: Boolean
+        blurs: Boolean,
+        readonly: Maybe[Prop[Boolean]],
+        placeholder: Maybe[Prop[String]],
+        validity: FieldValidity.Slots,
+        access: Accessibility
     ) derives CanEqual
 
     private object Base:
-        def of(q: Props, own: Maybe[SignalRef[String]]): Base =
-            val text = (own, q.valueSlot.bound) match
-                case (Present(ref), bound) if keepsOwnText(q) && bound.forall(constant) => Present(ref)
-                case (_, bound)                                                         => bound
+        /** The base of `q`, as the engine hands it: an unbound `value` is bound to the instance's own ref. */
+        def apply(q: Props): Base =
             Base(
                 q.toggleMaskFlag,
                 q.feedbackFlag,
-                q.disabledFlag,
-                q.readonlyFlag,
-                q.requiredFlag,
-                q.nameV,
-                q.maxLengthV,
-                q.sizeV,
-                q.variantV,
-                q.fluidFlag,
-                q.validityV,
-                q.access,
-                q.placeholderText,
-                text,
+                q.valueSlot.value(""),
                 q.valueSlot.hearer.isDefined,
                 q.onChangeSF.isDefined,
-                q.onBlurSF.isDefined
+                q.onBlurSF.isDefined,
+                q.readonlyFlag,
+                q.placeholderText,
+                q.validityV,
+                q.access
             )
-        end of
     end Base
 
-    /** Whether the field draws something from its text after the page is shown (the meter, or the reveal) that the reader can
-      * change.
+    /** The field over `props` with a reveal of its own, which starts masked. */
+    private def drawn(props: UI.Live[Props])(using Frame): UI < Sync =
+        Signal.initRef(false).map(drawnWith(props, _))
+
+    /** The field, drawn once over `props`, which hand it `value` bound: to the instance's own ref where a run binds nothing, as
+      * the caller bound it otherwise. `revealed` is the reveal the eye flips.
+      *
+      * Each place reads the field it shows: the size, the variant, the width, `disabled` and `required` reach the field and the
+      * wrapper through their class and attribute channels, and the reveal reaches the field's type through kyo-ui's `textType`
+      * channel and the eye's classes, label and glyph through theirs, so a run that changes one of them, or a reveal, patches it
+      * alone. What builds the field (the [[Base]], and the native `name` and `maxLength`, which have no channel) is one
+      * `reactive` block, drawn again only when a run changes it. The meter is the one region, over the text, a sibling of the
+      * field, so a keystroke draws only the meter. An input, a commit and a blur read the run's hearers when they come.
       */
-    private def keepsText(q: Props): Boolean = (q.feedbackFlag || q.toggleMaskFlag) && !q.disabledFlag && !q.readonlyFlag.exists {
-        case on: Boolean => on
-        case _           => false
-    }
+    private def drawnWith(props: UI.Live[Props], revealed: SignalRef[Boolean])(using Frame): UI =
+        val base            = props(Base(_))
+        val disabled        = props(_.disabledFlag)
+        val required        = props(_.requiredFlag)
+        val size            = props(_.sizeV)
+        val variant         = props(_.variantV)
+        val fluid           = props(_.fluidFlag)
+        val name            = props(_.nameV)
+        val maxLength       = props(_.maxLengthV)
+        val input           = props.hearing(_.valueSlot.hearer)
+        val change          = props.hearing(_.onChangeSF)
+        val blur            = props.hearing(_.onBlurSF)
+        val typed           = revealed.map(on => if on then UI.TextType.Text else UI.TextType.Password)
+        val flip: UI.Action = revealed.getAndUpdate(!_).unit
+        // The eye offers what a press does: to reveal while masked, to mask while revealed. Disabled, it is silent.
+        val eye = span
+            .cssClass("p-password-toggle-mask-icon")
+            .cssClass("p-password-mask-icon", revealed)
+            .cssClass("p-password-unmask-icon", revealed.map(!_))
+            .role("button")
+            .tabIndex(0)
+            .aria("label", revealed.map(on => if on then "Hide password" else "Show password"))
+            .silent(disabled)
+            .onClick(flip)
+            .onKeyDown { e =>
+                e.key match
+                    case Keyboard.Enter | Keyboard.Space => flip
+                    case _                               => Kyo.unit: UI.Action
+            }(GlyphSvg(revealed.map(on => if on then Icons.eyeSlash else Icons.eye), "p-icon"))
 
-    /** Whether the text the reader types is the field's to keep: with the meter even unbound, and from a constant. */
-    private def keepsOwnText(q: Props): Boolean = keepsText(q) && (q.feedbackFlag || q.valueSlot.bound.isDefined)
-
-    /** Whether a bound text is a constant, which is only where the field's own text starts. */
-    private def constant(v: Prop[String]): Boolean = v match
-        case _: Signal[?] => false
-        case _            => true
-
-    /** Where the field's own text starts: a constant the caller gave, else empty. */
-    private def startText(q: Props): String =
-        q.valueSlot.bound match
-            case Present(a: String) => a
-            case _                  => ""
-
-    /** The instance's state, minted once: its own text and its reveal (the one handed in, for the golden seam). */
-    private def instance(live: UI.Live[Props], revealed: Maybe[SignalRef[Boolean]])(using Frame): UI < Sync =
-        for
-            start  <- live.call(startText)
-            own    <- Signal.initRef(start)
-            reveal <- revealed match
-                case Present(r) => Kyo.lift(r)
-                case Absent     => Signal.initRef(false)
-        yield drawn(live, Present(own), Present(reveal))
-
-    private def drawn(live: UI.Live[Props], own: Maybe[SignalRef[String]], reveal: Maybe[SignalRef[Boolean]])(using Frame): UI =
-        Prop.render(live(Base.of(_, own)))(built(live, _, reveal))
-
-    private def built(live: UI.Live[Props], b: Base, reveal: Maybe[SignalRef[Boolean]])(using Frame): UI =
-        val validity            = FieldValidity(b.validity)
-        val shown: Prop[String] = b.text.getOrElse("")
-        val eye                 = if b.toggleMask then reveal else Absent
-
-        // === the field (Input carries the shared text-field contract) ===========
-        // The wrapper's `p-inputwrapper-filled` follows the text the field holds: kyo-ui's client toggles it as the reader
-        // types (the static render cannot reach the wrapper, so the class below stamps the starting text).
-        var in = Input()
-            .extraClass("p-password-input")
-            .filledOn("p-inputwrapper-filled", ".p-password")
-            .size(b.size)
-            .variant(b.variant)
-            .fluid(b.fluid)
-            .invalid(validity.red)
-            .unheardAs("Password", "onInput or onChange")
-        in = eye match
-            case Present(r) => in.revealing(r.map(on => if on then UI.TextType.Text else UI.TextType.Password))
-            case Absent     => in.inputType(InputType.Password)
-        b.text.foreach(t => in = in.value(t))
-        // Each hearer is read when its event comes, so it is the latest run's.
-        if b.hearsInput then in = in.onInput(s => live.call(_.valueSlot.hearer).map(_.fold(Kyo.unit: UI.Action)(_(s))))
-        if b.hearsChange then in = in.onChange(s => live.call(_.onChangeSF).map(_.fold(Kyo.unit: UI.Action)(_(s))))
-        if b.hearsBlur then in = in.onBlur(s => live.call(_.onBlurSF).map(_.fold(Kyo.unit: UI.Action)(_(s))))
-        in = in.withPlaceholder(b.placeholder)
-        if b.disabled then in = in.disabled(true)
-        b.readonly.foreach(r => in = in.readonly(r))
-        if b.required then in = in.required(true)
-        b.name.foreach(v => in = in.name(v))
-        b.maxLength.foreach(n => in = in.maxLength(n))
-        b.access.name.foreach(v => in = in.accessibleName(v))
-        b.access.id.foreach(v => in = in.id(v))
-
-        // === the eye toggle, its state classes and label channels over the reveal ==
-        val toggle: List[UI] = eye.toList.map { r =>
-            var t = span
-                .cssClass("p-password-toggle-mask-icon")
-                .cssClass("p-password-mask-icon", r)
-                .cssClass("p-password-unmask-icon", r.map(!_))
-                .role("button")
-                .tabIndex(0)
-                .aria("label", r.map(on => if on then "Hide password" else "Show password"))
-            if !b.disabled then
-                val flip: UI.Action = r.getAndUpdate(!_).unit
-                t = t.onClick(flip).onKeyDown { e =>
-                    e.key match
-                        case Keyboard.Enter | Keyboard.Space => flip
-                        case _                               => ()
-                }
-            end if
-            t(r.render(on => GlyphSvg(if on then Icons.eyeSlash else Icons.eye, "p-icon")))
+        UI.reactive {
+            val b        = base.read
+            val validity = FieldValidity(b.validity)
+            // Input carries the shared text-field contract, drawn in place: this instance binds its text.
+            val field = Input()
+                .extraClass("p-password-input")
+                .filledOn("p-inputwrapper-filled", ".p-password")
+                .unheardAs("Password", "onInput or onChange")
+                .inputType(InputType.Password)
+                .when(b.eye)(_.revealing(typed))
+                .value(b.text)
+                .when(b.hearsInput)(_.onInput(input))
+                .when(b.hearsChange)(_.onChange(change))
+                .when(b.blurs)(_.onBlur(blur))
+                .withPlaceholder(b.placeholder)
+                .disabled(disabled)
+                .when(b.readonly)(_.readonly(_))
+                .required(required)
+                .when(name.read)(_.name(_))
+                .when(maxLength.read)(_.maxLength(_))
+                .size(size)
+                .variant(variant)
+                .fluid(fluid)
+                .invalid(validity.red)
+                .withAccessibility(b.access)
+            // The wrapper's `p-inputwrapper-filled` follows the text: kyo-ui's client toggles it from the field as the reader
+            // types (`filledOn`), and this channel stamps the starting class, which the static render cannot reach from the field.
+            val root = div
+                .cssClass("p-password")
+                .cssClass("p-component")
+                .cssClass("p-inputwrapper")
+                .cssClass("p-inputwrapper-filled", UI.reactive(b.text.read.nonEmpty))
+                .cssClass("p-password-fluid", fluid)(UI.children(field.renderInPlace, Maybe.when(b.eye)(eye))*)
+            // The inline strength meter (see the class doc for the deviation): the one region, over the text.
+            val body = if b.meter then fragment(root, UI.reactive(meter(props, b.text.read))) else root
+            validity.follow(body)
         }
-
-        // === wrapper root =======================================================
-        var el = div
-            .cssClass("p-password")
-            .cssClass("p-component")
-            .cssClass("p-inputwrapper")
-            .cssClass("p-inputwrapper-filled", Prop.map[String, Boolean](shown)(_.nonEmpty))
-        if b.fluid then el = el.cssClass("p-password-fluid")
-        val root = el(UI.children((in: UI) :: toggle)*)
-
-        // === inline strength meter (see the class doc for the deviation), the one region, over the text ==
-        val body = if b.feedback then fragment(root, Prop.render(shown)(meter(live, _))) else root
-        validity.follow(body)
-    end built
+    end drawnWith
 
     /** The meter over the text `v`: the bar and the label of its strength, the label a prop of the latest run. */
     private def meter(live: UI.Live[Props], v: String)(using Frame): UI =
