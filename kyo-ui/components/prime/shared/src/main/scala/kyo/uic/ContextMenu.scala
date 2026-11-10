@@ -230,7 +230,7 @@ final class ContextMenu private[uic] (private[uic] val p: ContextMenu.Props) ext
         var target = div
             .cssClass("p-uic-contextmenu-target")
             .cssClass("p-uic-overlay-anchor")
-            .aria("haspopup", "menu")
+            .aria("haspopup" -> "menu")
         // The wrapped region is this component's root, so the element id lands here (HasElementId),
         // and the panel's derived id hangs off it.
         access.id.foreach(b => target = target.id(b))
@@ -311,7 +311,7 @@ final class ContextMenu private[uic] (private[uic] val p: ContextMenu.Props) ext
                         idBase = access.id
                     )
                     var listEl = ul.cssClass("p-contextmenu-root-list").role("menu")
-                    if focus.nonEmpty then access.id.foreach(b => listEl = listEl.aria("activedescendant", s"$b-active"))
+                    if focus.nonEmpty then access.id.foreach(b => listEl = listEl.aria("activedescendant" -> s"$b-active"))
                     // The LIST is what focus goes to, not the panel around it: the list is the
                     // `role="menu"` and the thing carrying `aria-activedescendant`, and that
                     // attribute is read off the focused element or off nothing at all. Escape is

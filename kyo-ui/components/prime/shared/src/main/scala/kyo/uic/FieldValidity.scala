@@ -47,9 +47,9 @@ private[uic] enum FieldValidity:
 
     /** `aria-invalid` alone (see [[markClass]]). */
     def markAria[E <: UI.Ast.Element { type Self <: E }](el: E)(using Frame): E = this match
-        case Fixed(true, _) => el.aria("invalid", "true")
+        case Fixed(true, _) => el.aria("invalid" -> true)
         case Fixed(_, _)    => el
-        case Live(s, _, _)  => el.aria("invalid", s.map(b => if b then "true" else "false"))
+        case Live(s, _, _)  => el.aria("invalid" -> s)
 
     /** The control followed by its message row. */
     def follow(control: UI)(using Frame): UI = this match

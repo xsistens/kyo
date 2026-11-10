@@ -112,7 +112,7 @@ final class Menu private[uic] (private[uic] val p: Menu.Props) extends Node, Has
     /** Puts the accessible name on `el` as `aria-label`, a signal through the attribute channel. */
     private def named[E <: UI.Ast.Element { type Self = E }](el: E): E =
         access.name match
-            case Present(n) => el.aria("label", n)
+            case Present(n) => el.aria("label" -> n)
             case _          => el
 
     /** The flat row list: section items are flattened to a heading + their
@@ -301,7 +301,7 @@ final class Menu private[uic] (private[uic] val p: Menu.Props) extends Node, Has
                 // stripped exactly that away, leaving a menu whose every child claimed to be
                 // nothing. The link inside stays roleless, the way Prime renders it.
                 var row = MenuRender.markCurrent(li.cssClass("p-menu-item").role("menuitem"), it)
-                if it.p.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
+                if it.p.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled" -> "true")
                 if i == hiRow then
                     row = row.cssClass("p-focus").scrollAuto(true)
                     partBase.foreach(base => row = row.id(s"$base-active"))
@@ -311,7 +311,7 @@ final class Menu private[uic] (private[uic] val p: Menu.Props) extends Node, Has
         }
 
         var list = named(ul.cssClass("p-menu-list").role("menu"))
-        if hiRow >= 0 then partBase.foreach(base => list = list.aria("activedescendant", s"$base-active"))
+        if hiRow >= 0 then partBase.foreach(base => list = list.aria("activedescendant" -> s"$base-active"))
         // The caller's id goes on the ELEMENT, the way `HasElementId` says a container puts it on
         // its own root: inline that root is the `div.p-menu` below; in a popup the component's
         // root is the overlay's panel, which the menu does not own, so it lands on the

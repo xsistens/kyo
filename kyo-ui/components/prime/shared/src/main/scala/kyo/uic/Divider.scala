@@ -63,7 +63,7 @@ final class Divider private[uic] (private[uic] val p: Divider.Props) extends Nod
             .cssClass(s"p-divider-$layoutToken")
             .cssClass(s"p-divider-$lineToken")
             .role("separator")
-            .aria("orientation", layoutToken)
+            .aria("orientation" -> layoutToken)
         // Alignment class + inline position, both exactly per PrimeVue's class map
         // and inlineStyles (including the unset-horizontal → .p-divider-left quirk).
         (layoutV, alignV) match

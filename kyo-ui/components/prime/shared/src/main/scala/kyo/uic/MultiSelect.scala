@@ -478,7 +478,7 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
                     button
                         .cssClass("p-multiselect-clear-icon")
                         .jsProp("type", "button")
-                        .aria("label", "Clear")
+                        .aria("label" -> "Clear")
                         .onClick(clearEffect)
                         // The clear sits inside the field, whose click opens the panel.
                         .stopPropagation(true)(GlyphSvg(Icons.times, "p-icon"))
@@ -506,7 +506,7 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
         access.id.foreach(v => el = el.id(v))
         if displayV == MultiSelectDisplay.Chip then el = el.cssClass("p-multiselect-display-chip")
         if selected.nonEmpty then el = el.cssClass("p-inputwrapper-filled")
-        if loading then el = el.aria("busy", "true")
+        if loading then el = el.aria("busy" -> "true")
         if isOpen then el = el.cssClass("p-multiselect-open").cssClass("p-uic-overlay-anchor")
         el = validity.mark(el)
         if disabledFlag then el = el.cssClass("p-disabled")
@@ -518,8 +518,8 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
         if variantV == FieldVariant.Filled then el = el.cssClass("p-variant-filled")
         if fluidFlag then el = el.cssClass("p-multiselect-fluid")
         el = el.title(tooltipV)
-        access.name.foreach(v => el = el.aria("label", v))
-        access.nameRef.foreach(v => el = el.aria("labelledby", v))
+        access.name.foreach(v => el = el.aria("label" -> v))
+        access.nameRef.foreach(v => el = el.aria("labelledby" -> v))
         // WHICH element is the combobox follows the filter header, and follows it for the same
         // reason [[Select]] does: the combobox is whatever holds focus while the list is open,
         // because `aria-activedescendant` is read off the focused element or off nothing at all.
@@ -529,18 +529,18 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
             case BoolValue.Dyn(on) => el.withReactiveAttr("role", on.map(isOn => if isOn then "button" else "combobox"))
             case _                 => el.role(if filtering then "button" else "combobox")
         el = el
-            .aria("haspopup", "listbox")
-            .aria("expanded", isOpen.toString)
+            .aria("haspopup" -> "listbox")
+            .aria("expanded" -> isOpen)
         st.idBase.foreach { b =>
-            el = el.aria("controls", listId(b))
+            el = el.aria("controls" -> listId(b))
             if !filtering then
                 val (_, _, _, hiEff) = shownState(st)
-                if st.isOpen && hiEff >= 0 then el = el.aria("activedescendant", optionId(b, hiEff))
+                if st.isOpen && hiEff >= 0 then el = el.aria("activedescendant" -> optionId(b, hiEff))
             end if
         }
         if !disabledFlag then
             el = el.tabIndex(0).preventScrollKeys
-            if fixed then el = el.aria("readonly", "true")
+            if fixed then el = el.aria("readonly" -> "true")
             // The one click listener: a click anywhere on the field toggles, a chip's body included.
             // The clear button, the chips' remove buttons and the panel (`Overlay.containClicks`)
             // end their own clicks where they land.
@@ -625,7 +625,7 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
         // The inert Prime checkbox anatomy on a row (the Tree precedent: no native
         // input: the row's own click handler toggles, so an input would double-fire).
         def rowCheckbox(isSel: Boolean): UI =
-            var cb = div.cssClass("p-checkbox").cssClass("p-component").aria("hidden", "true")
+            var cb = div.cssClass("p-checkbox").cssClass("p-component").aria("hidden" -> "true")
             if isSel then cb = cb.cssClass("p-checkbox-checked")
             val icon: List[UI] = if isSel then List(GlyphSvg(Icons.check, "p-checkbox-icon")) else Nil
             cb(div.cssClass("p-checkbox-box")(UI.children(icon)*))
@@ -634,11 +634,11 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
         val rows: List[UI] = OptionItem.rows(shownGroups, "p-multiselect-option-group") { (a, i) =>
             val isSel = current.contains(key(a))
             val isDis = isOptionDisabled(a)
-            var row   = li.cssClass("p-multiselect-option").role("option").aria("selected", isSel.toString)
+            var row   = li.cssClass("p-multiselect-option").role("option").aria("selected" -> isSel)
             // Prime gates the highlighted row skin behind highlightOnSelect (default
             // OFF): by default the checked box alone marks a selected row.
             if isSel && highlightOnSelectFlag then row = row.cssClass("p-multiselect-option-selected")
-            if isDis then row = row.cssClass("p-disabled").aria("disabled", "true")
+            if isDis then row = row.cssClass("p-disabled").aria("disabled" -> "true")
             if i == hiEff then row = row.cssClass("p-focus").scrollAuto(true)
             s.idBase.foreach(b => row = row.id(optionId(b, i)))
             if !isDis then row = row.onClick(toggleOption(a))
@@ -656,7 +656,7 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
                 {
                     // Named by `aria-controls` and holding the option ids; the announcement
                     // itself rides the focused element, which is never this list.
-                    var list = ul.cssClass("p-multiselect-list").role("listbox").aria("multiselectable", "true")
+                    var list = ul.cssClass("p-multiselect-list").role("listbox").aria("multiselectable" -> "true")
                     s.idBase.foreach(b => list = list.id(listId(b)))
                     list(UI.children(rows ++ emptyRow)*)
                 }
@@ -685,9 +685,9 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
                          .cssClass("p-component")
                          .cssClass("p-uic-iconfield-end")
                          .role("combobox")
-                         .aria("label", "Filter")
-                         .aria("haspopup", "listbox")
-                         .aria("expanded", "true")
+                         .aria("label" -> "Filter")
+                         .aria("haspopup" -> "listbox")
+                         .aria("expanded" -> "true")
                          // Typing re-filters and highlights the first match; one way it is only reported, and kyo-ui puts
                          // the field back to the owner's query.
                          .onInput(text =>
@@ -704,8 +704,8 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
                      // Two way, the field writes the query itself; one way it shows what the owner holds.
                      filterEl = s.q.writable.fold(filterEl.value(s.qV))(r => filterEl.value(r))
                      s.idBase.foreach { b =>
-                         filterEl = filterEl.aria("controls", listId(b))
-                         if hiEff >= 0 then filterEl = filterEl.aria("activedescendant", optionId(b, hiEff))
+                         filterEl = filterEl.aria("controls" -> listId(b))
+                         if hiEff >= 0 then filterEl = filterEl.aria("activedescendant" -> optionId(b, hiEff))
                      }
                      List(
                          div.cssClass("p-iconfield").cssClass("p-multiselect-filter-container")(

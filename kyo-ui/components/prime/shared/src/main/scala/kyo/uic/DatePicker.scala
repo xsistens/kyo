@@ -353,9 +353,9 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
         var dd = button
             .cssClass("p-datepicker-dropdown")
             .jsProp("type", "button")
-            .aria("label", "Choose date")
+            .aria("label" -> "Choose date")
         if disabledFlag then dd = dd.disabled(true)
-        else if readonlyFlag || (floating && openFixedOpen) then dd = dd.aria("disabled", "true")
+        else if readonlyFlag || (floating && openFixedOpen) then dd = dd.aria("disabled" -> "true")
         else if !floating && oref.isEmpty then dd = dd.disabled(true)
         else oref.foreach(r => dd = dd.onClick(seedGrid(nav).andThen(togglePanel(r))))
         end if
@@ -399,12 +399,12 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
         i = i.placeholder(placeholderText)
         if disabledFlag then i = i.disabled(true)
         if readonlyFlag || !editable then i = i.readOnly(true)
-        if requiredFlag then i = i.aria("required", "true").jsProp("required", "true")
+        if requiredFlag then i = i.aria("required" -> "true").jsProp("required", "true")
         i = nameV.map(v => i.jsProp("name", v)).getOrElse(i)
         i = access.name match
-            case Present(v) => i.aria("label", v)
+            case Present(v) => i.aria("label" -> v)
             case _          => i
-        i = access.nameRef.map(v => i.aria("labelledby", v)).getOrElse(i)
+        i = access.nameRef.map(v => i.aria("labelledby" -> v)).getOrElse(i)
         nav.foreach { n =>
             if editable && interactive then i = i.onChange(typed => commitText(typed, n))
             // The blur reports what is held, read from the bound refs, not the text in the field (which a blur could carry):
@@ -692,10 +692,10 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
                 .cssClass("p-button-rounded")
                 .cssClass("p-button-text")
                 .jsProp("type", "button")
-                .aria("label", label)
+                .aria("label" -> label)
             shownMonth(nav) match
                 // A page fixed by a constant nobody hears: the button stays a tab stop and says it changes nothing.
-                case Present(_) if monthSlot.fixed => b = b.aria("disabled", "true")
+                case Present(_) if monthSlot.fixed => b = b.aria("disabled" -> "true")
                 case Present(mref)                 =>
                     b = b.onClick(mref.set(DatePicker.pad(target._1, 4) + "-" + DatePicker.pad(target._2, 2)))
                 case Absent => b = b.disabled(true)
@@ -713,10 +713,10 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
             case DatePickerView.Year  => ((year - 10, month), (year + 10, month))
 
         def viewButton(cls: String, text: String, target: DatePickerView, label: String): UI =
-            var b = button.cssClass(cls).jsProp("type", "button").aria("label", label)
+            var b = button.cssClass(cls).jsProp("type", "button").aria("label" -> label)
             currentViewSlot.binding match
                 // A view fixed by a constant nobody hears: the button stays a tab stop and says it changes nothing.
-                case Present(_) if currentViewSlot.fixed => b = b.aria("disabled", "true")
+                case Present(_) if currentViewSlot.fixed => b = b.aria("disabled" -> "true")
                 // The switch redraws the header without the button that was pressed, so the focus goes on to the grid that
                 // appeared rather than falling to the document.
                 case Present(_) =>
@@ -793,7 +793,7 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
             val outOfRange =
                 minIso.exists(min => iso < DatePicker.datePart(min)) || maxIso.exists(max => iso > DatePicker.datePart(max))
             var daySpan = span.cssClass("p-datepicker-day")
-            if outOfRange then daySpan = daySpan.cssClass("p-disabled").aria("disabled", "true")
+            if outOfRange then daySpan = daySpan.cssClass("p-disabled").aria("disabled" -> "true")
             else
                 daySpan = daySpan.onClick(seedCursor(iso, nav).andThen(selectDay(iso, snap, oref, nav)))
                 dayStateClass(iso, snap).foreach(c => daySpan = daySpan.cssClass(c))
@@ -831,7 +831,7 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
                 .onKeyDown(dayKey(year, month, cursorIso, snap, oref, n))
             if n.seedV then grid = grid.focusAuto(true)
             if cursorIso.nonEmpty then
-                grid = grid.aria("activedescendant", n.cellId(firstDow + DatePicker.dayOf(cursorIso) - 1))
+                grid = grid.aria("activedescendant" -> n.cellId(firstDow + DatePicker.dayOf(cursorIso) - 1))
         }
         grid(UI.children((headRow :: bodyRows))*)
     end dayView
@@ -994,7 +994,7 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
                 else drillTo(iso7, DatePickerView.Date, nav)
             action match
                 case Present(a) => cell = cell.onClick(seedCursor(iso7, nav).andThen(a))
-                case Absent     => cell = cell.cssClass("p-disabled").aria("disabled", "true")
+                case Absent     => cell = cell.cssClass("p-disabled").aria("disabled" -> "true")
             nav.foreach(n => cell = cell.id(n.cellId(m - 1)).role("gridcell"))
             if iso7 == cursor then cell = cell.cssClass("p-focus").scrollAuto(true)
             cell(DatePicker.monthNamesShort(m - 1))
@@ -1049,7 +1049,7 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
                 else drillTo(iso4 + "-" + DatePicker.pad(month, 2), DatePickerView.Month, nav)
             action match
                 case Present(a) => cell = cell.onClick(seedCursor(iso4, nav).andThen(a))
-                case Absent     => cell = cell.cssClass("p-disabled").aria("disabled", "true")
+                case Absent     => cell = cell.cssClass("p-disabled").aria("disabled" -> "true")
             nav.foreach(n => cell = cell.id(n.cellId(y - base)).role("gridcell"))
             if iso4 == cursor then cell = cell.cssClass("p-focus").scrollAuto(true)
             cell(y.toString)
@@ -1116,7 +1116,7 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
         nav.foreach { n =>
             grid = grid.id(n.gridId).tabIndex(0).preventScrollKeys.role("grid")
             if n.seedV then grid = grid.focusAuto(true)
-            if cursor.nonEmpty then grid = grid.aria("activedescendant", n.cellId(indexOf(cursor)))
+            if cursor.nonEmpty then grid = grid.aria("activedescendant" -> n.cellId(indexOf(cursor)))
             grid = grid.onKeyDown { e =>
                 val eff: UI.Action =
                     if cursor.isEmpty then ()
@@ -1206,7 +1206,7 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
                 .cssClass("p-button-rounded")
                 .cssClass("p-button-text")
                 .jsProp("type", "button")
-                .aria("label", label)
+                .aria("label" -> label)
             if editable && inBounds(iso) then b = b.onClick(write(iso)) else b = b.disabled(true)
             b(GlyphSvg(glyph, "p-icon"))
         end spinButton

@@ -249,7 +249,7 @@ final class SelectButton[A] private[uic] (private[uic] val p: SelectButton.Props
         // Held options no button carries, once the options are said to be complete.
         val unknown = if loadingV.constTrue then Nil else held.filterNot(a => items.exists(i => key(i) == key(a)))
         var el      = div.cssClass("p-selectbutton").cssClass("p-component")
-        if loadingV.constTrue then el = el.aria("busy", "true")
+        if loadingV.constTrue then el = el.aria("busy" -> "true")
         // A choice of ONE is a radio group: it says so, holds one tab stop, and moves inside it
         // with the arrows. Several independent choices stay a group of toggle buttons.
         el = el.role(if multipleFlag then "group" else "radiogroup")
@@ -272,8 +272,8 @@ final class SelectButton[A] private[uic] (private[uic] val p: SelectButton.Props
                         case Absent     => f(Absent)
                 )
         blurHandler.foreach(h => el = el.onBlur(h))
-        access.name.foreach(v => el = el.aria("label", v))
-        access.nameRef.foreach(v => el = el.aria("labelledby", v))
+        access.name.foreach(v => el = el.aria("label" -> v))
+        access.nameRef.foreach(v => el = el.aria("labelledby" -> v))
 
         // The positions an arrow may land on: a disabled option is out of the tab order, so the
         // movement steps over it.

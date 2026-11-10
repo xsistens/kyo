@@ -202,7 +202,7 @@ object Password:
             .when(revealed.map(!_))(_.cssClass("p-password-unmask-icon"))
             .role("button")
             .tabIndex(0)
-            .aria("label", revealed.map(on => if on then "Hide password" else "Show password"))
+            .aria("label" -> revealed.map(on => if on then "Hide password" else "Show password"))
             .silent(disabled)
             .onClick(flip)
             .onKeyDown { e =>

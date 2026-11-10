@@ -102,10 +102,10 @@ final class Fieldset private[uic] (private[uic] val p: Fieldset.Props) extends N
             val b = button
                 .cssClass("p-fieldset-toggle-button")
                 .jsProp("type", "button")
-                .aria("expanded", (!c).toString)
-                .aria("label", legendConst.getOrElse("Toggle"))
+                .aria("expanded" -> !c)
+                .aria("label" -> legendConst.getOrElse("Toggle"))
             val pressable =
-                if fixed then b.aria("disabled", "true")
+                if fixed then b.aria("disabled" -> "true")
                 else b.onClick(collapsedSlot.update(!_))
             pressable(
                 GlyphSvg(if c then Icons.plus else Icons.minus, "p-fieldset-toggle-icon"),

@@ -133,16 +133,16 @@ final class CheckBox private[uic] (private[uic] val p: CheckBox.Props) extends N
         var box = checkbox.cssClass("p-checkbox-input").checked(native)
         if !tabbableFlag then box = box.tabIndex(-1)
         box = access.id.map(v => box.id(v)).getOrElse(box)
-        if isMixed then box = box.indeterminate(true).aria("checked", "mixed")
+        if isMixed then box = box.indeterminate(true).aria("checked" -> "mixed")
         box = nameV.map(v => box.jsProp("name", v)).getOrElse(box)
         box = valueV.map(v => box.jsProp("value", v)).getOrElse(box)
-        if requiredFlag.getOrElse(false) then box = box.jsProp("required", "true").aria("required", "true")
+        if requiredFlag.getOrElse(false) then box = box.jsProp("required", "true").aria("required" -> "true")
         box = validity.markAria(box)
-        if isReadonly then box = box.aria("readonly", "true")
+        if isReadonly then box = box.aria("readonly" -> "true")
         box = access.name match
-            case Present(v) => box.aria("label", v)
+            case Present(v) => box.aria("label" -> v)
             case _          => box
-        box = access.nameRef.map(v => box.aria("labelledby", v)).getOrElse(box)
+        box = access.nameRef.map(v => box.aria("labelledby" -> v)).getOrElse(box)
         if blocked then box = box.preventActivation
         box = disabledFlag.foldFlag(box)(box.disabled(_))
         if !blocked then box = onChg.map(box.onChange(_)).getOrElse(box)

@@ -927,7 +927,7 @@ class UIDrawnTest extends kyo.test.Test[Any]:
                 UI.mountedWith(Pair(s"run $n", same, Counted())) { live =>
                     val a = live(_.a)
                     discard(read.updateAndGet(_.append(a)))
-                    div(span(a), span("b").aria("label", live(_.b)))
+                    div(span(a), span("b").aria("label" -> live(_.b)))
                 }.keyed("host")
             ui = div(tick.render(host))
             seen <- painted(ui, rec) { (_, _) =>

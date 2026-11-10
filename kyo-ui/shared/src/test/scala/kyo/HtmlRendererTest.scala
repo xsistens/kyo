@@ -967,21 +967,21 @@ class HtmlRendererTest extends UITest:
         for
             ref  <- Signal.initRef("b")
             some <- Signal.initRef[Maybe[String]](Present("b"))
-            off  <- Signal.initRef(false)
+            none <- Signal.initRef[Maybe[String]](Absent)
             sig   = ref: Signal[String]
             maybe = some: Signal[Maybe[String]]
-            no    = off: Signal[Boolean]
+            no    = none: Signal[Maybe[String]]
             input1 <- render(UI.input.placeholder("a").placeholder(sig))
             input2 <- render(UI.input.placeholder(sig).placeholder("a"))
             area   <- render(UI.textarea.placeholder("a").placeholder(sig))
-            aria1  <- render(UI.span("x").aria("label", "a").aria("label", sig))
-            aria2  <- render(UI.span("x").aria("label", sig).aria("label", "a"))
-            flag   <- render(UI.span("x").ariaFlag("busy", no).aria("busy", "true"))
+            aria1  <- render(UI.span("x").aria("label" -> "a").aria("label" -> sig))
+            aria2  <- render(UI.span("x").aria("label" -> sig).aria("label" -> "a"))
+            flag   <- render(UI.span("x").aria("busy" -> no).aria("busy" -> "true"))
             title1 <- render(UI.span("x").title("a").title(sig))
             title2 <- render(UI.span("x").title(sig).title("a"))
             frame  <- render(UI.iframe("/f").title("a").title(sig))
-            data1  <- render(UI.span("x").data("k", "a").withReactiveAttr("data-k", sig))
-            data2  <- render(UI.span("x").withReactiveAttr("data-k", sig).data("k", "a"))
+            data1  <- render(UI.span("x").data("k" -> "a").withReactiveAttr("data-k", sig))
+            data2  <- render(UI.span("x").withReactiveAttr("data-k", sig).data("k" -> "a"))
             role1  <- render(withRole(UI.span("x").role("a"), maybe))
             role2  <- render(withRole(UI.span("x"), maybe).role("a"))
         yield

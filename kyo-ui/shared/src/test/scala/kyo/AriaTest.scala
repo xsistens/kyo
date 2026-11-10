@@ -9,32 +9,32 @@ class AriaTest extends kyo.test.Test[Any]:
     private def renderHtml(ui: UI)(using Frame): String < Sync =
         HtmlRenderer.render(ui, Seq.empty)
 
-    "aria(name, value) renders aria-label attribute on div" in {
-        val html = renderHtml(UI.div.aria("label", "Save"))
+    "an aria entry renders the aria-label attribute on div" in {
+        val html = renderHtml(UI.div.aria("label" -> "Save"))
         html.map { s =>
             assert(s.contains("""aria-label="Save""""))
         }
     }
 
-    "aria(name, Maybe) sets the attribute from Present and nothing from Absent" in {
+    "a Maybe aria entry sets the attribute from Present and nothing from Absent, the element as it is" in {
         val named: Maybe[Prop[String]]   = Present("Save")
         val unnamed: Maybe[Prop[String]] = Absent
         val el                           = UI.div
-        for html <- renderHtml(el.aria("label", named))
+        for html <- renderHtml(el.aria("label" -> named))
         yield
             assert(html.contains("aria-label=\"Save\""), html)
-            assert(el.aria("label", unnamed) eq el)
+            assert(el.aria("label" -> unnamed) eq el)
         end for
     }
 
-    "aria(name, Maybe) of a signal is the attribute channel" in {
+    "a Maybe aria entry that holds a signal is the attribute channel" in {
         for
             ref <- Signal.initRef("Save")
-            el = UI.div.aria("label", Present(ref): Maybe[Prop[String]])
+            el = UI.div.aria("label" -> (Present(ref): Maybe[Prop[String]]))
         yield assert(el.attrs.reactiveAttrs.get("aria-label").exists(_ eq ref), s"${el.attrs}")
     }
 
-    "aria(pairs*) with three pairs renders all aria-* attributes sorted alphabetically" in {
+    "aria with three entries renders all aria-* attributes sorted alphabetically" in {
         val html = renderHtml(
             UI.div.aria(
                 "label" -> "Main",
@@ -55,7 +55,7 @@ class AriaTest extends kyo.test.Test[Any]:
 
     "setting the same aria name twice keeps only the last value" in {
         val html = renderHtml(
-            UI.div.aria("label", "First").aria("label", "Second")
+            UI.div.aria("label" -> "First").aria("label" -> "Second")
         )
         html.map { s =>
             assert(s.contains("""aria-label="Second""""))
@@ -65,10 +65,10 @@ class AriaTest extends kyo.test.Test[Any]:
 
     "element with ariaAttrs emits aria-* before data-* before data-kyo-prop-* in deterministic order" in {
         val element = UI.checkbox
-            .aria("role", "button")
-            .aria("label", "Go")
-            .data("track-id", "99")
-            .data("env", "prod")
+            .aria("role" -> "button")
+            .aria("label" -> "Go")
+            .data("track-id" -> "99")
+            .data("env" -> "prod")
             .indeterminate(true)
         for
             s  <- renderHtml(element)
@@ -90,10 +90,10 @@ class AriaTest extends kyo.test.Test[Any]:
     "aria and data attributes both render sorted by name (structural attribute check)" in {
         val html = renderHtml(
             UI.div
-                .aria("z-attr", "z")
-                .aria("a-attr", "a")
-                .data("z-data", "z")
-                .data("a-data", "a")
+                .aria("z-attr" -> "z")
+                .aria("a-attr" -> "a")
+                .data("z-data" -> "z")
+                .data("a-data" -> "a")
         )
         html.map { s =>
             assert(s.indexOf("aria-a-attr") < s.indexOf("aria-z-attr"))
@@ -269,7 +269,7 @@ class AriaTest extends kyo.test.Test[Any]:
     }
 
     "role and aria-role are distinct attributes and both render" in {
-        val html = renderHtml(UI.div.role("img").aria("role", "button"))
+        val html = renderHtml(UI.div.role("img").aria("role" -> "button"))
         html.map { s =>
             assert(s.contains("""role="img""""), s"missing bare role: $s")
             assert(s.contains("""aria-role="button""""), s"missing aria-role: $s")

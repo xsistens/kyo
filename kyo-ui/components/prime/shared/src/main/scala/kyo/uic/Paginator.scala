@@ -317,10 +317,14 @@ object Paginator:
             go(at => Position.clamp(typed.trim.toIntOption.map(_ - 1).getOrElse(at.cur), at.pages))
 
         def navButton(cls: String, glyph: IconGlyph, target: Position => Int, off: Prop[Boolean], label: String, fixed: Boolean): UI =
-            val nav = button.cssClass(s"p-paginator-$cls").jsProp("type", "button").aria("label", label)
+            val nav = button.cssClass(s"p-paginator-$cls").jsProp("type", "button").aria("label" -> label)
                 .when(off)(_.cssClass("p-disabled")).disabled(off)
             // A fixed page goes nowhere from any button, so each says so, disabled or not (Chris, 2026-11-08).
-            (if fixed then nav.aria("disabled", "true") else nav.onClick(go(target))) (GlyphSvg(glyph, s"p-paginator-$cls-icon", "p-icon"))
+            (if fixed then nav.aria("disabled" -> "true") else nav.onClick(go(target))) (GlyphSvg(
+                glyph,
+                s"p-paginator-$cls-icon",
+                "p-icon"
+            ))
         end navButton
 
         def pageLinks(v: Position, size: Int, fixed: Boolean): UI =
@@ -331,9 +335,9 @@ object Paginator:
             val endRaw            = math.min(v.pages - 1, startRaw + visible - 1)
             val start             = math.max(0, startRaw - (size - (endRaw - startRaw + 1)))
             val buttons: List[UI] = (start to endRaw).toList.map { pi =>
-                button.cssClass("p-paginator-page").jsProp("type", "button").aria("label", s"Page ${pi + 1}")
-                    .when(pi == v.cur)(_.cssClass("p-paginator-page-selected").aria("current", "page"))
-                    .when(pi != v.cur && fixed)(_.aria("disabled", "true"))
+                button.cssClass("p-paginator-page").jsProp("type", "button").aria("label" -> s"Page ${pi + 1}")
+                    .when(pi == v.cur)(_.cssClass("p-paginator-page-selected").aria("current" -> "page"))
+                    .when(pi != v.cur && fixed)(_.aria("disabled" -> "true"))
                     .when(pi != v.cur && !fixed)(_.onClick(go(_ => pi)))((pi + 1).toString)
             }
             span.cssClass("p-paginator-pages")(UI.children(buttons)*)

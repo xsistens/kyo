@@ -395,7 +395,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val p: CascadeSelect.Pro
         // [[HasElementId]]. The chain's parts derive from the same value.
         access.id.foreach(v => el = el.id(v))
         if held.isDefined then el = el.cssClass("p-inputwrapper-filled")
-        if loading then el = el.aria("busy", "true")
+        if loading then el = el.aria("busy" -> "true")
         if isOpen then el = el.cssClass("p-cascadeselect-open").cssClass("p-uic-overlay-anchor")
         el = validity.mark(el)
         if disabledFlag then el = el.cssClass("p-disabled")
@@ -407,19 +407,19 @@ final class CascadeSelect[A] private[uic] (private[uic] val p: CascadeSelect.Pro
         if variantV == FieldVariant.Filled then el = el.cssClass("p-variant-filled")
         if fluidFlag then el = el.cssClass("p-cascadeselect-fluid")
         el = el.title(tooltipV)
-        access.name.foreach(v => el = el.aria("label", v))
-        access.nameRef.foreach(v => el = el.aria("labelledby", v))
-        el = el.role("combobox").aria("haspopup", "tree").aria("expanded", isOpen.toString)
+        access.name.foreach(v => el = el.aria("label" -> v))
+        access.nameRef.foreach(v => el = el.aria("labelledby" -> v))
+        el = el.role("combobox").aria("haspopup" -> "tree").aria("expanded" -> isOpen)
         st.idBase.foreach { b =>
-            el = el.aria("controls", listId(b))
+            el = el.aria("controls" -> listId(b))
             // One travelling id, wherever in the nested chain the highlight has walked to, because
             // `aria-activedescendant` names exactly one element and the trigger is the one thing
             // holding focus.
-            if st.focus.nonEmpty then el = el.aria("activedescendant", activeId(b))
+            if st.focus.nonEmpty then el = el.aria("activedescendant" -> activeId(b))
         }
         if !disabledFlag then
             el = el.tabIndex(0).preventScrollKeys
-            if fixed then el = el.aria("readonly", "true")
+            if fixed then el = el.aria("readonly" -> "true")
             // The one click listener: a click anywhere on the field toggles the chain.
             // A panel fixed open has no close for a click to ask for, so the field takes none.
             if !fixed && !openFixedOpen then el = el.onClick(toggleRoot)
@@ -473,7 +473,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val p: CascadeSelect.Pro
         val rows: List[UI] = its.zipWithIndex.map {
             case (CascadeItem.Leaf(a), i) =>
                 val isSel = key(a) == current
-                var row   = li.cssClass("p-cascadeselect-option").role("treeitem").aria("selected", isSel.toString)
+                var row   = li.cssClass("p-cascadeselect-option").role("treeitem").aria("selected" -> isSel)
                 if isSel then row = row.cssClass("p-cascadeselect-option-selected")
                 if st.focus == (path :+ i) then
                     row = row.cssClass("p-focus").scrollAuto(true)
@@ -496,8 +496,8 @@ final class CascadeSelect[A] private[uic] (private[uic] val p: CascadeSelect.Pro
                     .cssClass("p-cascadeselect-option-group")
                     .cssClass("p-uic-overlay-anchor")
                     .role("treeitem")
-                    .aria("expanded", groupOpen.toString)
-                    .aria("level", (p.size).toString)
+                    .aria("expanded" -> groupOpen)
+                    .aria("level" -> p.size)
                 if groupOpen then row = row.cssClass("p-cascadeselect-option-active")
                 if st.focus == p then
                     row = row.cssClass("p-focus").scrollAuto(true)

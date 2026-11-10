@@ -378,23 +378,23 @@ final class AutoComplete[A] private[uic] (private[uic] val p: AutoComplete.Props
         f = f.placeholder(placeholderText)
         if disabledFlag then f = f.disabled(true)
         if readonlyFlag then f = f.readOnly(true)
-        if requiredFlag then f = f.aria("required", "true").jsProp("required", "true")
+        if requiredFlag then f = f.aria("required" -> "true").jsProp("required", "true")
         f = nameV.map(v => f.jsProp("name", v)).getOrElse(f)
         f = access.name match
-            case Present(v) => f.aria("label", v)
+            case Present(v) => f.aria("label" -> v)
             case _          => f
-        f = access.nameRef.map(v => f.aria("labelledby", v)).getOrElse(f)
+        f = access.nameRef.map(v => f.aria("labelledby" -> v)).getOrElse(f)
         // A text box that opens a list of suggestions IS a combobox. This one keeps DOM focus in
         // the input the whole time (the panel is `seedFocus(false)`), so the input is also where
         // `aria-activedescendant` belongs: on the suggestion list it named the right option but
         // hung it off an element nothing was focused on, and a screen reader reads the attribute
         // of the FOCUSED element or of none at all.
-        f = f.role("combobox").aria("haspopup", "listbox").aria("expanded", panelShown.toString)
+        f = f.role("combobox").aria("haspopup" -> "listbox").aria("expanded" -> panelShown)
         st.foreach { s =>
             s.idBase.foreach { b =>
-                f = f.aria("controls", listId(b))
+                f = f.aria("controls" -> listId(b))
                 val hiEff = if visible.isEmpty then -1 else math.min(s.hiV, visible.size - 1)
-                if panelShown && hiEff >= 0 then f = f.aria("activedescendant", optionId(b, hiEff))
+                if panelShown && hiEff >= 0 then f = f.aria("activedescendant" -> optionId(b, hiEff))
             }
         }
         st.foreach { s =>
@@ -438,7 +438,7 @@ final class AutoComplete[A] private[uic] (private[uic] val p: AutoComplete.Props
                     button
                         .cssClass("p-autocomplete-clear-icon")
                         .jsProp("type", "button")
-                        .aria("label", "Clear")
+                        .aria("label" -> "Clear")
                         .onClick(valueSlot.change(""))(GlyphSvg(Icons.times, "p-icon"))
                 )
             case _ => Nil
@@ -450,7 +450,7 @@ final class AutoComplete[A] private[uic] (private[uic] val p: AutoComplete.Props
                 var dd = button
                     .cssClass("p-autocomplete-dropdown")
                     .jsProp("type", "button")
-                    .aria("label", "Show options")
+                    .aria("label" -> "Show options")
                 st match
                     case Present(s) =>
                         // The trigger is an affordance OF the combobox, not a widget beside it: it
@@ -501,7 +501,7 @@ final class AutoComplete[A] private[uic] (private[uic] val p: AutoComplete.Props
             var row = li
                 .cssClass("p-autocomplete-option")
                 .role("option")
-                .data("uic-option-key", keyF.getOrElse(labelF)(a))
+                .data("uic-option-key" -> keyF.getOrElse(labelF)(a))
             if i == hiEff then row = row.cssClass("p-focus").scrollAuto(true)
             s.idBase.foreach(b => row = row.id(optionId(b, i)))
             row.onClick(pick(a)(s))(content)

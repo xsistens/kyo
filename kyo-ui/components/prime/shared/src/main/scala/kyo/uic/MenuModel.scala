@@ -54,7 +54,7 @@ final class MenuItem private[uic] (private[uic] val p: MenuItem.Props) extends H
       *
       * Takes a `Signal[Boolean]` because the current route is one, and both slots it writes are
       * kyo-ui CHANNELS: `when(sig)(_.cssClass(name))` toggles the class through `classList.toggle` and
-      * `aria(name, sig)` patches the attribute in place, each with NO re-render. So a nav is
+      * `aria(name -> sig)` patches the attribute in place, each with NO re-render. So a nav is
       * built once and stays built: navigating does not rebuild the list, and the keyboard
       * position survives the navigation that a `Routes.current.render { … }` around the whole
       * strip would have thrown away.
@@ -537,8 +537,8 @@ private[uic] object MenuRender:
         // the negative spelling is written out rather than omitted so the attribute the channel
         // writes into exists from the first render.
         it.p.currentFlag match
-            case Present(BoolValue.Const(true)) => link = link.aria("current", "page")
-            case Present(BoolValue.Dyn(sig))    => link = link.aria("current", sig.map(if _ then "page" else "false"))
+            case Present(BoolValue.Const(true)) => link = link.aria("current" -> "page")
+            case Present(BoolValue.Dyn(sig))    => link = link.aria("current" -> sig.map(if _ then "page" else "false"))
             case _                              => ()
         end match
         if !it.p.disabledFlag.constTrue then

@@ -333,20 +333,20 @@ class AttrsTest extends UITest:
         end for
     }
 
-    // ---- aria flag ----
+    // ---- a Boolean aria value ----
 
-    "ariaFlag writes aria-<name>=\"true\" while on and no attribute while off, from a constant or a signal" in {
+    "a Boolean aria value writes \"true\" and \"false\", from a constant or a signal" in {
         def html(ui: UI)(using Frame) = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
         for
             on     <- Signal.initRef(true)
             off    <- Signal.initRef(false)
-            yes    <- html(UI.span.ariaFlag("disabled", true))
-            no     <- html(UI.span.ariaFlag("disabled", false))
-            sigYes <- html(UI.span.ariaFlag("disabled", on: Signal[Boolean]))
-            sigNo  <- html(UI.span.ariaFlag("disabled", off: Signal[Boolean]))
+            yes    <- html(UI.span.aria("disabled" -> true))
+            no     <- html(UI.span.aria("disabled" -> false))
+            sigYes <- html(UI.span.aria("disabled" -> (on: Signal[Boolean])))
+            sigNo  <- html(UI.span.aria("disabled" -> (off: Signal[Boolean])))
         yield
             assert(yes.contains("""aria-disabled="true"""") && sigYes.contains("""aria-disabled="true""""), s"$yes / $sigYes")
-            assert(!no.contains("aria-disabled") && !sigNo.contains("aria-disabled"), s"$no / $sigNo")
+            assert(no.contains("""aria-disabled="false"""") && sigNo.contains("""aria-disabled="false""""), s"$no / $sigNo")
         end for
     }
 

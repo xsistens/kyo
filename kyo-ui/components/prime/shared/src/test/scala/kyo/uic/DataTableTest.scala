@@ -4013,7 +4013,10 @@ class DataTableTest extends ReactiveValueContract:
         yield
             assert(fields.size == 1, s"an unbound filter is the reader's: ${fields.size} fields")
             assert(!fields.head.readOnly.contains(true) && fields.head.onInput.isDefined, "and it takes what they type")
-            assert(funnel.size == 1 && !funnel.head.attrs.ariaAttrs.contains("disabled"), "with its mode funnel, which is no fixed one")
+            assert(
+                funnel.size == 1 && funnel.head.attrs.ariaAttrs.get("disabled").contains("false"),
+                "with its mode funnel, which is no fixed one"
+            )
         end for
     }
 
@@ -4041,7 +4044,7 @@ class DataTableTest extends ReactiveValueContract:
             assert(fields.size == 1, s"a fixed filter is drawn, not removed: ${fields.size} fields")
             assert(query == "A", s"it shows the query: $query")
             assert(fields.head.readOnly.contains(true) && fields.head.onInput.isEmpty, "and the reader cannot change it")
-            assert(funnel.size == 1 && !funnel.head.attrs.ariaAttrs.contains("disabled"), "its mode funnel is there to open")
+            assert(funnel.size == 1 && funnel.head.attrs.ariaAttrs.get("disabled").contains("false"), "its mode funnel is there to open")
             assert(shown == Chunk("A"), s"the rows follow the fixed filter: $shown")
         end for
     }

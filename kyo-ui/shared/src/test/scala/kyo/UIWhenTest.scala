@@ -18,14 +18,14 @@ class UIWhenTest extends kyo.test.Test[Any]:
 
     "when(Present) hands the setter the value" in {
         val name: Maybe[String] = Present("Save")
-        val b                   = UI.button("x").when(name)(_.aria("label", _))
+        val b                   = UI.button("x").when(name)((e, n) => e.aria("label" -> n))
         assert(b.attrs.ariaAttrs.get("label").contains("Save"), s"${b.attrs}")
     }
 
     "when(Absent) leaves the element as it is" in {
         val el                  = UI.button("x")
         val name: Maybe[String] = Absent
-        assert(el.when(name)(_.aria("label", _)) eq el)
+        assert(el.when(name)((e, n) => e.aria("label" -> n)) eq el)
     }
 
     "when chains: each condition decides its own setter" in {
@@ -81,8 +81,8 @@ class UIWhenTest extends kyo.test.Test[Any]:
     }
 
     "over a constant prop the toggle is the element's own setters: true the bytes of when(true), false the element as it is" in {
-        val f   = (t: Toggle[Button]) => t.cssClass("x", "y").aria("pressed", "true").data("k", "v").role("switch").disabled(true)
-        val g   = (b: Button) => b.cssClass("x", "y").aria("pressed", "true").data("k", "v").role("switch").disabled(true)
+        val f   = (t: Toggle[Button]) => t.cssClass("x", "y").aria("pressed" -> "true").data("k" -> "v").role("switch").disabled(true)
+        val g   = (b: Button) => b.cssClass("x", "y").aria("pressed" -> "true").data("k" -> "v").role("switch").disabled(true)
         val on  = true: Prop[Boolean]
         val off = false: Prop[Boolean]
         val el  = UI.button("Go")
@@ -129,9 +129,9 @@ class UIWhenTest extends kyo.test.Test[Any]:
     }
 
     "aria, data, role and disabled over a signal: the attributes of the constant in each state, one of each name" in {
-        val f    = (t: Toggle[Button]) => t.aria("pressed", "true").data("k", "on").role("switch").disabled(true)
-        val g    = (b: Button) => b.aria("pressed", "true").data("k", "on").role("switch").disabled(true)
-        val base = UI.button("Go").aria("pressed", "false").data("k", "off")
+        val f    = (t: Toggle[Button]) => t.aria("pressed" -> "true").data("k" -> "on").role("switch").disabled(true)
+        val g    = (b: Button) => b.aria("pressed" -> "true").data("k" -> "on").role("switch").disabled(true)
+        val base = UI.button("Go").aria("pressed" -> "false").data("k" -> "off")
         for
             on   <- Signal.initRef(true)
             off  <- Signal.initRef(false)
@@ -162,7 +162,7 @@ class UIWhenTest extends kyo.test.Test[Any]:
                 val exchange = new RecordingExchange(synchronous = fast)
                 for
                     s <- Signal.initRef(false)
-                    ui = UI.button("Go").when(s: Signal[Boolean])(_.cssClass("x").aria("pressed", "true").disabled(true))
+                    ui = UI.button("Go").when(s: Signal[Boolean])(_.cssClass("x").aria("pressed" -> "true").disabled(true))
                     root <- ReactiveUI.normalize(UI.div(ui), Seq.empty)
                     _    <- ReactiveUI.subscribe(root, exchange)
                     _    <- s.set(true)
@@ -187,10 +187,10 @@ class UIWhenTest extends kyo.test.Test[Any]:
             chan <- Signal.initRef(false)
             name <- Signal.initRef("bound")
             s    <- Signal.initRef(true)
-            base    = UI.button("Go").disabled(chan: Signal[Boolean]).aria("label", name: Signal[String])
-            toggled = base.when(s: Signal[Boolean])(_.disabled(true).aria("label", "fixed"))
+            base    = UI.button("Go").disabled(chan: Signal[Boolean]).aria("label" -> (name: Signal[String]))
+            toggled = base.when(s: Signal[Boolean])(_.disabled(true).aria("label" -> "fixed"))
             sOn   <- html(toggled)
-            cOn   <- html(base.when(true)(_.disabled(true).aria("label", "fixed")))
+            cOn   <- html(base.when(true)(_.disabled(true).aria("label" -> "fixed")))
             plain <- html(base)
         yield
             assert(toggled.attrs.toggled.isEmpty, s"${toggled.attrs}")
@@ -205,7 +205,8 @@ class UIWhenTest extends kyo.test.Test[Any]:
         for
             a <- Signal.initRef(false)
             b <- Signal.initRef(false)
-            ui = UI.button("Go").when(a: Signal[Boolean])(_.aria("pressed", "true")).when(b: Signal[Boolean])(_.aria("pressed", "mixed"))
+            ui =
+                UI.button("Go").when(a: Signal[Boolean])(_.aria("pressed" -> "true")).when(b: Signal[Boolean])(_.aria("pressed" -> "mixed"))
             none   <- html(ui)
             _      <- a.set(true)
             first  <- html(ui)
@@ -254,10 +255,109 @@ class UIWhenTest extends kyo.test.Test[Any]:
         end for
     }
 
+    // ---- entries on a toggle ----
+
+    /** The value of `aria-$name` in `html`, if written. */
+    private def ariaOf(name: String)(html: String): Maybe[String] =
+        s"""aria-$name="([^"]*)"""".r.findFirstMatchIn(html).fold(Absent: Maybe[String])(m => Present(m.group(1)))
+
+    "a signal entry under a signal condition is one channel: its value while the condition holds, the element's while not" in {
+        given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
+        for
+            s     <- Signal.initRef(false)
+            label <- Signal.initRef("a")
+            ui = UI.button("Go").aria("label" -> "base").when(s: Signal[Boolean])(_.aria("label" -> (label: Signal[String])))
+            off   <- html(ui)
+            _     <- s.set(true)
+            on    <- html(ui)
+            _     <- label.set("b")
+            moved <- html(ui)
+            _     <- s.set(false)
+            back  <- html(ui)
+        yield
+            assert(ui.attrs.toggled.contains("aria-label") && ui.attrs.ariaAttrs.isEmpty, s"${ui.attrs}")
+            assert(
+                Chunk(off, on, moved, back).map(ariaOf("label")) ==
+                    Chunk[Maybe[String]](Present("base"), Present("a"), Present("b"), Present("base")),
+                s"$off | $on | $moved | $back"
+            )
+        end for
+    }
+
+    "a signal of a Maybe that holds Absent while the condition holds leaves the element's value" in {
+        given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
+        for
+            s     <- Signal.initRef(true)
+            label <- Signal.initRef[Maybe[String]](Absent)
+            ui = UI.button("Go").aria("label" -> "base").when(s: Signal[Boolean])(_.aria("label" -> (label: Signal[Maybe[String]])))
+            absent <- html(ui)
+            _      <- label.set(Present("x"))
+            held   <- html(ui)
+        yield assert(
+            Chunk(absent, held).map(ariaOf("label")) == Chunk[Maybe[String]](Present("base"), Present("x")),
+            s"$absent | $held"
+        )
+        end for
+    }
+
+    "a later toggle with a signal entry composes with an earlier one as a constant does" in {
+        given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
+        for
+            a     <- Signal.initRef(true)
+            b     <- Signal.initRef(false)
+            mixed <- Signal.initRef("mixed")
+            ui = UI.button("Go").when(a: Signal[Boolean])(_.aria("pressed" -> true)).when(b: Signal[Boolean])(
+                _.aria("pressed" -> (mixed: Signal[String]))
+            )
+            first <- html(ui)
+            _     <- b.set(true)
+            both  <- html(ui)
+            _     <- a.set(false)
+            later <- html(ui)
+        yield assert(
+            Chunk(first, both, later).map(ariaOf("pressed")) == Chunk[Maybe[String]](Present("true"), Present("mixed"), Present("mixed")),
+            s"$first | $both | $later"
+        )
+        end for
+    }
+
+    "over a constant condition a signal entry is the element's own channel, and Absent sets nothing" in {
+        val none: Maybe[String] = Absent
+        for
+            label <- Signal.initRef("a")
+            on  = true: Prop[Boolean]
+            off = false: Prop[Boolean]
+            el  = UI.button("Go")
+        yield
+            val bound = el.when(on)(_.aria("label" -> (label: Signal[String]), "describedby" -> none).data("n" -> 3))
+            assert(bound.attrs.reactiveAttrs.get("aria-label").exists(_ eq label) && bound.attrs.toggled.isEmpty, s"${bound.attrs}")
+            assert(bound.attrs.ariaAttrs.isEmpty && bound.attrs.dataAttrs == Map("n" -> "3"), s"${bound.attrs}")
+            assert(el.when(off)(_.aria("label" -> (label: Signal[String]))) eq el)
+        end for
+    }
+
+    "Boolean, number and Absent entries over a signal: the constant's attributes in each state" in {
+        val none: Maybe[String] = Absent
+        val f                   = (t: Toggle[Button]) => t.aria("busy" -> true, "label" -> none).data("n" -> 3)
+        val g                   = (b: Button) => b.aria("busy" -> true, "label" -> none).data("n" -> 3)
+        val base                = UI.button("Go")
+        for
+            on   <- Signal.initRef(true)
+            off  <- Signal.initRef(false)
+            sOn  <- html(base.when(on: Signal[Boolean])(f))
+            sOff <- html(base.when(off: Signal[Boolean])(f))
+            cOn  <- html(base.when(true)(g))
+            cOff <- html(base.when(false)(g))
+        yield
+            assert(attrSet(sOn, "button") == attrSet(cOn, "button") && attrSet(sOff, "button") == attrSet(cOff, "button"), s"$sOn | $sOff")
+            assert(cOn.contains("""aria-busy="true"""") && cOn.contains("""data-n="3"""") && !cOn.contains("aria-label"), cOn)
+        end for
+    }
+
     "a reserved data name is refused on a toggle as on the element" in {
         for s <- Signal.initRef(false)
         yield
-            val error = intercept[IllegalArgumentException](UI.div.when(s: Signal[Boolean])(_.data("kyo-x", "v")))
+            val error = intercept[IllegalArgumentException](UI.div.when(s: Signal[Boolean])(_.data("kyo-x" -> "v")))
             assert(error.getMessage.contains("kyo- prefix is reserved"), error.getMessage)
     }
 end UIWhenTest
