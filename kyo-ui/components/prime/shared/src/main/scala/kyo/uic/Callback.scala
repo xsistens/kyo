@@ -21,3 +21,11 @@ private[uic] object Callback:
     def of2[A, B](f: (A, B) => UI.Action)(using Frame): (A, B) => UI.Action =
         (a, b) => apply(f(a, b))
 end Callback
+
+extension [P](props: UI.Live[P])
+    /** The hearer `field` picks, read when its event comes: the latest run's, so a run that brings a new hearer draws nothing again
+      * and the event still reaches it, and nothing where that run sets none.
+      */
+    private[uic] def hearing[A](field: P => Maybe[A => UI.Action])(using Frame): A => UI.Action =
+        a => props.call(field).map(_.fold(Kyo.unit: UI.Action)(_(a)))
+end extension
