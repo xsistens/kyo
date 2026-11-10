@@ -3,41 +3,80 @@ package kyo.uic
 import kyo.*
 import kyo.UI.render
 
-/** The `value` slot holds to rule A ([[ReactiveValueContract]]) as a text field does: a constant is the starting text,
-  * and unbound the text is the browser's. Typing reaches `onInput` and a commit `onChange`, so the slot is held through
-  * each. The cases after them are what only this field does: the strength meter judges the text it shows, and an edit
-  * its owner does not take is painted away.
+/** The `value` slot holds to rule A ([[ReactiveValueContract]]) as a text field that keeps its text does: a constant is the
+  * starting text, and unbound or from a constant the instance's own ref holds what the reader types, with the meter, the
+  * eye, both or neither. Typing reaches `onInput` and a commit `onChange`, so the slot is held through each. The cases after
+  * them are what only this field does: the strength meter judges the text it shows, and an edit its owner does not take is
+  * painted away.
   */
 class PasswordTest extends ReactiveValueContract:
 
     // Freed of every loss in its wave (T19): a region that takes the reader's state again fails the leaf.
     override private[uic] def armed: Boolean = true
 
-    private val valueSlot = nativeText[uic.Password](
-        name = "value",
-        bare = Present(uic.Password()),
-        bind = uic.Password().value(_),
-        hear = (c, f) => c.onInput(f),
-        event = "onInput or onChange",
-        render = _.render,
-        placed = Present(_.toUI),
-        field = "p-password-input"
-    )
+    /** Whether the field of `t` is wired for typing: it writes a ref (the instance's own text, or the caller's) or tells a
+      * hearer of a keystroke or of a commit.
+      */
+    private def writes(t: UI)(using Frame): Boolean < Sync =
+        textField(t, "p-password-input").map {
+            case f: UI.Ast.TextInput =>
+                f.onInput.isDefined || f.onChange.isDefined ||
+                (f.value match
+                    case Present(UI.Bound.Ref(_)) => true
+                    case _                        => false)
+            case _ => false
+        }
+
+    /** A case of the value slot on `made`: the field keeps the text itself, unbound and from a constant, so the reader's text
+      * is the instance's and a host region that runs again keeps it.
+      */
+    private def ownText(
+        name: String,
+        made: Frame ?=> uic.Password,
+        hear: (uic.Password, String => UI.Action) => Frame ?=> uic.Password = (c, f) => c.onInput(f),
+        shows: UI => Frame ?=> String < Sync = t => textField(t, "p-password-input").map(textIn),
+        commit: Boolean = false,
+        ready: UI => Frame ?=> Boolean < Sync = t => writes(t)
+    ): SlotCase[uic.Password, String] =
+        new SlotCase[uic.Password, String](
+            name = name,
+            bare = Present(made),
+            bind = v => made.value(v),
+            hear = hear,
+            event = "onInput or onChange",
+            render = _.render,
+            placed = Present(_.toUI),
+            start = "",
+            next = "abcDEF12",
+            control = textField(_, "p-password-input"),
+            shows = shows,
+            gesture = (c: UI.Ast.Element) => typed(c, "abcDEF12", commit),
+            answers = editable,
+            saysFixed = {
+                case t: UI.Ast.TextInput => t.readOnly.contains(true)
+                case _                   => false
+            },
+            ready = Present(ready),
+            startText = Present("abc")
+        )
+
+    private val valueSlot = ownText("value", uic.Password())
 
     holds(valueSlot)
     blurs(valueSlot, (c, f) => c.onBlur(f))
 
-    heardBy(nativeText[uic.Password](
-        name = "value heard by onChange",
-        bare = Present(uic.Password()),
-        bind = uic.Password().value(_),
-        hear = (c, f) => c.onChange(f),
-        event = "onInput or onChange",
-        render = _.render,
-        placed = Present(_.toUI),
-        field = "p-password-input",
-        commit = true
-    ))
+    heardBy(ownText("value heard by onChange", uic.Password(), hear = (c, f) => c.onChange(f), commit = true))
+
+    "unbound or from a constant, without the meter or the eye, the field binds the instance's own text" in {
+        def own(c: uic.Password): Boolean < Sync = field(c.render).map(_.value match
+            case Present(UI.Bound.Ref(_)) => true
+            case _                        => false)
+        for
+            bare  <- own(uic.Password())
+            start <- own(uic.Password().value("abc"))
+        yield assert((bare, start) == (true, true), s"the field binds a ref of its own (unbound, from a constant): ${(bare, start)}")
+        end for
+    }
 
     /** What a field with the strength meter shows: its text, which the meter must judge. */
     private def judged(t: UI)(using Frame): String < Sync =
@@ -54,55 +93,17 @@ class PasswordTest extends ReactiveValueContract:
             if label != expected then throw new AssertionError(s"the meter says $label over the text '$text'")
             text
 
-    // With the meter on, the field draws the meter from its text, so the text is the field's to keep: unbound or from a
-    // constant it keeps the text itself, and the meter judges what the reader typed.
-    private val feedbackSlot = new SlotCase[uic.Password, String](
-        name = "value with feedback",
-        bare = Present(uic.Password().feedback(true)),
-        bind = uic.Password().feedback(true).value(_),
-        hear = (c, f) => c.onInput(f),
-        event = "onInput or onChange",
-        render = _.render,
-        placed = Present(_.toUI),
-        start = "",
-        next = "abcDEF12",
-        control = textField(_, "p-password-input"),
-        shows = judged(_),
-        gesture = (c: UI.Ast.Element) => typed(c, "abcDEF12", commit = false),
-        answers = editable,
-        saysFixed = {
-            case t: UI.Ast.TextInput => t.readOnly.contains(true)
-            case _                   => false
-        },
-        // The typing is wired once the field writes a ref (the instance's own text, or the caller's) or tells a hearer.
-        ready = Present(t =>
-            textField(t, "p-password-input").map {
-                case f: UI.Ast.TextInput =>
-                    f.onInput.isDefined ||
-                    (f.value match
-                        case Present(UI.Bound.Ref(_)) => true
-                        case _                        => false)
-                case _ => false
-            }
-        ),
-        startText = Present("abc")
-    )
+    // With the meter on, the meter judges the text the field keeps, unbound and from a constant alike.
+    private val feedbackSlot = ownText("value with feedback", uic.Password().feedback(true), shows = judged(_))
 
     holds(feedbackSlot)
     blurs(feedbackSlot, (c, f) => c.onBlur(f))
 
-    // The eye's reveal draws the field again, so a constant drawn as the field's value would be put back over what the
-    // reader typed; unbound, the field draws no value and the text stays the browser's.
-    private val toggleSlot = nativeText[uic.Password](
-        name = "value with the mask toggle",
-        bare = Present(uic.Password().toggleMask(true)),
-        bind = uic.Password().toggleMask(true).value(_),
-        hear = (c, f) => c.onInput(f),
-        event = "onInput or onChange",
-        render = _.render,
-        placed = Present(_.toUI),
-        field = "p-password-input",
-        ready = Present(elementsWithClass(_, "p-password-toggle-mask-icon").map(_.nonEmpty))
+    // With the eye, the field keeps the text through a reveal, which switches only its type.
+    private val toggleSlot = ownText(
+        "value with the mask toggle",
+        uic.Password().toggleMask(true),
+        ready = t => writes(t).map(w => elementsWithClass(t, "p-password-toggle-mask-icon").map(eye => w && eye.nonEmpty))
     )
 
     holds(toggleSlot)
