@@ -59,4 +59,52 @@ class DataAttrsTest extends kyo.test.Test[Any]:
         assert(baseDiv.attrs.dataAttrs.isEmpty)
     }
 
+    // ---- data(entries*): name -> value, written by the value's type ----
+
+    "data entries write each value as what it is, and Absent writes nothing" in {
+        val form: Maybe[String] = Absent
+        val html                = renderHtml(UI.div.data("uic-vs-first" -> 3, "uic-open" -> true, "uic-key" -> "k", "uic-form" -> form))
+        html.map { s =>
+            assert(
+                s.contains("""data-uic-vs-first="3"""") && s.contains("""data-uic-open="true"""") && s.contains("""data-uic-key="k"""") &&
+                    !s.contains("data-uic-form"),
+                s
+            )
+        }
+    }
+
+    "a signal data entry patches the attribute in place" in {
+        import kyo.internal.ReactiveUI
+        import kyo.internal.RecordingExchange
+        import kyo.internal.RecordingExchange.Op
+        Scope.run {
+            Kyo.foreachDiscard(Chunk(true, false)) { fast =>
+                val exchange = new RecordingExchange(synchronous = fast)
+                def patches  = exchange.recorded.collect {
+                    case op: Op.Attr => s"${op.name}=${op.value}"
+                    case _: Op.Paint => "paint"
+                }
+                for
+                    first <- Signal.initRef(0)
+                    ui = UI.div("rows").data("uic-vs-first" -> (first: Signal[Int]))
+                    html <- renderHtml(UI.div(ui))
+                    root <- ReactiveUI.normalize(UI.div(ui), Seq.empty)
+                    _    <- ReactiveUI.subscribe(root, exchange)
+                    _    <- first.set(20)
+                    _    <- assertEventually(Sync.defer(patches.size == 1))
+                yield
+                    assert(html.contains("""data-uic-vs-first="0""""), html)
+                    assert(patches == Chunk("data-uic-vs-first=20"), s"fast=$fast: $patches")
+                end for
+            }
+        }
+    }
+
+    "a data entry with the kyo- prefix throws, whatever its value" in {
+        val none: Maybe[Int] = Absent
+        val one              = intercept[IllegalArgumentException](UI.div.data("kyo-x" -> 1))
+        val absent           = intercept[IllegalArgumentException](UI.div.data("ok" -> 1, "kyo-y" -> none))
+        assert(one.getMessage.contains("kyo-x") && absent.getMessage.contains("kyo-y"), s"${one.getMessage} / ${absent.getMessage}")
+    }
+
 end DataAttrsTest

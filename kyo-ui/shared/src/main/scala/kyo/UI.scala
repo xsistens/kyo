@@ -8,6 +8,7 @@ import kyo.internal.Reducible
 import kyo.internal.UICommands
 import kyo.internal.UIExchange
 import kyo.internal.UIServer
+import scala.Conversion.into
 import scala.annotation.targetName
 import scala.language.implicitConversions
 
@@ -2000,6 +2001,16 @@ object UI:
             def aria(pairs: (String, String)*): Self =
                 withAttrs(attrs.copy(ariaAttrs = attrs.ariaAttrs ++ pairs))
 
+            /** Sets `aria-*` attributes from `name -> value` entries, the name being the part after `aria-`:
+              * `el.aria("label" -> name, "pressed" -> checked, "valuemin" -> 0)`. Each value is written by its type's
+              * [[kyo.UI.Ast.AttrValue]]: a value writes what it is (`true` as `"true"`, `false` as `"false"`), `Absent` writes nothing,
+              * and a signal is the attribute's channel, patched in place on emission with no re-render. One setter, so a read in a
+              * `UI.reactive` block handed to it as a value is a channel and not a read of the block. A group kept in a `val` is built
+              * with [[kyo.UI.Ast.Entry.of]] and spread: `el.aria(range*)`.
+              */
+            @targetName("ariaEntries")
+            def aria(entries: into[Entry]*): Self = withAttrs(Entry.writeAll(attrs, entries, AttrKind.Aria)(using frame))
+
             /** The native `title` (tooltip), constant or reactive through one setter: a constant is the element's `title`, and a
               * signal is the `title` attribute's channel, patched in place on emission with no re-render.
               */
@@ -2048,6 +2059,16 @@ object UI:
                 }
                 withAttrs(attrs.copy(dataAttrs = attrs.dataAttrs ++ pairs))
             end data
+
+            /** Sets `data-*` attributes from `name -> value` entries, the name being the part after `data-`:
+              * `el.data("uic-vs-first" -> firstIdx, "uic-form" -> form)`. Each value is written as [[aria]] writes it, by its type's
+              * [[kyo.UI.Ast.AttrValue]]: what it is, nothing for `Absent`, and a signal as the attribute's channel, patched in place.
+              *
+              * @throws java.lang.IllegalArgumentException
+              *   if a name starts with `kyo-`; that prefix is reserved by the framework
+              */
+            @targetName("dataEntries")
+            def data(entries: into[Entry]*): Self = withAttrs(Entry.writeAll(attrs, entries, AttrKind.Data)(using frame))
 
             /** The element's CSS classes (emitted as `class="..."`), set through the returned [[kyo.UI.Ast.CssClass]]:
               * `el.cssClass("p-button", "p-component")` adds classes, and `el.cssClass.matching(prop)(...)` the class of the
@@ -2380,6 +2401,185 @@ object UI:
             /** The name `Attrs.toggled` keeps for the silence channel, which has no attribute of its own. */
             private val silentKey = "data-kyo-ev"
         end Toggle
+
+        // ---- aria and data entries ----
+
+        /** How `aria(...)` and `data(...)` write a value of type `V`, picked by the value's static type where the call is compiled: a
+          * `Signal[Boolean]` and a `Signal[String]` are told apart there, and a value of a type with no instance is a type error there.
+          *
+          * A value writes what it is: a `String` itself, `true` and `false` as `"true"` and `"false"`, an `Int`, `Long` or `Double`
+          * its `toString`. A `Maybe` writes what it holds, and `Absent` writes nothing, so what the attribute had before stays. A
+          * signal is the attribute's channel, patched in place on emission with no re-render: a signal of a value always writes the
+          * attribute, a signal of a `Maybe` leaves it out while it holds `Absent`. Where a channel of a name is bound it is the
+          * value, in either setter order (the precedence rule above `withReactiveAttr`).
+          *
+          * The instances, for `B` one of `String`, `Boolean`, `Int`, `Long` and `Double`:
+          *
+          *   - `UI.Prop[B]`, so `B` and `Signal[B]`;
+          *   - `Maybe[UI.Prop[B]]`, so `Maybe[B]` and `Maybe[Signal[B]]`;
+          *   - `UI.Prop[Maybe[B]]`, so `Signal[Maybe[B]]`.
+          *
+          * No other type has one, a `Maybe` of a `Maybe` neither: a value of another type is turned into one of these by its caller,
+          * since the form it is written in is a decision of its own (a date, a percentage).
+          *
+          * @tparam V
+          *   the value type the instance writes
+          */
+        sealed abstract class AttrValue[-V]:
+
+            /** `a` with the attribute `name` of `kind` written from `v`. */
+            private[kyo] def write(a: Attrs, kind: AttrKind, name: String, v: V)(using Frame): Attrs
+
+            /** `v` as a [[kyo.UI.Ast.Toggle]] applies it: the value, none, or a signal of the value. */
+            private[kyo] def held(v: V)(using Frame): Maybe[String] | Signal[Maybe[String]]
+
+            // One per instance, so a pair converts to an entry with no allocation but the entry.
+            private[kyo] val conversion: Conversion[(String, V), Entry] = p => new Entry(p._1, p._2, this)
+        end AttrValue
+
+        object AttrValue extends AttrValueOfMaybe:
+
+            /** A `B`, constant or a signal. `plain` says that `B` is `String`, so a signal is the channel as it is. */
+            final private class OfProp[B](show: B => String, plain: Boolean) extends AttrValue[UI.Prop[B]]:
+                private def shown(s: Signal[B])(using Frame): Signal[String] =
+                    // Unsafe: `plain` is only set for `B = String`.
+                    if plain then s.asInstanceOf[Signal[String]] else s.map(show)
+                private[kyo] def write(a: Attrs, kind: AttrKind, name: String, v: UI.Prop[B])(using Frame): Attrs = v match
+                    case s: Signal[B] @unchecked => a.copy(reactiveAttrs = a.reactiveAttrs.updated(kind.key(name), shown(s)))
+                    // Unsafe: what is no signal here is the `B` the union names.
+                    case b => kind.static(a, name, show(b.asInstanceOf[B]))
+                private[kyo] def held(v: UI.Prop[B])(using Frame): Maybe[String] | Signal[Maybe[String]] = v match
+                    case s: Signal[B] @unchecked => shown(s).map(t => Present(t): Maybe[String])
+                    // Unsafe: what is no signal here is the `B` the union names.
+                    case b => Present(show(b.asInstanceOf[B]))
+            end OfProp
+
+            /** A `Maybe` of a `B` or of a signal of one: what it holds, or nothing. */
+            final private class OfMaybeProp[B](inner: AttrValue[UI.Prop[B]]) extends AttrValue[Maybe[UI.Prop[B]]]:
+                private[kyo] def write(a: Attrs, kind: AttrKind, name: String, v: Maybe[UI.Prop[B]])(using Frame): Attrs =
+                    v.fold(a)(inner.write(a, kind, name, _))
+                private[kyo] def held(v: Maybe[UI.Prop[B]])(using Frame): Maybe[String] | Signal[Maybe[String]] =
+                    v.fold(Absent: Maybe[String] | Signal[Maybe[String]])(inner.held(_))
+            end OfMaybeProp
+
+            given string: AttrValue[UI.Prop[String]]   = OfProp[String](identity, plain = true)
+            given boolean: AttrValue[UI.Prop[Boolean]] = OfProp[Boolean](_.toString, plain = false)
+            given int: AttrValue[UI.Prop[Int]]         = OfProp[Int](_.toString, plain = false)
+            given long: AttrValue[UI.Prop[Long]]       = OfProp[Long](_.toString, plain = false)
+            given double: AttrValue[UI.Prop[Double]]   = OfProp[Double](_.toString, plain = false)
+
+            given maybeString: AttrValue[Maybe[UI.Prop[String]]]   = OfMaybeProp(string)
+            given maybeBoolean: AttrValue[Maybe[UI.Prop[Boolean]]] = OfMaybeProp(boolean)
+            given maybeInt: AttrValue[Maybe[UI.Prop[Int]]]         = OfMaybeProp(int)
+            given maybeLong: AttrValue[Maybe[UI.Prop[Long]]]       = OfMaybeProp(long)
+            given maybeDouble: AttrValue[Maybe[UI.Prop[Double]]]   = OfMaybeProp(double)
+        end AttrValue
+
+        /** The instances over a signal of a `Maybe`, below the ones in [[AttrValue]]: a plain `Maybe[B]` fits both `Maybe[UI.Prop[B]]`
+          * and `UI.Prop[Maybe[B]]`, and writes the same through either, so the nearer one is taken.
+          */
+        sealed trait AttrValueOfMaybe:
+
+            /** A `Maybe[B]`, constant or a signal: the value while it holds one, no attribute while it holds `Absent`. `plain` says
+              * that `B` is `String`, so a signal is the channel as it is.
+              */
+            final private class OfPropMaybe[B](show: B => String, plain: Boolean) extends AttrValue[UI.Prop[Maybe[B]]]:
+                private def shown(s: Signal[Maybe[B]])(using Frame): Signal[Maybe[String]] =
+                    // Unsafe: `plain` is only set for `B = String`.
+                    if plain then s.asInstanceOf[Signal[Maybe[String]]] else s.map(_.map(show))
+                private[kyo] def write(a: Attrs, kind: AttrKind, name: String, v: UI.Prop[Maybe[B]])(using Frame): Attrs = v match
+                    case s: Signal[Maybe[B]] @unchecked =>
+                        a.copy(reactiveMaybeAttrs = a.reactiveMaybeAttrs.updated(kind.key(name), shown(s)))
+                    // Unsafe: what is no signal here is the `Maybe[B]` the union names.
+                    case m => m.asInstanceOf[Maybe[B]].fold(a)(b => kind.static(a, name, show(b)))
+                private[kyo] def held(v: UI.Prop[Maybe[B]])(using Frame): Maybe[String] | Signal[Maybe[String]] = v match
+                    case s: Signal[Maybe[B]] @unchecked => shown(s)
+                    // Unsafe: what is no signal here is the `Maybe[B]` the union names.
+                    case m => m.asInstanceOf[Maybe[B]].map(show)
+            end OfPropMaybe
+
+            given signalMaybeString: AttrValue[UI.Prop[Maybe[String]]]   = OfPropMaybe[String](identity, plain = true)
+            given signalMaybeBoolean: AttrValue[UI.Prop[Maybe[Boolean]]] = OfPropMaybe[Boolean](_.toString, plain = false)
+            given signalMaybeInt: AttrValue[UI.Prop[Maybe[Int]]]         = OfPropMaybe[Int](_.toString, plain = false)
+            given signalMaybeLong: AttrValue[UI.Prop[Maybe[Long]]]       = OfPropMaybe[Long](_.toString, plain = false)
+            given signalMaybeDouble: AttrValue[UI.Prop[Maybe[Double]]]   = OfPropMaybe[Double](_.toString, plain = false)
+        end AttrValueOfMaybe
+
+        /** The attribute family an entry is written to, `aria-*` or `data-*`. */
+        private[kyo] enum AttrKind(val prefix: String) derives CanEqual:
+            case Aria extends AttrKind("aria-")
+            case Data extends AttrKind("data-")
+
+            /** The attribute's full name, the name a channel is bound under. */
+            def key(name: String): String = prefix + name
+
+            /** `a` with the static value `v` of `name`. */
+            def static(a: Attrs, name: String, v: String): Attrs = this match
+                case Aria => a.copy(ariaAttrs = a.ariaAttrs.updated(name, v))
+                case Data => a.copy(dataAttrs = a.dataAttrs.updated(name, v))
+
+            /** The static value of `name` in `a`, if any. */
+            def own(a: Attrs, name: String): Maybe[String] = this match
+                case Aria => Maybe.fromOption(a.ariaAttrs.get(name))
+                case Data => Maybe.fromOption(a.dataAttrs.get(name))
+
+            /** `a` without the static value of `name`. */
+            def strip(a: Attrs, name: String): Attrs = this match
+                case Aria => a.copy(ariaAttrs = a.ariaAttrs - name)
+                case Data => a.copy(dataAttrs = a.dataAttrs - name)
+
+            /** Refuses a name the framework reserves: a `data-kyo-*` attribute is kyo-ui's own. */
+            def check(name: String): Unit =
+                if this == Data && name.startsWith("kyo-") then
+                    throw new IllegalArgumentException(
+                        s"data-* names must not start with 'kyo-'; the kyo- prefix is reserved by the framework. Got: kyo-${name.stripPrefix("kyo-")}"
+                    )
+        end AttrKind
+
+        /** One `aria-*` or `data-*` attribute for [[kyo.UI.Ast.Element.aria]] and [[kyo.UI.Ast.Element.data]]: a name, the part after
+          * `aria-` or `data-`, and a value of a type with an [[AttrValue]], which decides how the value is written.
+          *
+          * A pair converts to an entry where a setter takes entries, with no import:
+          * {{{
+          * el.aria("label" -> name, "pressed" -> checked, "valuemin" -> 0)
+          * el.data("uic-vs-first" -> firstIdx)
+          * }}}
+          *
+          * A group of entries to hand to several setters is built with [[Entry.of]] and spread:
+          * {{{
+          * val range = Entry.of("valuemin" -> 0, "valuemax" -> max)
+          * el.aria(range*)
+          * }}}
+          */
+        final class Entry private[kyo] (private[kyo] val name: String, value: Any, writer: AttrValue[Nothing]):
+
+            // Unsafe: `writer` is the instance the conversion found for `value`'s static type.
+            private def any: AttrValue[Any] = writer.asInstanceOf[AttrValue[Any]]
+
+            /** `a` with this entry written as an attribute of `kind`. */
+            private[kyo] def write(a: Attrs, kind: AttrKind)(using Frame): Attrs =
+                kind.check(name)
+                any.write(a, kind, name, value)
+            end write
+
+            /** The value as a [[kyo.UI.Ast.Toggle]] applies it. */
+            private[kyo] def held(using Frame): Maybe[String] | Signal[Maybe[String]] = any.held(value)
+        end Entry
+
+        object Entry:
+
+            /** The entries given, to keep in a `val` or hand to several setters: `el.aria(range*)`. A group needs this helper because a
+              * pair converts to an entry only where a parameter takes entries, which `Seq.apply` and `Chunk.apply` do not.
+              */
+            def of(entries: into[Entry]*): Chunk[Entry] = Chunk.from(entries)
+
+            /** A pair `name -> value` as an entry, where `value`'s type has an [[AttrValue]]. */
+            given entry[V](using v: AttrValue[V]): Conversion[(String, V), Entry] = v.conversion
+
+            /** `a` with each of `entries` written as an attribute of `kind`, in order. */
+            private[kyo] def writeAll(a: Attrs, entries: Seq[Entry], kind: AttrKind)(using Frame): Attrs =
+                entries.foldLeft(a)((acc, e) => e.write(acc, kind))
+        end Entry
 
         // ---- Interactive trait (event handlers + tabIndex) ----
 
