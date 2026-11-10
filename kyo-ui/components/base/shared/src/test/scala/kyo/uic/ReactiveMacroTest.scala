@@ -139,6 +139,42 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
                 case other          => fail(s"$other")
         }
 
+        "a read handed to aria or data as an entry's value is that entry's channel, with no region" in {
+            for
+                on <- Signal.initRef(false)
+                n  <- Signal.initRef(1)
+                ui = UI.reactive(span.aria("pressed" -> on.read, "busy" -> true).data("uic-n" -> n.read))
+                el <- ui match
+                    case s: SpanElement => Kyo.lift(s)
+                    case other          => Kyo.lift(fail(s"the block drew a region: $other"))
+                pressed = el.attrs.reactiveAttrs.get("aria-pressed")
+                count   = el.attrs.reactiveAttrs.get("data-uic-n")
+                before <- pressed.fold(Kyo.lift(""))(_.current)
+                _      <- on.set(true)
+                _      <- n.set(2)
+                _      <- assertEventually(pressed.fold(Kyo.lift(false))(_.current.map(_ == "true")))
+                _      <- assertEventually(count.fold(Kyo.lift(false))(_.current.map(_ == "2")))
+            yield assert(before == "false" && el.attrs.ariaAttrs == Map("busy" -> "true"), s"$before ${el.attrs}")
+        }
+
+        "a read of a Maybe as an entry's value is the channel that leaves the attribute out while Absent" in {
+            for
+                ref <- Signal.initRef[Maybe[String]](Absent)
+                name: Prop[Maybe[String]] = ref
+            yield UI.reactive(span.aria("label" -> name.read)) match
+                case s: SpanElement => assert(s.attrs.reactiveMaybeAttrs.contains("aria-label"), s"${s.attrs}")
+                case other          => fail(s"the block drew a region: $other")
+        }
+
+        "an entry's value over a constant is the plain attribute" in {
+            val on: Prop[Boolean] = true
+            UI.reactive(span.aria("checked" -> on.read)) match
+                case s: SpanElement =>
+                    assert(s.attrs.ariaAttrs.get("checked").contains("true") && s.attrs.reactiveAttrs.isEmpty, s"${s.attrs}")
+                case other => fail(s"$other")
+            end match
+        }
+
         "a parameter that takes only the value keeps the read in the block" in {
             def label(v: String)(using Frame): UI = span(v)
             for
@@ -165,6 +201,37 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
                 _ <- on.set(true)
                 _ <- assertEventually(chan.fold(Kyo.lift(false))(_.current.map(_ == "true")))
             yield succeed
+        }
+
+        "a val that only reaches an entry's value is that entry's channel too, with no region" in {
+            for
+                on <- Signal.initRef(false)
+                ui = UI.reactive {
+                    val held = on.read
+                    span.aria("pressed" -> held)
+                }
+                el <- ui match
+                    case s: SpanElement => Kyo.lift(s)
+                    case other          => Kyo.lift(fail(s"the block drew a region: $other"))
+                chan = el.attrs.reactiveAttrs.get("aria-pressed")
+                _ <- on.set(true)
+                _ <- assertEventually(chan.fold(Kyo.lift(false))(_.current.map(_ == "true")))
+            yield succeed
+        }
+
+        "a val the structure and an entry use is the region's, and the entry writes the run's value" in {
+            for
+                on <- Signal.initRef(true)
+                ui = UI.reactive {
+                    val x = on.read
+                    if x then div.aria("pressed" -> x) else span
+                }
+                drawn <- ui match
+                    case r: Reactive[?] => r.signal.current
+                    case other          => Kyo.lift(fail(s"the condition drew no region: $other"))
+            yield drawn match
+                case d: Div => assert(d.attrs.ariaAttrs.get("pressed").contains("true") && d.attrs.reactiveAttrs.isEmpty, s"${d.attrs}")
+                case other  => fail(s"$other")
         }
 
         "a val the structure also uses is the region's, and its channel use takes the run's value" in {
