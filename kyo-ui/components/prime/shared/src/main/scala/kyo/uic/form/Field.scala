@@ -5,6 +5,7 @@ import kyo.uic.ChoiceFormControl
 import kyo.uic.Component
 import kyo.uic.FileFormControl
 import kyo.uic.FormControl
+import kyo.uic.GeneratedTextFormControl
 import kyo.uic.HasSetter
 import kyo.uic.MultiChoiceFormControl
 import kyo.uic.NumberFormControl
@@ -812,11 +813,13 @@ extension [C <: TextFormControl { type Self <: C }](control: C)
     end bindControlOnly
 end extension
 
-/** A `String` field binds to a component whose setters are generated ([[kyo.uic.Component]]) through its `value` and `onBlur`
-  * ([[HasSetter]]). The receiver is narrower than the `Boolean` binding's below, as a [[TextFormControl]] is, so a field of a type
-  * no binding takes is reported against the `String` field a text control expects, not as an ambiguous overload.
+/** A `String` field binds to a text field whose setters are generated ([[kyo.uic.GeneratedTextFormControl]]) through its `value`
+  * and `onBlur` ([[HasSetter]]). The receiver is narrower than the `Boolean` binding's below, as a [[TextFormControl]] is, so a
+  * field of a type no binding takes is reported against the `String` field a text field expects, not as an ambiguous overload;
+  * and since the receiver names the text fields alone, a generated component of another value type ([[kyo.uic.ToggleButton]])
+  * still reaches its own binding.
   */
-extension [C <: Component[?, ?, ?] & FormControl { type Self <: C }](control: C)
+extension [C <: Component[?, ?, ?] & GeneratedTextFormControl { type Self <: C }](control: C)
     @targetName("bindGeneratedText")
     def bind(field: FormField[String])(using
         value: HasSetter[C, "value", UI.Prop[String]],

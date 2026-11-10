@@ -70,6 +70,13 @@ trait TextFormControl extends FormControl:
     def value(v: String | Signal[String]): Self
     def onBlur(f: String => UI.Action)(using Frame): Self
 
+/** A `String`-valued text field whose `value` and `onBlur` are setters generated from its props ([[Component]]), which the form
+  * layer reaches through [[HasSetter]] ([[Input]]). It carries no member of its own: it says which generated component a
+  * `String` field binds to, so that one whose state is another type (a [[ToggleButton]]) is offered its own binding instead.
+  * A field its wave has not reached is a [[TextFormControl]], whose setters are written by hand.
+  */
+trait GeneratedTextFormControl extends FormControl
+
 /** A choice of one among typed options ([[Select]], [[CascadeSelect]], a single [[SelectButton]]): the option itself, over
   * `A` where the field always holds one or over `Maybe[A]` where it may stay empty, plus a focus-loss trigger that reports
   * the held option (`Absent` for none).
