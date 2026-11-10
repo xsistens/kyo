@@ -25,17 +25,18 @@ import kyo.UI.*
   * anything else weak; empty shows `promptLabel`.
   */
 final class Password private[uic] (private[uic] val p: Password.Props) extends Component(Setters[Password.Props, Password]), Node,
-      FormControl[String], HasPlaceholder, HasAccessibleName:
+      FormControl[String], HasPlaceholder, HasAccessibleNameRef, HasAccessibleDescription:
 
     type Self = Password
 
-    private[uic] def withPlaceholder(v: Maybe[Prop[String]]): Password       = new Password(p.copy(placeholder = v))
-    private[uic] def accessibility: Accessibility                            = p.access
-    private[uic] def withAccessibility(v: Accessibility): Self               = new Password(p.copy(access = v))
-    private[uic] def validitySlots: FieldValidity.Slots                      = p.validity
-    private[uic] def withValidity(v: FieldValidity.Slots): Self              = new Password(p.copy(validity = v))
-    private[uic] def bindRef(ref: SignalRef[String])(using Frame): Password  = this.value(ref)
-    private[uic] def hearBlur(f: String => UI.Action)(using Frame): Password = this.onBlur(f)
+    private[uic] def withPlaceholder(v: Maybe[Prop[String]]): Password           = new Password(p.copy(placeholder = v))
+    private[uic] def withAccessibleDescription(v: Maybe[Prop[String]]): Password = new Password(p.copy(description = v))
+    private[uic] def accessibility: Accessibility                                = p.access
+    private[uic] def withAccessibility(v: Accessibility): Self                   = new Password(p.copy(access = v))
+    private[uic] def validitySlots: FieldValidity.Slots                          = p.validity
+    private[uic] def withValidity(v: FieldValidity.Slots): Self                  = new Password(p.copy(validity = v))
+    private[uic] def bindRef(ref: SignalRef[String])(using Frame): Password      = this.value(ref)
+    private[uic] def hearBlur(f: String => UI.Action)(using Frame): Password     = this.onBlur(f)
 
     /** Fires with the text the field holds when the reader commits it (focus leaving after an edit, or Enter). It hears the value
       * too, so a one-way binding with only an `onChange` says nothing.
@@ -108,7 +109,8 @@ object Password:
           */
         onBlur: Maybe[String => UI.Action] = Absent,
         @noSetter validity: FieldValidity.Slots = FieldValidity.Slots.empty,
-        @noSetter access: Accessibility = Accessibility.none
+        @noSetter access: Accessibility = Accessibility.none,
+        @noSetter description: Maybe[Prop[String]] = Absent
     ) derives CanEqual
 
     def apply(): Password = new Password(Props())
@@ -125,6 +127,8 @@ object Password:
       *   binds nothing
       * @param placeholder
       *   whether the field has a placeholder, and the prop it shows, whose signal patches in place
+      * @param description
+      *   whether the field has an accessible description, and the prop it says, whose signal patches in place
       */
     final private[uic] case class Base(
         eye: Boolean,
@@ -135,7 +139,8 @@ object Password:
         blurs: Boolean,
         placeholder: Maybe[Prop[String]],
         validity: FieldValidity.Slots,
-        access: Accessibility
+        access: Accessibility,
+        description: Maybe[Prop[String]]
     ) derives CanEqual
 
     private object Base:
@@ -150,7 +155,8 @@ object Password:
                 q.onBlur.isDefined,
                 q.placeholder,
                 q.validity,
-                q.access
+                q.access,
+                q.description
             )
     end Base
 
@@ -224,6 +230,7 @@ object Password:
                 .fluid(fluid)
                 .invalid(validity.red)
                 .withAccessibility(b.access)
+                .withAccessibleDescription(b.description)
             // The wrapper's `p-inputwrapper-filled` follows the text: kyo-ui's client toggles it from the field as the reader
             // types (`filledOn`), and this channel stamps the starting class, which the static render cannot reach from the field.
             val root = div
