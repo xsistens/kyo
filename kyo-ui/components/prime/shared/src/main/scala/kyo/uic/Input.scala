@@ -285,7 +285,7 @@ object Input:
                     case FieldVariant.Filled   => "p-variant-filled"
                 }
         )
-            .cssClass("p-inputtext-fluid", props(_.fluid))
+            .when(props(_.fluid))(_.cssClass("p-inputtext-fluid"))
             // Prime's `p-filled` follows the text the field holds, which the client knows and a render does not (an unbound
             // field's text, the reader's edit): kyo-ui toggles it there, the static render from the start.
             .filledClass("p-filled")

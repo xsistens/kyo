@@ -641,7 +641,7 @@ class DomBackendTest extends UITest:
                 on   <- Signal.initRef(false)
             yield UI.div(
                 UI.button("tick").id("ctick").onClick(tick.getAndUpdate(_ + 1).unit),
-                UI.div.id("chost").cssClass("base").cssClass("hot", on)(UI.span("z").id("cchild")),
+                UI.div.id("chost").cssClass("base").when(on)(_.cssClass("hot"))(UI.span("z").id("cchild")),
                 tick.map(t => UI.span(s"t:$t").id("ctxt")),
                 UI.button("toggle").id("ctoggle").onClick(on.getAndUpdate(b => !b).unit)
             )

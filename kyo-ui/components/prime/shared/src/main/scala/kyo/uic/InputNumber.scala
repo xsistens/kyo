@@ -331,8 +331,8 @@ final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) ext
         // The wrapper's starting class: from the number, or from the text the field keeps (a text ref through a class
         // channel, so a write by the program reaches it too). The client keeps it right from the field's own text after.
         el = text match
-            case Present(t) => el.cssClass("p-inputwrapper-filled", t.map(_.nonEmpty))
-            case Absent     => el.cssClass("p-inputwrapper-filled", value.nonEmpty || textShown.exists(_.nonEmpty))
+            case Present(t) => el.when(t.map(_.nonEmpty))(_.cssClass("p-inputwrapper-filled"))
+            case Absent     => el.when(value.nonEmpty || textShown.exists(_.nonEmpty))(_.cssClass("p-inputwrapper-filled"))
         if showButtonsFlag then el = el.cssClass(s"p-inputnumber-${buttonLayoutV.token}")
         if fluidFlag then el = el.cssClass("p-inputnumber-fluid")
         el = validity.markClass(el)

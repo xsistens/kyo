@@ -516,7 +516,7 @@ private[uic] object MenuRender:
       * nothing is returned untouched, so every existing render is byte-identical.
       */
     def markCurrent[E <: UI.Ast.Element { type Self <: E }](row: E, it: MenuItem): E =
-        it.p.currentFlag.foldFlag(row)(on => row.cssClass("p-uic-menu-item-current", on))
+        it.p.currentFlag.foldFlag(row)(on => row.when(on)(_.cssClass("p-uic-menu-item-current")))
 
     /** The shared row content: `div.p-<prefix>-item-content` >
       * `a.p-<prefix>-item-link` holding icon + label (+ trailing submenu glyph).

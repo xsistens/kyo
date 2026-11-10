@@ -193,9 +193,9 @@ object SplitButton:
             // A constant nobody hears is fixed: the dropdown stays a tab stop and says it changes nothing.
             val dropdown = if b.fixed then drop.ariaDisabled(true) else drop.onClick(toggle)
             val root     = div.cssClass("p-splitbutton").cssClass("p-component")
-                .cssClass("p-splitbutton-rounded", props(_.roundedFlag))
-                .cssClass("p-splitbutton-raised", props(_.raisedFlag))
-                .cssClass("p-splitbutton-fluid", fluid)
+                .when(props(_.roundedFlag))(_.cssClass("p-splitbutton-rounded"))
+                .when(props(_.raisedFlag))(_.cssClass("p-splitbutton-raised"))
+                .when(fluid)(_.cssClass("p-splitbutton-fluid"))
             // A signal nobody hears: every toggle and pick the reader makes is painted away again.
             Diagnostics.before(root((primary: UI), (dropdown: UI), panel))("SplitButton")(Diagnostic(b.deaf, openName.advice))
         }

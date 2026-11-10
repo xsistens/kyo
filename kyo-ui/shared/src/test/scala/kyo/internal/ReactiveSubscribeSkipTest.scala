@@ -23,7 +23,7 @@ class ReactiveSubscribeSkipTest extends kyo.test.Test[Any]:
                 items <- Signal.initRef(Chunk("a", "b"))
                 on    <- Signal.initRef(false)
                 rec = new Recording
-                ui  = UI.div(items.foreach(i => UI.span(i)), UI.span("x").cssClass("hot", on))
+                ui  = UI.div(items.foreach(i => UI.span(i)), UI.span("x").when(on)(_.cssClass("hot")))
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
                 // Each observer waits on its signal again only once it has handled the first value, the one it skips: whatever
@@ -60,7 +60,7 @@ class ReactiveSubscribeSkipTest extends kyo.test.Test[Any]:
                 items <- Signal.initRef(Chunk("a", "b"))
                 on    <- Signal.initRef(true)
                 rec = new Recording
-                ui  = UI.div(items.foreach(i => UI.span(i)), UI.span("x").cssClass("hot", on))
+                ui  = UI.div(items.foreach(i => UI.span(i)), UI.span("x").when(on)(_.cssClass("hot")))
                 root <- ReactiveUI.normalize(ui, Seq.empty).map(ReactiveUI.unpainted)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
                 _    <- assertEventually(Sync.defer(rec.changes >= 1 && rec.classPatches >= 1))

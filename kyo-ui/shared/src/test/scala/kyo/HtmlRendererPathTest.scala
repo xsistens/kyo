@@ -32,7 +32,7 @@ class HtmlRendererPathTest extends kyo.test.Test[Any]:
     "a reactive binding or a client-side marker makes an element addressable" in {
         for
             sel    <- Signal.initRef(false)
-            klass  <- renderHtml(UI.div(UI.tr.cssClass("hot", sel)))
+            klass  <- renderHtml(UI.div(UI.tr.when(sel)(_.cssClass("hot"))))
             attr   <- renderHtml(UI.div(UI.span.title(sel.map(_.toString))))
             hidden <- renderHtml(UI.div(UI.span.hidden(sel)))
             focus  <- renderHtml(UI.div(UI.span.focusAuto(true), UI.span.tabIndex(0)))

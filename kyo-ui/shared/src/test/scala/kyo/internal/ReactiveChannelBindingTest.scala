@@ -59,7 +59,7 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
 
     private def classChannel(using Frame): Channel < Sync =
         Signal.initRef(false).map(ref =>
-            Channel("class", UI.div(UI.span("x").cssClass("hot", ref: Signal[Boolean])), ref.set(true).unit, ref.waiters)
+            Channel("class", UI.div(UI.span("x").when(ref: Signal[Boolean])(_.cssClass("hot"))), ref.set(true).unit, ref.waiters)
         )
 
     /** A class whose name the signal holds; moving from no class to one is one patch, as for the others. */

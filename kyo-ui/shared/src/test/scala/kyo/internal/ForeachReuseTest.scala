@@ -56,7 +56,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 rec = new Recording
                 ui  = UI.ul(rows.foreachKeyed(identity) { item =>
                     discard(renders.incrementAndGet())
-                    UI.li(item).cssClass("sel", selected.map(_ == item))
+                    UI.li(item).when(selected.map(_ == item))(_.cssClass("sel"))
                 })
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
@@ -79,7 +79,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 selected <- Signal.initRef("")
                 rec = new Recording
                 ui  = UI.ul(rows.foreachKeyed(identity) { item =>
-                    UI.li(item).cssClass("sel", selected.map(_ == item))
+                    UI.li(item).when(selected.map(_ == item))(_.cssClass("sel"))
                 })
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
@@ -111,7 +111,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 selected <- Signal.initRef("")
                 rec = new Recording
                 ui  = UI.ul(rows.foreachKeyed(identity) { item =>
-                    UI.li(item).cssClass("sel", selected.map(_ == item))
+                    UI.li(item).when(selected.map(_ == item))(_.cssClass("sel"))
                 })
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)

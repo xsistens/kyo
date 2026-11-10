@@ -2049,8 +2049,8 @@ object UI:
             end data
 
             /** The element's CSS classes (emitted as `class="..."`), set through the returned [[kyo.UI.Ast.CssClass]]:
-              * `el.cssClass("p-button", "p-component")` adds classes, and the other forms there add a class that follows a
-              * prop. A class is the stable hook a [[kyo.Stylesheet]] class rule ([[kyo.Selector.cls]]) targets, so
+              * `el.cssClass("p-button", "p-component")` adds classes, and `el.cssClass.matching(prop)(...)` the class of the
+              * case a prop holds. A class that follows a condition is `el.when(cond)(_.cssClass(name))`. A class is the stable hook a [[kyo.Stylesheet]] class rule ([[kyo.Selector.cls]]) targets, so
               * document-level rules (`@media`, shared component styles, `:hover` against a named class) apply to it. For
               * per-element one-off styling use [[style]] instead; the two coexist on one element.
               */
@@ -2084,13 +2084,6 @@ object UI:
               * the clone. Emits `data-kyo-leave="..."`.
               */
             def leaveTransition(classes: String): Self = withAttrs(attrs.copy(leaveTransition = Present(classes)))
-
-            /** The body of `cssClass(name, on)`: a `Boolean` adds `name` or leaves the element as it is, a signal binds it to the
-              * element's class channel.
-              */
-            private[kyo] def toggleClass(name: String, on: Boolean | Signal[Boolean]): Self = on match
-                case b: Boolean                    => if b then addClass(name) else withAttrs(attrs)
-                case s: Signal[Boolean] @unchecked => withReactiveClass(name, s)
 
             /** The body of `cssClass.matching`: a constant adds the class its case names (or none), a signal binds the
               * element's class-name channel to the class of the case it holds.
@@ -2146,6 +2139,9 @@ object UI:
           * new one on in place, with nothing drawn again. `f` is a match over the cases, so under the build's `-Werror` a case it
           * leaves out does not compile.
           *
+          * A class that follows a condition is `el.when(cond)(_.cssClass(name))`, through [[kyo.UI.Ast.Toggle]]: a `Boolean`
+          * writes it statically or not at all, a signal binds it to the element's class channel, toggled in place.
+          *
           * It is the element itself under another type, so `el.cssClass` allocates nothing, and each setter is a static forward
           * to the element's own method. The setters are not `inline`: `UI.reactive` reads a toggle's `cssClass` call as written
           * to rebuild it (see `Element.when`), and an inline expansion keeps no call it could read. Every setter that writes a
@@ -2169,15 +2165,6 @@ object UI:
                 def apply(names: String*): S =
                     // Unsafe: `self` is the element whose `cssClass` built it, and `S` is that element's own `Self`.
                     self.addClasses(names).asInstanceOf[S]
-
-                /** Constant OR reactive class through one union setter. A `Boolean` is static (byte-identical to
-                  * `cssClass(name)` resp. omitting it). A `Signal[Boolean]` toggles `name` IN PLACE on emission
-                  * (`classList.toggle`, so CSS transitions fire) with no re-render, still chainable. Declarative twin of
-                  * `UI.Commands.bindClassById`.
-                  */
-                def apply(name: String, on: Boolean | Signal[Boolean]): S =
-                    // Unsafe: `self` is the element whose `cssClass` built it, and `S` is that element's own `Self`.
-                    self.toggleClass(name, on).asInstanceOf[S]
 
                 /** The class of the case `v` holds, as `f` names it, or none where `f` gives `Absent`. A constant is a static
                   * class; a signal is the element's class-name channel, which swaps the class in place (two `classList.toggle`s,
@@ -3094,7 +3081,7 @@ object UI:
             // Declarative reactive channels: the element renders each signal's current value at SSR, then an
             // observer (started in ReactiveUI.subscribeScoped) patches it IN PLACE on emission (no re-render).
             // reactiveAttrs: fully-qualified name -> value (aria/placeholder/title(sig)); reactiveBoolAttrs:
-            // present while true (disabled/readOnly(sig)); reactiveClasses: classList.toggle (cssClass(name, sig)).
+            // present while true (disabled/readOnly(sig)); reactiveClasses: classList.toggle (when(sig)(_.cssClass(name))).
             reactiveAttrs: Map[String, Signal[String]] = Map.empty,
             reactiveBoolAttrs: Map[String, Signal[Boolean]] = Map.empty,
             // Attributes a signal may leave out (ariaFlag(sig)): the value while Present, no attribute while Absent.

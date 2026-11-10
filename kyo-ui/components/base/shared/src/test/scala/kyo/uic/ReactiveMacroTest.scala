@@ -104,7 +104,7 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
         "a bare read hands on what it reads" in {
             for
                 on <- Signal.initRef(false)
-            yield UI.reactive(span.cssClass("x", on.read)) match
+            yield UI.reactive(span.when(on.read)(_.cssClass("x"))) match
                 case s: SpanElement => assert(s.attrs.reactiveClasses.get("x").exists(_ eq on), s"${s.attrs.reactiveClasses}")
                 case other          => fail(s"the block drew a region: $other")
         }
@@ -433,7 +433,7 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
                     UI.mounted(Sync.defer(UI.span("own"))).keyed("k")
                 ))
                 // Every read reaches a channel, so the block draws once and nothing in it runs again.
-                once = UI.reactive(UI.div(UI.span.cssClass("on", n.read > 0), UI.input.value("start")))
+                once = UI.reactive(UI.div(UI.span.when(n.read > 0)(_.cssClass("on")), UI.input.value("start")))
             yield
                 assert(follows.isInstanceOf[Reactive[?]] && kept.isInstanceOf[Reactive[?]], s"$follows $kept")
                 assert(!once.isInstanceOf[Reactive[?]], s"no region: $once")

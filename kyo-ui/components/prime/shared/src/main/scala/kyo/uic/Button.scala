@@ -121,7 +121,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
                     renderButton(busy).disabled(off)
                         .when(p.onClick)(_.onClick(_))
                         .ariaFlag("disabled", says)
-                        .cssClass("p-uic-aria-disabled", says)(contentChildren(busy)*)
+                        .when(says)(_.cssClass("p-uic-aria-disabled"))(contentChildren(busy)*)
                 }
         end match
     end render
@@ -150,8 +150,10 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
                 case Size.Normal => Absent
                 case Size.Large  => "p-button-lg"
             }
-            .cssClass("p-button-rounded", p.rounded).cssClass("p-button-raised", p.raised).cssClass("p-button-fluid", p.fluid)
-            .cssClass("p-button-icon-only", p.label.isEmpty && p.extraChildren.isEmpty && (p.icon.isDefined || loading))
+            .when(p.rounded)(_.cssClass("p-button-rounded")).when(p.raised)(_.cssClass("p-button-raised")).when(p.fluid)(_.cssClass(
+                "p-button-fluid"
+            ))
+            .when(p.label.isEmpty && p.extraChildren.isEmpty && (p.icon.isDefined || loading))(_.cssClass("p-button-icon-only"))
     end classed
 
     /** What the button and the link share, on either element: the class chain, the id, the host's aria, the accessible name and
