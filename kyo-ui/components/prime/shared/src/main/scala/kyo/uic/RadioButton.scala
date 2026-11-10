@@ -11,7 +11,7 @@ import kyo.UI.*
   * disabled state. When `text` is set, the control plus a trailing text span are
   * wrapped in a `<label>` like [[CheckBox]]. The `checked` binding mirrors [[CheckBox]].
   */
-final class RadioButton private[uic] (private[uic] val p: RadioButton.Props) extends Node, BooleanFormControl, HasAccessibleNameRef,
+final class RadioButton private[uic] (private[uic] val p: RadioButton.Props) extends Node, FormControl[Boolean], HasAccessibleNameRef,
       HasProps:
     import p.*
 
@@ -55,8 +55,10 @@ final class RadioButton private[uic] (private[uic] val p: RadioButton.Props) ext
     /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
     def variant(v: FieldVariant): RadioButton = new RadioButton(p.copy(variantV = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new RadioButton(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                          = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self                  = new RadioButton(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[Boolean])(using Frame): RadioButton  = checked(ref)
+    private[uic] def hearBlur(f: Boolean => UI.Action)(using Frame): RadioButton = onBlur(f)
 
     def onChange(f: Boolean => UI.Action)(using Frame): RadioButton = new RadioButton(p.copy(checkedSlot = checkedSlot.hear(f)))
 

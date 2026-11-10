@@ -2,7 +2,6 @@ package kyo.uic
 
 import kyo.*
 import kyo.UI.*
-import scala.annotation.targetName
 
 /** One option of a [[Listbox]], a hand-authored carrier (not a `kyo.UI`): a
   * `text` label, a stable `id` of the app's own type `K` that the selection holds
@@ -154,7 +153,7 @@ end ListOptionScope
   * `id` lands on the `ul.p-listbox-list`, the listbox that holds the one tab stop, and each option derives
   * `$id-option-<n>` from it (a minted base stands in where none is given).
   */
-final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) extends Node, MultiChoiceFormControl[K], HasEmptyContent,
+final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) extends Node, FormControl[Set[K]], HasEmptyContent,
       HasAccessibleNameRef, HasProps:
     import p.*
 
@@ -220,7 +219,6 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
       * `selection` like every other picker's bound choice: a Listbox is the always-visible member of that family, not a
       * different concept.
       */
-    @targetName("selectionSet")
     def selection(v: Set[K] | Signal[Set[K]]): Listbox[K] =
         new Listbox(p.copy(selectedRef = Present(SetBinding.of(ReactiveValue[Set[K]](v)))))
 
@@ -272,13 +270,14 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
       */
     def disabled(v: Boolean): Listbox[K] = new Listbox(p.copy(disabledFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Listbox(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                        = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self                = new Listbox(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[Set[K]])(using Frame): Listbox[K]  = selection(ref)
+    private[uic] def hearBlur(f: Set[K] => UI.Action)(using Frame): Listbox[K] = onBlur(f)
 
     /** Fires on focus loss with the current selection: the validation layer's Blur
       * trigger.
       */
-    @targetName("onBlurSet")
     def onBlur(f: Set[K] => UI.Action)(using Frame): Listbox[K] = new Listbox(p.copy(onBlurF = Present(Callback.of(f))))
 
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Listbox[K] = new Listbox(p.copy(emptyContentV = v))

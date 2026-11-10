@@ -13,7 +13,7 @@ import kyo.UI.*
   * `div.p-colorpicker-hue` bar > `div.p-colorpicker-hue-handle`), so the
   * extracted `@primeuix` colorpicker CSS applies verbatim.
   *
-  * A [[TextFormControl]] over that hex string, so `uic.ColorPicker().bind(field)`
+  * A `FormControl[String]` over that hex string, so `uic.ColorPicker().bind(field)`
   * wires value, validity, message and the blur trigger in one call.
   *
   * Server-honest: the value is a single hex string bound to a signal (a
@@ -59,7 +59,7 @@ import kyo.UI.*
   * `id` lands on the element a Tab reaches first: the preview swatch of the overlay picker, the plane's slider
   * of an inline one (its root where an inline picker has no slider, which is while it is disabled).
   */
-final class ColorPicker private[uic] (private[uic] val p: ColorPicker.Props) extends Node, TextFormControl, HasAccessibleName, HasProps:
+final class ColorPicker private[uic] (private[uic] val p: ColorPicker.Props) extends Node, FormControl[String], HasAccessibleName, HasProps:
     import p.*
 
     type Self = ColorPicker
@@ -88,8 +88,10 @@ final class ColorPicker private[uic] (private[uic] val p: ColorPicker.Props) ext
     /** Which corner the overlay panel opens from (overlay mode only; default below). */
     def anchor(v: OverlayAnchor): ColorPicker = new ColorPicker(p.copy(anchorV = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new ColorPicker(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self                 = new ColorPicker(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[String])(using Frame): ColorPicker  = value(ref)
+    private[uic] def hearBlur(f: String => UI.Action)(using Frame): ColorPicker = onBlur(f)
 
     /** Fired with the NEW hex after the ref write-back (one-way, with the hex the reader asked for). */
     def onChange(f: String => UI.Action)(using Frame): ColorPicker = new ColorPicker(p.copy(valueSlot = valueSlot.hear(f)))

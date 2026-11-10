@@ -254,9 +254,11 @@ says decides the setter:
 
 The class writes a setter by hand only where it does more than store what it is given (Button's `onClick` and `ariaDisabled`),
 under the field's name, and that member takes the generated one's place. A field a host, a shared trait or a setter of another
-name writes is `@noSetter` (`access`, `validity`, `radio`). Generic code that has to call a setter it cannot name (a form's
-`bind`) asks for a `HasSetter[X, "checked", Prop[Boolean]]`: one is found in `Fields`, and a trait whose members are written by hand
-gives its own in its companion (`BooleanFormControl`), so both kinds of component serve it.
+name writes is `@noSetter` (`access`, `validity`, `radio`). Generic code that has to call a setter it cannot name (the number
+binding's `integer`) asks for a `HasSetter[X, "integer", Boolean]`: one is found in `Fields`, and a component that writes the setter
+by hand gives its own in its companion (`InputNumber`), so both kinds of component serve it. What every control of a value type
+answers is a member of the trait instead: a form binds a `FormControl[A]` through `bindRef` and `hearBlur`, one line each over the
+control's own setters, `this.value(ref)` where they are generated.
 
 - **Why:** a setter that only copies its value into its field is the field said twice, and the two drift (a renamed field, a
   setter that forgot `UI.attempt`). Generated, the field's type and its scaladoc are the setter's, and a reader finds what a

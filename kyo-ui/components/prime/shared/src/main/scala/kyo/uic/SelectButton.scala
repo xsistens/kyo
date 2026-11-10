@@ -21,7 +21,7 @@ import scala.annotation.targetName
   * `onChange` of exactly its value type, and a set bound to a single-choice group
   * does not compile.
   *
-  * It is a [[ChoiceFormControl]], so `uic.SelectButton[A]().bind(field)` wires the
+  * It is a `FormControl[Maybe[A]]` with a `selection` over `A`, so `uic.SelectButton[A]().bind(field)` wires the
   * selection, validity, message and the blur trigger for a `FormField[A]` or a
   * `FormField[Maybe[A]]`.
   *
@@ -29,7 +29,7 @@ import scala.annotation.targetName
   * single group (the first enabled one while nothing is selected), the first enabled option of a [[multiple]] one.
   * It moves with the selection, and that option's minted id gives way to it.
   */
-final class SelectButton[A] private[uic] (private[uic] val p: SelectButton.Props[A]) extends Node, ChoiceFormControl[A],
+final class SelectButton[A] private[uic] (private[uic] val p: SelectButton.Props[A]) extends Node, FormControl[Maybe[A]],
       HasAccessibleNameRef, HasProps:
     import p.*
 
@@ -128,8 +128,10 @@ final class SelectButton[A] private[uic] (private[uic] val p: SelectButton.Props
     /** Disables the whole group; a `Signal[Boolean]` toggles it reactively (re-render). */
     def disabled(v: Boolean | Signal[Boolean]): SelectButton[A] = new SelectButton(p.copy(disabledFlag = Present(ReactiveValue(v))))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new SelectButton(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                               = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self                       = new SelectButton(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[Maybe[A]])(using Frame): SelectButton[A]  = selection(ref)
+    private[uic] def hearBlur(f: Maybe[A] => UI.Action)(using Frame): SelectButton[A] = onBlur(f)
 
     /** Fired with the selection now held, after a click or an arrow changed it (`Absent` where a click cleared it).
       * A click that changes nothing fires nothing.
@@ -382,6 +384,10 @@ final class SelectButton[A] private[uic] (private[uic] val p: SelectButton.Props
 end SelectButton
 
 object SelectButton:
+    /** How a field that always holds an option binds: through `selection` over `A` ([[HasSetter]]). */
+    given selection[A]: HasSetter[SelectButton[A], "selection", UI.Prop[A]] with
+        def apply(c: SelectButton[A], v: UI.Prop[A])(using Frame): SelectButton[A] = c.selection(v)
+
     final private[uic] case class Props[A](
         // The options the body draws, resolved from `optionSources` by the region that draws them.
         items: List[A],
@@ -412,13 +418,13 @@ end SelectButton
 /** A [[SelectButton]] where several options may be on at once (Prime's `multiple`): a row of independent toggle buttons,
   * each its own tab stop, bound to the `Set[A]` of the options that are on. Made by [[SelectButton.multiple]], and a type
   * of its own because its value is a set: it has one binding and one `onChange`, both over `Set[A]`, and it is a
-  * [[MultiChoiceFormControl]], so `bind` takes a `FormField[Set[A]]`.
+  * `FormControl[Set[A]]`, so `bind` takes a `FormField[Set[A]]`.
   *
   * It renders through the group it was made from, so the two share every option, template and state setter and the
   * same anatomy.
   */
 final class MultiSelectButton[A] private[uic] (private[uic] val group: SelectButton[A])
-    extends Node, MultiChoiceFormControl[A], HasAccessibleNameRef, HasProps:
+    extends Node, FormControl[Set[A]], HasAccessibleNameRef, HasProps:
     type Self = MultiSelectButton[A]
 
     private[uic] def p: SelectButton[A] = group
@@ -444,14 +450,12 @@ final class MultiSelectButton[A] private[uic] (private[uic] val group: SelectBut
       * only reports the set it asks for to [[onChange]]. A member no option carries stays in the set while the others
       * toggle.
       */
-    @targetName("selectionSet")
     def selection(v: Set[A] | Signal[Set[A]]): MultiSelectButton[A] = on(group.withMulti(v))
 
     /** Fired with the set now held, after a click changed it. */
     def onChange(f: Set[A] => UI.Action)(using Frame): MultiSelectButton[A] = on(group.withChangeSet(f))
 
     /** Fires on focus loss with the set held: the validation layer's Blur trigger. */
-    @targetName("onBlurSet")
     def onBlur(f: Set[A] => UI.Action)(using Frame): MultiSelectButton[A] = on(group.withBlurSet(f))
 
     /** Whether clicking the last option on may turn it off (Prime default true). */
@@ -469,8 +473,10 @@ final class MultiSelectButton[A] private[uic] (private[uic] val group: SelectBut
     private[uic] def accessibility: Accessibility                              = group.accessibility
     private[uic] def withAccessibility(v: Accessibility): MultiSelectButton[A] = on(group.withAccessibility(v))
 
-    private[uic] def validitySlots: FieldValidity.Slots                         = group.validitySlots
-    private[uic] def withValidity(v: FieldValidity.Slots): MultiSelectButton[A] = on(group.withValidity(v))
+    private[uic] def validitySlots: FieldValidity.Slots                                  = group.validitySlots
+    private[uic] def withValidity(v: FieldValidity.Slots): MultiSelectButton[A]          = on(group.withValidity(v))
+    private[uic] def bindRef(ref: SignalRef[Set[A]])(using Frame): MultiSelectButton[A]  = selection(ref)
+    private[uic] def hearBlur(f: Set[A] => UI.Action)(using Frame): MultiSelectButton[A] = onBlur(f)
 
     private[uic] def render(using Frame): UI = group.render
 end MultiSelectButton

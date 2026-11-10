@@ -2,7 +2,6 @@ package kyo.uic
 
 import kyo.*
 import kyo.UI.*
-import scala.annotation.targetName
 
 /** InputNumber button layout (Prime's `buttonLayout`): `Stacked` (default:
   * the up/down pair docked inside the field's end), `Horizontal` (decrement |
@@ -39,7 +38,7 @@ end InputNumberButtonLayout
   * (`.p-uic-inputnumber-prefix`/`-suffix`, kyo extension) beside the field,
   * never inside the typed value, and no live digit-grouping mask is applied.
   */
-final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) extends Node, NumberFormControl, HasPlaceholder,
+final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) extends Node, FormControl[Double], HasPlaceholder,
       HasAccessibleName, HasProps:
     import p.*
 
@@ -55,7 +54,6 @@ final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) ext
       * not opt out of write-back; pass `ref.readOnly` for that. See [[text]] for the binding that
       * carries what was typed rather than what parses.
       */
-    @targetName("valueNumber")
     def value(v: Double | Signal[Double]): InputNumber =
         new InputNumber(p.copy(numberSlot = numberSlot.bind(v), textSlot = textSlot.unbound))
 
@@ -123,8 +121,10 @@ final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) ext
     /** Spans the full container width (`.p-inputnumber-fluid`). */
     def fluid(v: Boolean): InputNumber = new InputNumber(p.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new InputNumber(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self                 = new InputNumber(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[Double])(using Frame): InputNumber  = value(ref)
+    private[uic] def hearBlur(f: Double => UI.Action)(using Frame): InputNumber = onBlur(f)
 
     private[uic] def accessibility: Accessibility              = access
     private[uic] def withAccessibility(v: Accessibility): Self = new InputNumber(p.copy(access = v))
@@ -342,6 +342,10 @@ final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) ext
 end InputNumber
 
 object InputNumber:
+    /** How a typed number field turns on the whole-number constraint: through `integer` ([[HasSetter]]). */
+    given integer: HasSetter[InputNumber, "integer", Boolean] with
+        def apply(c: InputNumber, v: Boolean)(using Frame): InputNumber = c.integer(v)
+
     final private[uic] case class Props(
         numberSlot: Controlled[Double] = Controlled(),
         textSlot: Controlled[String] = Controlled(),

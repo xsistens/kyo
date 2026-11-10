@@ -172,37 +172,38 @@ class DiscoverabilityTest extends UicTest:
 
     "every control that holds a user-supplied value carries the whole validation vocabulary" in {
         // The four setters used to be spread unevenly: the pair on some controls, the
-        // constant alone on others, nothing on a third group. FormControl declares all
-        // four, so a control that claims the trait cannot be missing one; asserting the
-        // trait per control is therefore asserting the whole vocabulary per control.
-        typeCheck(preamble + """def x: uic.FormControl = uic.Input()""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.TextArea()""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.Password()""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.InputMask("999")""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.InputOtp()""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.AutoComplete[String]()""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.DatePicker[java.time.LocalDate]()""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.Select[String]()""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.CascadeSelect[String]()""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.MultiSelect[String]()""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.TreeSelect[String]()""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.InputNumber()""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.CheckBox("a")""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.RadioButton("a")""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.ToggleSwitch()""")
+        // constant alone on others, nothing on a third group. HasValidity declares all
+        // four and every FormControl is one, so a control that claims the trait cannot be
+        // missing one; asserting the trait per control is therefore asserting the whole
+        // vocabulary per control, and the value type it binds.
+        typeCheck(preamble + """def x: uic.FormControl[String] = uic.Input()""")
+        typeCheck(preamble + """def x: uic.FormControl[String] = uic.TextArea()""")
+        typeCheck(preamble + """def x: uic.FormControl[String] = uic.Password()""")
+        typeCheck(preamble + """def x: uic.FormControl[String] = uic.InputMask("999")""")
+        typeCheck(preamble + """def x: uic.FormControl[String] = uic.InputOtp()""")
+        typeCheck(preamble + """def x: uic.FormControl[String] = uic.AutoComplete[String]()""")
+        typeCheck(preamble + """def x: uic.FormControl[Maybe[java.time.LocalDate]] = uic.DatePicker[java.time.LocalDate]()""")
+        typeCheck(preamble + """def x: uic.FormControl[Maybe[String]] = uic.Select[String]()""")
+        typeCheck(preamble + """def x: uic.FormControl[Maybe[String]] = uic.CascadeSelect[String]()""")
+        typeCheck(preamble + """def x: uic.FormControl[Set[String]] = uic.MultiSelect[String]()""")
+        typeCheck(preamble + """def x: uic.FormControl[Set[String]] = uic.TreeSelect[String]()""")
+        typeCheck(preamble + """def x: uic.FormControl[Double] = uic.InputNumber()""")
+        typeCheck(preamble + """def x: uic.FormControl[Boolean] = uic.CheckBox("a")""")
+        typeCheck(preamble + """def x: uic.FormControl[Boolean] = uic.RadioButton("a")""")
+        typeCheck(preamble + """def x: uic.FormControl[Boolean] = uic.ToggleSwitch()""")
         // The seven that used to carry none of it.
-        typeCheck(preamble + """def x: uic.FormControl = uic.ToggleButton()""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.SelectButton[String]()""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.Slider()""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.Knob()""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.Rating()""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.ColorPicker()""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.FileUpload()""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.Listbox[String]()""")
+        typeCheck(preamble + """def x: uic.FormControl[Boolean] = uic.ToggleButton()""")
+        typeCheck(preamble + """def x: uic.FormControl[Maybe[String]] = uic.SelectButton[String]()""")
+        typeCheck(preamble + """def x: uic.FormControl[Double] = uic.Slider()""")
+        typeCheck(preamble + """def x: uic.FormControl[Double] = uic.Knob()""")
+        typeCheck(preamble + """def x: uic.FormControl[Double] = uic.Rating()""")
+        typeCheck(preamble + """def x: uic.FormControl[String] = uic.ColorPicker()""")
+        typeCheck(preamble + """def x: uic.FormControl[Seq[UI.FilePayload]] = uic.FileUpload()""")
+        typeCheck(preamble + """def x: uic.FormControl[Set[String]] = uic.Listbox[String]()""")
         // A component that holds no user-supplied value is not one.
-        typeCheckFailure(preamble + """def x: uic.FormControl = uic.Button("Save")""")
-        typeCheckFailure(preamble + """def x: uic.FormControl = uic.Tag("Done")""")
-        typeCheckFailure(preamble + """def x: uic.FormControl = uic.DataTable[String]()""")
+        typeCheckFailure(preamble + """def x: uic.HasValidity = uic.Button("Save")""")
+        typeCheckFailure(preamble + """def x: uic.HasValidity = uic.Tag("Done")""")
+        typeCheckFailure(preamble + """def x: uic.HasValidity = uic.DataTable[String]()""")
 
         typeCheck(preamble + """def x: uic.ToggleButton = uic.ToggleButton().invalid(true).invalidMessage("m").id("t")""")
         typeCheck(preamble + """def x: uic.Slider = uic.Slider().invalid(true).invalidMessage("m").id("s")""")
@@ -260,15 +261,15 @@ class DiscoverabilityTest extends UicTest:
 
     "the seven controls that could not join a form now bind like the rest" in {
         val bindable = "import kyo.uic.form.*\n"
-        // NumberFormControl: Slider, Knob, Rating alongside InputNumber.
+        // FormControl[Double]: Slider, Knob, Rating alongside InputNumber.
         typeCheck(preamble + bindable + """def x(f: FormField[Double])(using Frame): uic.Slider = uic.Slider().bind(f)""")
         typeCheck(preamble + bindable + """def x(f: FormField[Double])(using Frame): uic.Knob = uic.Knob().bind(f)""")
         typeCheck(preamble + bindable + """def x(f: FormField[Double])(using Frame): uic.Rating = uic.Rating().bind(f)""")
-        // BooleanFormControl: ToggleButton alongside CheckBox / ToggleSwitch.
+        // FormControl[Boolean]: ToggleButton alongside CheckBox / ToggleSwitch.
         typeCheck(preamble + bindable + """def x(f: FormField[Boolean])(using Frame): uic.ToggleButton = uic.ToggleButton().bind(f)""")
-        // TextFormControl: ColorPicker's hex.
+        // FormControl[String]: ColorPicker's hex.
         typeCheck(preamble + bindable + """def x(f: FormField[String])(using Frame): uic.ColorPicker = uic.ColorPicker().bind(f)""")
-        // ChoiceFormControl: the field's value type is the option type, over A or over Maybe[A].
+        // A single choice: the field's value type is the option type, over A or over Maybe[A].
         typeCheck(
             preamble + bindable + """def x(f: FormField[Maybe[(String, String)]])(using Frame): uic.Select[(String, String)] = uic.Select[(String, String)]().options(Seq("a" -> "A"))(_._2).bind(f)"""
         )
@@ -282,18 +283,18 @@ class DiscoverabilityTest extends UicTest:
         typeCheckFailure(
             preamble + bindable + """def x(f: FormField[String])(using Frame) = uic.Select[(String, String)]().options(Seq("a" -> "A"))(_._2).bind(f)"""
         )
-        // MultiChoiceFormControl: SelectButton's multi selection, same component, and MultiSelect.
+        // FormControl[Set[A]]: SelectButton's multi selection, same component, and MultiSelect.
         typeCheck(
             preamble + bindable + """def x(f: FormField[Set[String]])(using Frame): uic.MultiSelectButton[String] = uic.SelectButton[String]().options(Seq("A")).multiple.bind(f)"""
         )
         typeCheck(
             preamble + bindable + """def x(f: FormField[Set[(String, String)]])(using Frame): uic.MultiSelect[(String, String)] = uic.MultiSelect[(String, String)]().options(Seq("a" -> "A"))(_._2).bind(f)"""
         )
-        // MultiChoiceFormControl too: the always-visible member of the picker family, over its item ids.
+        // FormControl[Set[A]] too: the always-visible member of the picker family, over its item ids.
         typeCheck(
             preamble + bindable + """def x(f: FormField[Set[String]])(using Frame): uic.Listbox[String] = uic.Listbox[String]().item("A", "a").bind(f)"""
         )
-        // FileFormControl: FileUpload over the picked payloads.
+        // FormControl[Seq[UI.FilePayload]]: FileUpload over the picked payloads.
         typeCheck(
             preamble + bindable + """def x(f: FormField[Seq[UI.FilePayload]])(using Frame): uic.FileUpload = uic.FileUpload().bind(f)"""
         )

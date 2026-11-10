@@ -22,7 +22,8 @@ import kyo.*
   * rather than faked. `onComplete` IS honest: it fires when the masked value
   * fills every mask slot (its length reaches the full template length).
   */
-final class InputMask private[uic] (private[uic] val p: InputMask.Props) extends Node, TextFormControl, HasPlaceholder, HasAccessibleName,
+final class InputMask private[uic] (private[uic] val p: InputMask.Props) extends Node, FormControl[String], HasPlaceholder,
+      HasAccessibleName,
       HasProps:
     import p.*
 
@@ -62,8 +63,10 @@ final class InputMask private[uic] (private[uic] val p: InputMask.Props) extends
     /** Spans the full width of its container (`.p-inputtext-fluid`). */
     def fluid(v: Boolean): InputMask = new InputMask(p.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new InputMask(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                       = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self               = new InputMask(p.copy(validityV = v))
+    private[uic] def bindRef(ref: SignalRef[String])(using Frame): InputMask  = value(ref)
+    private[uic] def hearBlur(f: String => UI.Action)(using Frame): InputMask = onBlur(f)
 
     /** Fired with the MASKED value on every change (native change commit). */
     def onChange(f: String => UI.Action)(using Frame): InputMask = new InputMask(p.copy(valueSlot = valueSlot.hear(f)))

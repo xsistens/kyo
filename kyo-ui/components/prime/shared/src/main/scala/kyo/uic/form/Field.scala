@@ -1,16 +1,10 @@
 package kyo.uic.form
 
 import kyo.*
-import kyo.uic.ChoiceFormControl
-import kyo.uic.Component
-import kyo.uic.FileFormControl
 import kyo.uic.FormControl
-import kyo.uic.GeneratedTextFormControl
 import kyo.uic.HasSetter
-import kyo.uic.MultiChoiceFormControl
-import kyo.uic.NumberFormControl
-import kyo.uic.OptionalFormControl
-import kyo.uic.TextFormControl
+import kyo.uic.HasValidity
+import scala.annotation.implicitNotFound
 import scala.annotation.targetName
 
 /** A form handle that yields a validated value at submit: a [[FormField]] or a [[NumberField]]. What
@@ -786,191 +780,94 @@ end RuleChain
   * The way to choose an id is `form.field(...).domId(...)`, which settles it before anything
   * reads it.
   */
-private def stampId[C <: FormControl { type Self <: C }](control: C, field: FormField[?]): C =
+private def stampId[C <: HasValidity { type Self <: C }](control: C, field: FormField[?]): C =
     control.elementId.foreach(field.noteIdConflict)
     control.id(field.domId)
 
-/** Postfix binding: `uic.Input()...bind(field)` returns the same concrete control
-  * type (`C` is inferred from the receiver, so no type ascription is needed). The
-  * extension is split by control family (a `String` field binds to a text control,
-  * a `Boolean` field to a checkbox or switch) because only the value binding is
-  * value-typed. The blur trigger ignores the value the control hands it and judges what
-  * the field holds ([[FormField.blurred]]); everything gated stays shared on [[FormField]].
+/** The binding every [[bind]] ends in, once the field's ref is on the control: the id, the gated message, and the blur trigger,
+  * which ignores the value the control hands it and judges what the field holds ([[FormField.blurred]]).
   */
-extension [C <: TextFormControl { type Self <: C }](control: C)
-    def bind(field: FormField[String])(using Frame): C =
-        var b: C = stampId(control.value(field.valueRef), field)
-        b = b.invalidMessage(field.message)
-        b = b.onBlur(_ => field.blurred)
-        b
-    end bind
+private def wired[A, C <: FormControl[A] { type Self <: C }](bound: C, field: FormField[?])(using Frame): C =
+    stampId(bound, field).invalidMessage(field.message).hearBlur(_ => field.blurred)
 
-    def bindControlOnly(field: FormField[String])(using Frame): C =
-        var b: C = stampId(control.value(field.valueRef), field)
-        b = b.invalid(field.visibleError.map(_.isDefined))
-        b = b.onBlur(_ => field.blurred)
-        b
-    end bindControlOnly
-end extension
+/** [[wired]] for [[bindControlOnly]]: the control turns red with the visible error and shows no message row of its own. */
+private def wiredControlOnly[A, C <: FormControl[A] { type Self <: C }](bound: C, field: FormField[?])(using Frame): C =
+    stampId(bound, field).invalid(field.visibleError.map(_.isDefined)).hearBlur(_ => field.blurred)
 
-/** A `String` field binds to a text field whose setters are generated ([[kyo.uic.GeneratedTextFormControl]]) through its `value`
-  * and `onBlur` ([[HasSetter]]). The receiver is narrower than the `Boolean` binding's below, as a [[TextFormControl]] is, so a
-  * field of a type no binding takes is reported against the `String` field a text field expects, not as an ambiguous overload;
-  * and since the receiver names the text fields alone, a generated component of another value type ([[kyo.uic.ToggleButton]])
-  * still reaches its own binding.
+/** The binding of a field of the control's own value type: its ref through [[FormControl.bindRef]], then [[wired]]. */
+private def bindOwn[A, C <: FormControl[A] { type Self <: C }](control: C, field: FormField[A])(using Frame): C =
+    val bound: C = control.bindRef(field.valueRef)
+    wired[A, C](bound, field)
+
+/** [[bindOwn]] for [[bindControlOnly]]. */
+private def bindOwnControlOnly[A, C <: FormControl[A] { type Self <: C }](control: C, field: FormField[A])(using Frame): C =
+    val bound: C = control.bindRef(field.valueRef)
+    wiredControlOnly[A, C](bound, field)
+
+/** Postfix binding: `uic.Input()...bind(field)` returns the same concrete control type (`C` is inferred from the receiver, so no
+  * type ascription is needed). The control's value type `A` ([[FormControl]]) is the field's: a text field binds a
+  * `FormField[String]`, a checkbox a `FormField[Boolean]`, a date picker a `FormField[Maybe[A]]`, so a field of another type is
+  * reported against the one the control binds. Everything gated stays shared on [[FormField]].
+  *
+  * A numeric control (`A` is `Double`) binds a typed number field too, over the field's `Double`, and turns on its
+  * whole-number constraint for a whole-valued codec (`Int`, `Long`), so a fraction cannot be entered. `integer` is a
+  * CONSTRAINT, not a keystroke filter, which is why every numeric control can honour it: InputNumber masks decimal entry,
+  * Slider and Knob round the committed value, and Rating already only produces whole stars, so the constraint is satisfied by
+  * construction there. A control holding a `Maybe[A]` binds in its own clause below.
   */
-extension [C <: Component[?, ?, ?] & GeneratedTextFormControl { type Self <: C }](control: C)
-    @targetName("bindGeneratedText")
-    def bind(field: FormField[String])(using
-        value: HasSetter[C, "value", UI.Prop[String]],
-        blur: HasSetter[C, "onBlur", String => UI.Action],
-        frame: Frame
-    ): C =
-        blur(stampId(value(control, field.valueRef), field).invalidMessage(field.message), _ => field.blurred)
+extension [A, C <: FormControl[A] { type Self <: C }](control: C)
+    def bind(field: FormField[A])(using Frame): C = bindOwn[A, C](control, field)
 
-    @targetName("bindControlOnlyGeneratedText")
-    def bindControlOnly(field: FormField[String])(using
-        value: HasSetter[C, "value", UI.Prop[String]],
-        blur: HasSetter[C, "onBlur", String => UI.Action],
-        frame: Frame
-    ): C =
-        blur(stampId(value(control, field.valueRef), field).invalid(field.visibleError.map(_.isDefined)), _ => field.blurred)
+    /** As [[bind]], with the control red while the field shows an error and no message row: for a host that shows the message
+      * itself.
+      */
+    def bindControlOnly(field: FormField[A])(using Frame): C = bindOwnControlOnly[A, C](control, field)
+
+    @targetName("bindNumber")
+    def bind(field: NumberField[?])(using double: Double =:= A, integer: HasSetter[C, "integer", Boolean], frame: Frame): C =
+        bindOwn[A, C](integer(control, field.codec.integer), double.substituteCo[FormField](field.underlying))
+
+    @targetName("bindControlOnlyNumber")
+    def bindControlOnly(field: NumberField[?])(using double: Double =:= A, integer: HasSetter[C, "integer", Boolean], frame: Frame): C =
+        bindOwnControlOnly[A, C](integer(control, field.codec.integer), double.substituteCo[FormField](field.underlying))
 end extension
 
-/** A `Boolean` field binds to any control with a `checked` and an `onBlur` setter, generated or written by hand ([[HasSetter]]). */
-extension [C <: FormControl { type Self <: C }](control: C)
-    def bind(field: FormField[Boolean])(using
-        checked: HasSetter[C, "checked", UI.Prop[Boolean]],
-        blur: HasSetter[C, "onBlur", Boolean => UI.Action],
-        frame: Frame
-    ): C =
-        blur(stampId(checked(control, field.valueRef), field).invalidMessage(field.message), _ => field.blurred)
-
-    def bindControlOnly(field: FormField[Boolean])(using
-        checked: HasSetter[C, "checked", UI.Prop[Boolean]],
-        blur: HasSetter[C, "onBlur", Boolean => UI.Action],
-        frame: Frame
-    ): C =
-        blur(stampId(checked(control, field.valueRef), field).invalid(field.visibleError.map(_.isDefined)), _ => field.blurred)
-end extension
-
-/** The `Double`-control binding, as a named helper so a wrapping control ([[NumberField]]'s
-  * `InputNumber`) can reuse it without the `bind` name colliding with its own extension.
+/** A control holding a `Maybe[A]` binds a `FormField[Maybe[A]]` as every control binds its value type, and a single choice
+  * ([[kyo.uic.Select]], [[kyo.uic.CascadeSelect]], a single [[kyo.uic.SelectButton]]) binds a field that always holds an option
+  * too, a `FormField[A]`, through its `selection` over `A` ([[HasSetter]]); [[ChoiceField]] says which of the two a field is. A
+  * [[kyo.uic.DatePicker]] has no `selection`, so a field that always holds a date is no field of it.
+  *
+  * It is one `bind` over the field's type rather than two overloads: Scala picks this narrower receiver before it reads the
+  * field only while one alternative here takes it, and with two it weighs the plain binding above as well, which then reads its
+  * value type off the field. The blur trigger validates what the field holds, which is what the control was just showing,
+  * since the two share the field's ref.
   */
-private[form] def wireNumber[C <: NumberFormControl { type Self <: C }](control: C, field: FormField[Double])(using Frame): C =
-    var b: C = stampId(control.value(field.valueRef), field)
-    b = b.invalidMessage(field.message)
-    b = b.onBlur(_ => field.blurred)
-    b
-end wireNumber
-
-private[form] def wireNumberControlOnly[C <: NumberFormControl { type Self <: C }](control: C, field: FormField[Double])(using Frame): C =
-    var b: C = stampId(control.value(field.valueRef), field)
-    b = b.invalid(field.visibleError.map(_.isDefined))
-    b = b.onBlur(_ => field.blurred)
-    b
-end wireNumberControlOnly
-
-extension [C <: NumberFormControl { type Self <: C }](control: C)
-    def bind(field: FormField[Double])(using Frame): C            = wireNumber(control, field)
-    def bindControlOnly(field: FormField[Double])(using Frame): C = wireNumberControlOnly(control, field)
-    // Typed numeric façade (`uic.InputNumber().bind(numberField)`): binds the underlying
-    // Double field and flips on the integer keystroke mask for whole-valued codecs, so a
-    // fraction can't be entered. Co-located as an overload in THIS clause.
-    def bind(field: NumberField[?])(using Frame): C =
-        wireNumber(control.integer(field.codec.integer), field.underlying)
-    def bindControlOnly(field: NumberField[?])(using Frame): C =
-        wireNumberControlOnly(control.integer(field.codec.integer), field.underlying)
-end extension
-
-extension [C <: FileFormControl { type Self <: C }](control: C)
-    def bind(field: FormField[Seq[UI.FilePayload]])(using Frame): C =
-        var b: C = stampId(control.value(field.valueRef), field)
-        b = b.invalidMessage(field.message)
-        b = b.onBlur(_ => field.blurred)
-        b
-    end bind
-
-    def bindControlOnly(field: FormField[Seq[UI.FilePayload]])(using Frame): C =
-        var b: C = stampId(control.value(field.valueRef), field)
-        b = b.invalid(field.visibleError.map(_.isDefined))
-        b = b.onBlur(_ => field.blurred)
-        b
-    end bindControlOnly
-end extension
-
-/** The choice-control binding: the field's value type is the option type, so a field that always holds an option binds as
-  * `FormField[A]` and one that may stay empty as `FormField[Maybe[A]]`. The blur trigger validates what the field holds, which
-  * is what the control was just showing, since the two share the field's ref.
-  */
-extension [A, C <: ChoiceFormControl[A] { type Self <: C }](control: C)
-    def bind(field: FormField[A])(using Frame): C =
-        var b: C = stampId(control.selection(field.valueRef), field)
-        b = b.invalidMessage(field.message)
-        b = b.onBlur(_ => field.blurred)
-        b
-    end bind
-
-    def bindControlOnly(field: FormField[A])(using Frame): C =
-        var b: C = stampId(control.selection(field.valueRef), field)
-        b = b.invalid(field.visibleError.map(_.isDefined))
-        b = b.onBlur(_ => field.blurred)
-        b
-    end bindControlOnly
-
+extension [A, C <: FormControl[Maybe[A]] { type Self <: C }](control: C)
     @targetName("bindMaybe")
-    def bind(field: FormField[Maybe[A]])(using Frame): C =
-        var b: C = stampId(control.selection(field.valueRef), field)
-        b = b.invalidMessage(field.message)
-        b = b.onBlur(_ => field.blurred)
-        b
-    end bind
+    def bind[F](field: FormField[F])(using choice: ChoiceField[C, A, F], frame: Frame): C =
+        wired[Maybe[A], C](choice.bindRef(control, field.valueRef), field)
 
     @targetName("bindControlOnlyMaybe")
-    def bindControlOnly(field: FormField[Maybe[A]])(using Frame): C =
-        var b: C = stampId(control.selection(field.valueRef), field)
-        b = b.invalid(field.visibleError.map(_.isDefined))
-        b = b.onBlur(_ => field.blurred)
-        b
-    end bindControlOnly
+    def bindControlOnly[F](field: FormField[F])(using choice: ChoiceField[C, A, F], frame: Frame): C =
+        wiredControlOnly[Maybe[A], C](choice.bindRef(control, field.valueRef), field)
 end extension
 
-extension [A, C <: MultiChoiceFormControl[A] { type Self <: C }](control: C)
-    @targetName("bindSet")
-    def bind(field: FormField[Set[A]])(using Frame): C =
-        var b: C = stampId(control.selection(field.valueRef), field)
-        b = b.invalidMessage(field.message)
-        b = b.onBlur((_: Set[A]) => field.blurred)
-        b
-    end bind
-
-    @targetName("bindControlOnlySet")
-    def bindControlOnly(field: FormField[Set[A]])(using Frame): C =
-        var b: C = stampId(control.selection(field.valueRef), field)
-        b = b.invalid(field.visibleError.map(_.isDefined))
-        b = b.onBlur((_: Set[A]) => field.blurred)
-        b
-    end bindControlOnly
-end extension
-
-/** The binding of a control holding an optional typed value ([[kyo.uic.DatePicker]]): the field's value type is `Maybe[A]`,
-  * the control reads and writes the field's own ref, and the blur trigger validates what the field holds, which is what the
-  * control was just showing.
+/** Which field a control `C` holding a `Maybe[A]` binds: one of `Maybe[A]`, its own value type, or one of `A`, which always
+  * holds an option, where `C` has a `selection` over `A`.
   */
-extension [A, C <: OptionalFormControl[A] { type Self <: C }](control: C)
-    @targetName("bindOptional")
-    def bind(field: FormField[Maybe[A]])(using Frame): C =
-        var b: C = stampId(control.value(field.valueRef), field)
-        b = b.invalidMessage(field.message)
-        b = b.onBlur(_ => field.blurred)
-        b
-    end bind
+@implicitNotFound(
+    "${C} binds a FormField[Maybe[${A}]], or a FormField[${A}] where it has a `selection` over ${A}; this field is a FormField[${F}]."
+)
+sealed abstract class ChoiceField[C, A, F]:
+    private[form] def bindRef(control: C, ref: SignalRef[F])(using Frame): C
+end ChoiceField
 
-    @targetName("bindControlOnlyOptional")
-    def bindControlOnly(field: FormField[Maybe[A]])(using Frame): C =
-        var b: C = stampId(control.value(field.valueRef), field)
-        b = b.invalid(field.visibleError.map(_.isDefined))
-        b = b.onBlur(_ => field.blurred)
-        b
-    end bindControlOnly
-end extension
+object ChoiceField:
+    /** A field that may stay empty: the control's own value type, bound as every control binds its own. */
+    given empty[A, C <: FormControl[Maybe[A]] { type Self <: C }]: ChoiceField[C, A, Maybe[A]] with
+        private[form] def bindRef(control: C, ref: SignalRef[Maybe[A]])(using Frame): C = control.bindRef(ref)
+
+    /** A field that always holds an option: through the control's `selection` over `A`. */
+    given chosen[C, A](using selection: HasSetter[C, "selection", UI.Prop[A]]): ChoiceField[C, A, A] with
+        private[form] def bindRef(control: C, ref: SignalRef[A])(using Frame): C = selection(control, ref)
+end ChoiceField
