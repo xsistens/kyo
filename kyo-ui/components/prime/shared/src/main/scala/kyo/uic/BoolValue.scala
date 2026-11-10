@@ -81,8 +81,8 @@ extension (bv: Maybe[BoolValue])
     /** Fold the slot onto a builder through kyo-ui's single union setter: a constant applies the
       * boolean statically (`set(v)`), any reactive slot (`Dyn`, incl. a two-way `ReactiveVariable`)
       * reactively (`set(sig)`), `Absent` leaves `self` untouched. `set` is one of the
-      * `Boolean | Signal[Boolean]` in-place setters (disabled, readOnly, cssClass(name, _)), so both
-      * branches share the same call. Routed through `.const`/`.dyn` so it is total over the whole
+      * `Boolean | Signal[Boolean]` in-place setters (disabled, readOnly) or a class through
+      * `on => el.when(on)(_.cssClass(name))`, so both branches share the same call. Routed through `.const`/`.dyn` so it is total over the whole
       * `ReactiveValue` hierarchy. `inline` splices the setter in, so no lambda allocation.
       */
     private[uic] inline def foldFlag[S](self: S)(set: (Boolean | Signal[Boolean]) => S): S =

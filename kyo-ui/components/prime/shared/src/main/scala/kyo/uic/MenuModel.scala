@@ -53,7 +53,7 @@ final class MenuItem private[uic] (private[uic] val p: MenuItem.Props) extends H
       * past the current page must not hide which page that is.
       *
       * Takes a `Signal[Boolean]` because the current route is one, and both slots it writes are
-      * kyo-ui CHANNELS: `cssClass(name, sig)` toggles the class through `classList.toggle` and
+      * kyo-ui CHANNELS: `when(sig)(_.cssClass(name))` toggles the class through `classList.toggle` and
       * `aria(name, sig)` patches the attribute in place, each with NO re-render. So a nav is
       * built once and stays built: navigating does not rebuild the list, and the keyboard
       * position survives the navigation that a `Routes.current.render { … }` around the whole

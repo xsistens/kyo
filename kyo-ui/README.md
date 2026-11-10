@@ -1058,7 +1058,7 @@ The `Style.Prop` sum is the full property AST: `BgColor`, `TextColor`, `Padding`
 
 `Style` styles a single element with inline declarations. `Stylesheet` is the document-level counterpart: an ordered, immutable collection of CSS rules keyed by a stable selector, plus `@media` breakpoints, `:root` CSS variables, and `@font-face` declarations. It reuses `Style` for the declaration bodies, so the same `Color`, `Length`, and pseudo-state values apply.
 
-The primary element hook is `UI.cssClass(name)`: it emits `class="name"` on the element, giving a `Stylesheet` rule something stable to target. Call it multiple times to space-join classes. `style(...)` and `cssClass(...)` coexist on one element.
+The primary element hook is `el.cssClass(names*)`: it emits `class="..."` on the element, giving a `Stylesheet` rule something stable to target. Several names in one call, or repeated calls, space-join. `el.cssClass.matching(prop) { case ... => name }` adds the class of the case a prop holds, and `el.when(cond)(_.cssClass(name))` adds one while a condition holds; given a signal, either patches the class in place without drawing the element again. `style(...)` and `cssClass(...)` coexist on one element.
 
 ```scala
 import UI.*

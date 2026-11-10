@@ -2050,8 +2050,8 @@ object UI:
 
             /** The element's CSS classes (emitted as `class="..."`), set through the returned [[kyo.UI.Ast.CssClass]]:
               * `el.cssClass("p-button", "p-component")` adds classes, and `el.cssClass.matching(prop)(...)` the class of the
-              * case a prop holds. A class that follows a condition is `el.when(cond)(_.cssClass(name))`. A class is the stable hook a [[kyo.Stylesheet]] class rule ([[kyo.Selector.cls]]) targets, so
-              * document-level rules (`@media`, shared component styles, `:hover` against a named class) apply to it. For
+              * case a prop holds. A class that follows a condition is `el.when(cond)(_.cssClass(name))`. A class is the stable
+              * hook a [[kyo.Stylesheet]] class rule ([[kyo.Selector.cls]]) targets, so document-level rules (`@media`, shared component styles, `:hover` against a named class) apply to it. For
               * per-element one-off styling use [[style]] instead; the two coexist on one element.
               */
             // The full path, not `CssClass[Self]`: seen from an element declared outside `Ast` (the `Svg` ones), the short form
