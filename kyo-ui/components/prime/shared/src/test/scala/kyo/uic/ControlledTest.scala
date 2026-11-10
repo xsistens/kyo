@@ -188,6 +188,19 @@ class ControlledTest extends UicTest:
             }
         }
 
+        "where a constant only starts the slot, a constant is the start and a signal binds it, keeping where it starts" in {
+            Signal.initRef(7).map { ref =>
+                val slot     = Controlled[Int](start = Present(3), constantStarts = true)
+                val constant = slot.bind(5)
+                val signal   = slot.bind(ref)
+                val after    = slot.bind(5).bind(ref)
+                assert(constant.bound.isEmpty && constant.start.contains(5), s"a constant: ${constant.bound}, ${constant.start}")
+                // A signal keeps the start, so the instance mints its own value and carries on from it when a run stops binding.
+                assert(signal.bound.exists(_.equals(ref)) && signal.start.contains(3), s"a signal: ${signal.bound}, ${signal.start}")
+                assert(after.bound.exists(_.equals(ref)) && after.start.contains(5), s"a constant, then a signal: ${after.start}")
+            }
+        }
+
         "bound gives the binding back as the caller gave it" in {
             Signal.initRef(7).map { ref =>
                 assert(Controlled[Int]().bound.isEmpty)
