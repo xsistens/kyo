@@ -222,6 +222,76 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
         }
     }
 
+    "a read handed to when(Boolean) over toggle setters is the toggle's channel, by the rule of a prop argument" - {
+        // The class `x` on `el` now: a toggled class whose channel holds true, or a static one.
+        def classed(el: Element, cls: String)(using Frame): Boolean < Sync =
+            if el.attrs.cssClasses.contains(cls) then Kyo.lift(true)
+            else el.attrs.reactiveClasses.get(cls).fold(Kyo.lift(false))(_.current)
+
+        def drawnOnce(ui: UI)(using Frame, kyo.test.AssertScope): SpanElement < Sync = ui match
+            case s: SpanElement => Kyo.lift(s)
+            case other          => Kyo.lift(fail(s"the block drew a region: $other"))
+
+        "a bare read: the class follows it in place and the block draws once, with no region" in {
+            for
+                on     <- Signal.initRef(false)
+                el     <- drawnOnce(UI.reactive(span.when(on.read)(_.cssClass("x"))))
+                before <- classed(el, "x")
+                _      <- on.set(true)
+                _      <- assertEventually(classed(el, "x"))
+            yield assert(!before && el.attrs.reactiveClasses.get("x").isDefined, s"${el.attrs}")
+        }
+
+        "a val that only reaches the condition is a channel too, so naming the read changes nothing" in {
+            for
+                on <- Signal.initRef(false)
+                el <- drawnOnce(UI.reactive {
+                    val held = on.read
+                    span.when(held)(_.cssClass("x").aria("pressed", "true")).ariaFlag("busy", held)
+                })
+                _ <- on.set(true)
+                _ <- assertEventually(classed(el, "x"))
+            yield assert(el.attrs.reactiveMaybeAttrs.contains("aria-pressed"), s"${el.attrs}")
+        }
+
+        "a condition the structure also uses stays the region's, and the toggle applies its setters as constants" in {
+            for
+                on <- Signal.initRef(true)
+                ui = UI.reactive {
+                    val held = on.read
+                    if held then span.when(held)(_.cssClass("x")) else div
+                }
+                drawn <- ui match
+                    case r: Reactive[?] => r.signal.current
+                    case other          => Kyo.lift(fail(s"the condition drew no region: $other"))
+            yield drawn match
+                case s: SpanElement => assert(s.attrs.cssClasses == Chunk("x") && s.attrs.reactiveClasses.isEmpty, s"${s.attrs}")
+                case other          => fail(s"$other")
+        }
+
+        "a setter a toggle lacks keeps the condition the block's: a region, as written" in {
+            for
+                on   <- Signal.initRef(false)
+                name <- Signal.initRef("l")
+            yield
+                val handler = UI.reactive(span.when(on.read)(_.onClick(Kyo.unit)))
+                val mixed   = UI.reactive(span.when(on.read)(_.cssClass("x").style(_.bold)))
+                val signal  = UI.reactive(span.when(on.read)(_.aria("label", name: Signal[String]).cssClass("x")))
+                assert(
+                    handler.isInstanceOf[Reactive[?]] && mixed.isInstanceOf[Reactive[?]] && signal.isInstanceOf[Reactive[?]],
+                    s"$handler | $mixed | $signal"
+                )
+        }
+
+        "a condition with no read is left as written" in {
+            val flag = true
+            val ui   = UI.reactive(span.when(flag)(_.cssClass("x")))
+            ui match
+                case s: SpanElement => assert(s.attrs.cssClasses == Chunk("x"), s"${s.attrs}")
+                case other          => fail(s"$other")
+        }
+    }
+
     "a read in an event handler is the prop's value when its event comes" - {
         def run(action: Maybe[UI.Action])(using Frame): Unit < (Async & Abort[Throwable]) =
             Abort.run[Any](action.getOrElse(Kyo.unit)).map(_ => ())
