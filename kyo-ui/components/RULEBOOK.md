@@ -39,7 +39,7 @@ phases after it keep:
    (rule 9), text as `Prop[String]` (rule 4), host lists of props (rule 7).
 3. **The setters, generated** (rule 11). Hand-written setters are deleted here, never edited before; the ones that stay are those
    that do more than store.
-4. **The draw:** one `UI.reactive` block over the structure (rule 6), each element one chain (rule 3), `classFor` (rule 5), leaves
+4. **The draw:** one `UI.reactive` block over the structure (rule 6), each element one chain (rule 3), `cssClass.matching` (rule 5), leaves
    handed the prop (rule 10), texts and host lists written with one call each (rules 4 and 7).
 5. **Order and scaladoc** (rule 9).
 
@@ -129,34 +129,40 @@ its constant and its signal at the render site.
 - `TextValue` (`ReactiveValue[String]`) is the form the components not yet converted still store; it goes with
   `ReactiveValue` in the last wave.
 
-## 5. A class per case of a closed set goes through `classFor`
+## 5. A class per case of a closed set goes through `cssClass.matching`
 
-A prop over a closed set of cases that picks one class (a severity, a variant, a size, a position) is written with the shared
-`el.classFor(prop)(case => Maybe[class])` (`Classes.scala`), never with a helper of the component's own, and never with
-`s"p-x-${v.token}"` on a value read out of a prop.
+A prop over a closed set of cases that picks one class (a severity, a variant, a size, a position) is written with kyo-ui's
+`el.cssClass.matching(prop) { case ... => class }`, each case giving its class as a `String` or `Absent` for none, never with a
+helper of the component's own, and never with `s"p-x-${v.token}"` on a value read out of a prop.
 
-- **Why:** a constant then adds its one class, and a signal becomes one class-name channel (kyo-ui's
-  `cssClass(Signal[Maybe[String]])`), so a change takes the old class off and puts the new one on in place and nothing is
-  drawn again; the component writes only its mapping from case to class, and no list of cases.
-- **The mapping lives on the type** when the classes follow one pattern across components: `Size.cls(prefix)` (`-sm`, `-lg`,
-  `-xl`, none for Normal), `Severity.cls(prefix)` (none for Primary), `ButtonVariant.cls`. A component writes its own cases only
-  where its classes break the pattern (Message's `error` for Danger).
+- **Why:** a constant then adds its one class, and a signal becomes one class-name channel, so a change takes the old class off
+  and puts the new one on in place and nothing is drawn again. The match names every case, so under `-Werror` a case left out
+  does not compile.
+- **Every case is written out** at the component, with its class spelled in full (`"p-button-sm"`), so the class a reader looks
+  for in the CSS is the one the source shows. A mapping that the type knows and the class does not (Tag's token for a severity)
+  is the one place a function of the case stays: `matching(sig)(s => tagToken(s).map(t => s"p-tag-$t"))`.
 - **Shape:**
 
 ```scala
-.classFor(p.severity)(_.cls("p-button")).classFor(p.variant)(_.cls).classFor(p.size)(_.cls("p-button"))
+.cssClass.matching(p.size) {
+    case Size.Small  => "p-button-sm"
+    case Size.Normal => Absent
+    case Size.Large  => "p-button-lg"
+}
 ```
 
-- Never one `cssClass(name, sig.map(_ == case))` per case (Tag, Badge and Message still do, until their wave): that is N
-  channels for one value, and a case left out of the list never gets its class.
+- Never one `when(sig.map(_ == case))(_.cssClass(name))` per case: that is N channels for one value, and a case left out of the
+  list never gets its class.
+- A class that follows a condition is `el.when(cond)(_.cssClass(name))` (rule 6), several classes are one
+  `el.cssClass("a", "b")`.
 
 ## 6. Flags are read in one `UI.reactive` block, never matched by their form
 
 Flags that may be a constant or a signal (`disabled`, `aria-disabled`, `loading`) are read with `.read` inside one
 `UI.reactive` block and used as plain values: combined with `&&` and `||`, handed to the setters that take a `Prop`
-(`disabled`, `silent`, `cssClass(name, on)`, `ariaFlag`). A handler never checks a flag: a locked element is silent. Never a match on `Boolean` against
-`Signal` at the place a flag is used, never a `var` set in its arms, never `Prop.zip`/`Prop.map` by hand for what the block
-can say.
+(`disabled`, `silent`, `ariaFlag`) or to `when(flag)(_.cssClass(name))`. A handler never checks a flag: a locked element is
+silent. Never a match on `Boolean` against `Signal` at the place a flag is used, never a `var` set in its arms, never
+`Prop.zip`/`Prop.map` by hand for what the block can say.
 
 - **Why:** the code says what the button does and not which props are signals. The macro sorts it out: a value that only
   reaches channels and handlers stays a channel (no region), a handler reads it when its event comes, and only a read the
@@ -172,9 +178,15 @@ UI.reactive {
     renderButton(busy).disabled(off)
         .when(p.onClick)(_.onClick(_))
         .ariaFlag("disabled", says)
-        .cssClass("p-uic-aria-disabled", says)(...)
+        .when(says)(_.cssClass("p-uic-aria-disabled"))(...)
 }
 ```
+
+- **`when` over a flag sets only what has a channel.** `el.when(cond)(f)` with `f` calling only the setters of kyo-ui's `Toggle`
+  (classes, `aria`, `data`, `role`, `hidden`, `silent`, and `disabled`, `readOnly`, `required` where the element has them, each
+  with plain values) binds each to the flag's channel: a read or a `val` that only reaches channels stays a channel there, as
+  it does in a setter that takes a `Prop` (the macro rewrites the call to the `Prop` form). An `f` with a handler, a style or a
+  child is structure: the flag becomes the block's, a region, so such a `when` takes only what decides the structure (the `Base`).
 
 - **A locked element is silent, never a handler that checks the flag.** `disabled(off)` silences the element by itself;
   a lock that is not native `disabled` (readonly, a fixed value) says `silent(locked)`. A silent element lists no event in

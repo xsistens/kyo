@@ -75,7 +75,7 @@ region that runs again must not start a component over and take the reader's sta
   channel or one region (`Prop.render`, `Prop.zip`). A host repaint has nothing of it to lose.
 - **The template is `ToggleButton` (and `Paginator`)**: `render = UI.mountedWith(p)(X.drawn)`, and `drawn(props: UI.Live[Props])`
   runs once per instance. Each place reads the field it shows where it shows it: `props(_.size)` into a class channel,
-  `props(_.checked.value(false))` into `cssClass` and `aria`, a label into the content's own region. A run that changes one field
+  `props(_.checked.value(false))` into `when(checked)(_.cssClass(...))` and `aria`, a label into the content's own region. A run that changes one field
   patches that place alone and draws nothing else again. A state slot is a `Controlled` with a `start` (a `UI.Ownable` prop): where a
   run binds nothing the engine binds the instance's own ref in its place, minted once, so `props(_.checked.value(...))` always reads
   a bound slot, keeps the reader's value across runs, and carries on from what was shown when a run stops binding it.
