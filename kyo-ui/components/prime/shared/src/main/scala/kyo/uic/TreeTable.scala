@@ -362,10 +362,10 @@ final class TreeTable[A] private[uic] (private[uic] val p: TreeTable.Props[A]) e
         // A grid that takes more than one row at a time has to say so: a reader who cannot see the
         // rows has no other way to know whether picking a second one keeps the first.
         selectionModeV match
-            case SelectionMode.Multiple | SelectionMode.Checkbox => tbl = tbl.aria("multiselectable" -> "true")
+            case SelectionMode.Multiple | SelectionMode.Checkbox => tbl = tbl.aria(AriaKey.multiselectable -> "true")
             case _                                               => ()
         if colGroupUI.nonEmpty then tbl = tbl.cssClass("p-uic-table-fixed")
-        access.name.foreach(v => tbl = tbl.aria("label" -> v))
+        access.name.foreach(v => tbl = tbl.aria(AriaKey.label -> v))
         val tableEl: UI = tbl(
             UI.children(colGroupUI ++ List[UI](
                 thead.cssClass("p-treetable-thead")(headRow),
@@ -450,7 +450,7 @@ final class TreeTable[A] private[uic] (private[uic] val p: TreeTable.Props[A]) e
         if direction.isSorting then
             cell = cell
                 .cssClass("p-treetable-column-sorted")
-                .aria("sort" -> (if direction == SortDirection.Ascending then "ascending" else "descending"))
+                .aria(aria"aria-sort" -> (if direction == SortDirection.Ascending then "ascending" else "descending"))
         end if
 
         // The neutral icon is the affordance and the directional one is state, so a column
@@ -581,12 +581,12 @@ final class TreeTable[A] private[uic] (private[uic] val p: TreeTable.Props[A]) e
                         .cssClass("p-treetable-node-toggle-button")
                         .jsProp("type", "button")
                         .tabIndex(-1)
-                        .aria("label" -> (if isExp then "Collapse" else "Expand"))
+                        .aria(AriaKey.label -> (if isExp then "Collapse" else "Expand"))
                     if depth > 0 then
                         toggler = toggler.style(_.margin(Length.Px(0), Length.Px(0), Length.Px(0), Length.Calc(s"${depth}rem")))
                     if hasChildren then
                         if !expansionFixed then toggler = toggler.onClick(toggleNode(id)).stopPropagation(true)
-                    else toggler = toggler.cssClass("p-uic-tt-toggle-hidden").aria("hidden" -> "true")
+                    else toggler = toggler.cssClass("p-uic-tt-toggle-hidden").aria(AriaKey.hidden -> "true")
                     val togglerEl: UI = toggler(
                         GlyphSvg(if isExp then Icons.chevronDown else Icons.chevronRight, "p-treetable-node-toggle-icon")
                     )
@@ -598,8 +598,8 @@ final class TreeTable[A] private[uic] (private[uic] val p: TreeTable.Props[A]) e
             cell(content(contentKids*))
         }
 
-        var row = tr.role("row").aria("level" -> (depth + 1))
-        if hasChildren then row = row.aria("expanded" -> isExp)
+        var row = tr.role("row").aria(AriaKey.level -> (depth + 1))
+        if hasChildren then row = row.aria(AriaKey.expanded -> isExp)
         if rowInteractive then row = row.cssClass("p-treetable-selectable-row")
         if base.isEmpty then
             // The placeholder: no mount has run, so there is nothing to move focus with yet, but the
@@ -628,7 +628,7 @@ final class TreeTable[A] private[uic] (private[uic] val p: TreeTable.Props[A]) e
                 .onKeyDown(rowKey(base, navRows, index, seed, focus))
         end if
         if isSel then row = row.cssClass("p-treetable-row-selected")
-        if selectionModeV != SelectionMode.None then row = row.aria("selected" -> isSel)
+        if selectionModeV != SelectionMode.None then row = row.aria(AriaKey.selected -> isSel)
         row(UI.children(tds)*)
     end renderRow
 

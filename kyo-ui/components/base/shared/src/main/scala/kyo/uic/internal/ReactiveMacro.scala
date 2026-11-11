@@ -113,11 +113,21 @@ private[kyo] object ReactiveMacro:
                 case _ => None
         end Read
 
-        // The entry an `aria(...)` or `data(...)` pair converts to, and its parts (see the entry pass below).
-        val entryModule  = TypeRepr.of[UI.Ast.Entry.type].termSymbol
-        val entryGiven   = entryModule.methodMember("entry").headOption
-        val entryChannel = entryModule.methodMember("channel").headOption.getOrElse(
+        // The entry an `aria(...)` or `data(...)` pair converts to, and its parts (see the entry pass below). An AriaKey converts through
+        // `keyed` and a DataKey through `dataKeyed`; `AriaKey.name` or `DataKey.name` makes the String `channel` takes, with the kind.
+        val entryModule    = TypeRepr.of[UI.Ast.Entry.type].termSymbol
+        val entryGiven     = List("keyed", "dataKeyed").flatMap(entryModule.methodMember(_).headOption)
+        val dataKeyedGiven = entryModule.methodMember("dataKeyed").headOption
+        val entryChannel   = entryModule.methodMember("channel").headOption.getOrElse(
             report.errorAndAbort("kyo-ui has no `Entry.channel`: the expansion of `UI.reactive` needs it.")
+        )
+        val ariaKeyModule = TypeRepr.of[kyo.AriaKey.type].termSymbol
+        val ariaKeyName   = ariaKeyModule.methodMember("name").headOption.getOrElse(
+            report.errorAndAbort("kyo-ui has no `AriaKey.name`: the expansion of `UI.reactive` needs it.")
+        )
+        val dataKeyModule = TypeRepr.of[kyo.DataKey.type].termSymbol
+        val dataKeyName   = dataKeyModule.methodMember("name").headOption.getOrElse(
+            report.errorAndAbort("kyo-ui has no `DataKey.name`: the expansion of `UI.reactive` needs it.")
         )
         val tuple2Module = TypeRepr.of[Tuple2.type].termSymbol
         // The name and the value of a pair written in place: `name -> value` or `(name, value)`.
@@ -306,8 +316,14 @@ private[kyo] object ReactiveMacro:
                                 case '[a] =>
                                     Implicits.search(TypeRepr.of[UI.Ast.AttrValue[UI.Prop[a]]]) match
                                         case ok: ImplicitSearchSuccess =>
+                                            // A key is the String its conversion holds; `channel` takes that String and the entry's kind.
+                                            val text   = transformTerm(name)(owner)
+                                            val isData = dataKeyedGiven.contains(conv.symbol)
+                                            val key    =
+                                                if isData then Ref(dataKeyModule).select(dataKeyName).appliedTo(text)
+                                                else Ref(ariaKeyModule).select(ariaKeyName).appliedTo(text)
                                             Ref(entryModule).select(entryChannel).appliedToType(tpe)
-                                                .appliedTo(transformTerm(name)(owner), transformTerm(value)(owner))
+                                                .appliedTo(Literal(BooleanConstant(isData)), key, transformTerm(value)(owner))
                                                 .appliedTo(ok.tree)
                                         case _ => super.transformTerm(tree)(owner)
                             end match

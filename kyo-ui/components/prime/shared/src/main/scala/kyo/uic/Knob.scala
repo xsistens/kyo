@@ -198,12 +198,12 @@ final class Knob private[uic] (private[uic] val p: Knob.Props) extends Node, For
             .width(sizeV)
             .height(sizeV)
             .role("slider")
-            .aria("valuemin" -> InputNumber.format(minV))
-            .aria("valuemax" -> InputNumber.format(maxV))
-            .aria("valuenow" -> InputNumber.format(value))
-        access.name.foreach(v => dial = dial.aria("label" -> v))
+            .aria(AriaKey.valuemin -> InputNumber.format(minV))
+            .aria(AriaKey.valuemax -> InputNumber.format(maxV))
+            .aria(AriaKey.valuenow -> InputNumber.format(value))
+        access.name.foreach(v => dial = dial.aria(AriaKey.label -> v))
         access.id.foreach(v => dial = dial.id(v))
-        if readonlyFlag then dial = dial.aria("readonly" -> "true")
+        if readonlyFlag then dial = dial.aria(AriaKey.readonly -> "true")
         if !disabledFlag.constTrue then dial = dial.tabIndex(0)
         // Blur fires even without a turn: the validation layer's Blur trigger. Reads the
         // binding LIVE where there is one, so it reports the value at blur time.

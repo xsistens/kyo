@@ -30,7 +30,7 @@ final class Text private[uic] (private[uic] val p: Text.Props) extends Node, Has
         if emptyIndicatorModeV == TextEmptyIndicatorMode.On then
             el = el.cssClass("p-uic-text--empty-indicator")
         maxLinesV.foreach { n =>
-            el = el.cssClass("p-uic-text--clamp").data("uic-max-lines" -> n)
+            el = el.cssClass("p-uic-text--clamp").data(data"data-uic-max-lines" -> n)
         }
         el(UI.children(kids)*)
     end render

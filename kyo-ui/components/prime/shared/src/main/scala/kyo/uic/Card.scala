@@ -72,8 +72,8 @@ final class Card private[uic] (private[uic] val p: Card.Props) extends Node, Has
 
         var el = div.cssClass("p-card").cssClass("p-component")
         if access.name.isDefined || access.nameRef.isDefined then el = el.role("region")
-        access.name.foreach(n => el = el.aria("label" -> n))
-        access.nameRef.foreach(r => el = el.aria("labelledby" -> r))
+        access.name.foreach(n => el = el.aria(AriaKey.label -> n))
+        access.nameRef.foreach(r => el = el.aria(AriaKey.labelledby -> r))
         el(UI.children(headerUI :+ body)*)
     end render
 

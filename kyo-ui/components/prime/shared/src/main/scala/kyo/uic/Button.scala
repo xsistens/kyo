@@ -41,7 +41,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
       * `aria-expanded`) not part of Button's own public surface. A signal is a channel,
       * patched in place.
       */
-    private[uic] def ariaRaw(name: String, value: Prop[String]): Button =
+    private[uic] def ariaRaw(name: AriaKey, value: Prop[String]): Button =
         new Button(p.copy(extraArias = p.extraArias :+ (name -> value)))
 
     // A button is a native control: its keys are its click, so `activate` has nothing left to answer.
@@ -51,7 +51,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
         fixed: Boolean,
         activate: Maybe[UI.Action]
     )(using Frame): UI =
-        val trigger = ariaRaw("haspopup", popup).ariaRaw("expanded", expanded)
+        val trigger = ariaRaw(AriaKey.haspopup, popup).ariaRaw(AriaKey.expanded, expanded)
         trigger.when(fixed)(_.ariaDisabled(true)).render
     end asPopupTrigger
 
@@ -114,7 +114,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
                     val says = p.ariaDisabled.read && !off
                     renderButton(busy).disabled(off)
                         .when(p.onClick)(_.onClick(_))
-                        .aria("disabled" -> says)
+                        .aria(AriaKey.disabled -> says)
                         .when(says)(_.cssClass("p-uic-aria-disabled"))(contentChildren(busy)*)
                 }
         end match
@@ -159,11 +159,11 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
             .when(p.role)(_.role(_))
             .focusAuto(p.focusSeed).focusRestore(p.focusSeed)
             .when(p.onKeyDown)(_.onKeyDown(_))
-            .aria("label" -> p.access.name)
-            .aria("labelledby" -> p.access.nameRef)
-            .aria("description" -> p.description)
+            .aria(AriaKey.label -> p.access.name)
+            .aria(AriaKey.labelledby -> p.access.nameRef)
+            .aria(AriaKey.description -> p.description)
             .title(p.tooltip)
-            .when(loading)(_.aria("busy" -> "true"))
+            .when(loading)(_.aria(AriaKey.busy -> "true"))
     end shared
 
     /** The `<button>` with what only it carries besides its flags: the form type, its own role, the tab stop and the form. */
@@ -171,7 +171,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
         // The form type and the button's own role come first, so the host's role (in `shared`) wins over `accessibleRole`.
         val typed = button.jsProp("type", p.buttonType.token.toLowerCase)
             .when(p.accessibleRole == ButtonAccessibleRole.Link)(_.role("link"))
-        shared(typed, loading).when(p.tabIndex)(_.tabIndex(_)).data("uic-form" -> p.form)
+        shared(typed, loading).when(p.tabIndex)(_.tabIndex(_)).data(data"data-uic-form" -> p.form)
     end renderButton
 
     /** Button skin on a client-routed anchor (SPA `Href.Path`). The anchor keeps its
@@ -184,7 +184,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
         // A disabled link leaves the tab order outright, so the host's roving tabindex has
         // nothing left to say about it.
         val linked =
-            if loading || disabled then el.cssClass("p-disabled").aria("disabled" -> "true").tabIndex(-1)
+            if loading || disabled then el.cssClass("p-disabled").aria(AriaKey.disabled -> "true").tabIndex(-1)
             else el.when(p.tabIndex)(_.tabIndex(_)).href(Href.Path(h)).when(p.onClick)(_.onClick(_))
         linked(contentChildren(loading)*)
     end renderAnchor
@@ -260,7 +260,7 @@ object Button:
         @noSetter onKeyDown: Maybe[KeyboardEvent => UI.Action] = Absent,
         @noSetter extraChildren: List[UI] = Nil,
         @noSetter extraClasses: List[String] = Nil,
-        @noSetter extraArias: List[(String, Prop[String])] = Nil,
+        @noSetter extraArias: List[(AriaKey, Prop[String])] = Nil,
         @noSetter role: Maybe[String] = Absent,
         @noSetter tabIndex: Maybe[Int] = Absent,
         @noSetter focusSeed: Boolean = false

@@ -188,8 +188,8 @@ object SplitButton:
                 .icon(b.dropdownIcon.getOrElse(Icons.chevronDown))
                 .extraClass("p-splitbutton-dropdown")
                 .accessibleName("Open menu")
-                .ariaRaw("haspopup", "menu")
-                .ariaRaw("expanded", expanded)
+                .ariaRaw(AriaKey.haspopup, "menu")
+                .ariaRaw(AriaKey.expanded, expanded)
             // A constant nobody hears is fixed: the dropdown stays a tab stop and says it changes nothing.
             val dropdown = if b.fixed then drop.ariaDisabled(true) else drop.onClick(toggle)
             val root     = div.cssClass("p-splitbutton").cssClass("p-component")

@@ -3,7 +3,7 @@
 Rules that bite repeatedly when building or extending components in
 `kyo-ui/components/prime/shared/src/main/scala/kyo/uic/` (module `kyo-ui-components-prime`; what a component is built from, `Setters`, `Component` and the rest, lives in `kyo-ui-components-base`, the same package). Read before touching a component.
 How a component's code is written (names, the one draw, chains, channels) is `RULEBOOK.md`; read it too.
-`aria` and `data` take `name -> value` entries, several in one call: `.aria("label" -> p.access.name, "pressed" -> checked)`.
+`aria` and `data` take `name -> value` entries, several in one call: `.aria(AriaKey.label -> p.access.name, AriaKey.pressed -> checked)`.
 A Boolean or a number writes its own text (no `.toString`), `Absent` writes nothing, a signal is the attribute's channel
 (RULEBOOK rules 4 and 6).
 The component catalog, the composition story and the parity notes are in this

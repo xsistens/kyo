@@ -278,10 +278,10 @@ final class Accordion[K] private[uic] (private[uic] val p: Accordion.Props[K]) e
             .cssClass("p-accordionheader")
             .id(headerId(base, p.p.id))
             .jsProp("type", "button")
-            .aria("expanded" -> active)
+            .aria(AriaKey.expanded -> active)
         if p.p.disabled then header = header.jsProp("disabled", "true")
         else
-            if interactive then header = header.onClick(toggle(p.p.id)) else header = header.aria("disabled" -> "true")
+            if interactive then header = header.onClick(toggle(p.p.id)) else header = header.aria(AriaKey.disabled -> "true")
             header = header.preventScrollKeys.onKeyDown(headerMove(base, p.p.id, focus))
         end if
         val headerEl: UI = header(
@@ -321,10 +321,10 @@ final class Accordion[K] private[uic] (private[uic] val p: Accordion.Props[K]) e
         var header = button
             .cssClass("p-accordionheader")
             .jsProp("type", "button")
-            .aria("expanded" -> active)
+            .aria(AriaKey.expanded -> active)
         if p.p.disabled then header = header.jsProp("disabled", "true")
         else if interactive then header = header.onClick(toggle(p.p.id))
-        else header = header.aria("disabled" -> "true")
+        else header = header.aria(AriaKey.disabled -> "true")
         val headerEl: UI = header(
             headerSlot,
             GlyphSvg(if active then Icons.chevronUp else Icons.chevronDown, "p-accordionheader-toggle-icon")

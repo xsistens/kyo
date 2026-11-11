@@ -285,7 +285,7 @@ final class Carousel[A] private[uic] (private[uic] val p: Carousel.Props[A]) ext
                 .cssClass("p-carousel-item")
                 .id(s"$stripId-i$i")
                 .role("group")
-                .aria("roledescription" -> "slide")
+                .aria(AriaKey.roledescription -> "slide")
                 .when(r.map(p => inWindow(i, p, n)))(_.cssClass("p-carousel-item-active"))
                 .style(_.flexGrow(0).flexShrink(0).flexBasis(basis(n)))(
                     templateF.map(_(a)).getOrElse(stringToUI(a.toString))
@@ -378,7 +378,7 @@ final class Carousel[A] private[uic] (private[uic] val p: Carousel.Props[A]) ext
                 .cssClass("p-carousel-item")
                 .cssClass("p-carousel-item-active")
                 .role("group")
-                .aria("roledescription" -> "slide")
+                .aria(AriaKey.roledescription -> "slide")
                 .style(_.flexGrow(1).flexShrink(0).flexBasis((100.0 / numVisibleV).pct))
             if i == 0 then el = el.cssClass("p-carousel-item-start")
             if i == visible.size - 1 then el = el.cssClass("p-carousel-item-end")
@@ -441,12 +441,12 @@ final class Carousel[A] private[uic] (private[uic] val p: Carousel.Props[A]) ext
                 var btn = button
                     .cssClass("p-carousel-indicator-button")
                     .jsProp("type", "button")
-                    .aria("label" -> s"Page ${i + 1}")
+                    .aria(AriaKey.label -> s"Page ${i + 1}")
                     .tabIndex(if i == page then 0 else -1)
-                if i == page then btn = btn.aria("current" -> "page")
+                if i == page then btn = btn.aria(AriaKey.current -> "page")
                 // A fixed carousel's dots turn nothing, and the ones off the page say so; the current one names the page.
                 if !pageSlot.fixed then btn = btn.onClick(setPage(i, pages))
-                else if i != page then btn = btn.aria("disabled" -> "true")
+                else if i != page then btn = btn.aria(AriaKey.disabled -> "true")
                 if ids.isDefinedAt(i) then
                     btn = btn.id(ids(i)).onKeyDown { e =>
                         // A dot IS a button, so Enter and Space are the browser's; this moves

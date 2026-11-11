@@ -179,7 +179,7 @@ final class InputOtp private[uic] (private[uic] val p: InputOtp.Props) extends N
         }
 
         var el = div.cssClass("p-inputotp").cssClass("p-component")
-        access.name.foreach(v => el = el.aria("label" -> v))
+        access.name.foreach(v => el = el.aria(AriaKey.label -> v))
         el(UI.children(cells)*)
     end body
 end InputOtp

@@ -162,8 +162,8 @@ final class Drawer private[uic] (private[uic] val p: Drawer.Props) extends Node,
                             .cssClass("p-button-rounded")
                             .cssClass("p-button-text")
                             .jsProp("type", "button")
-                            .aria("label" -> "Close")
-                        val pressable = if fixed then shell.aria("disabled" -> "true") else shell.onClick(close)
+                            .aria(AriaKey.label -> "Close")
+                        val pressable = if fixed then shell.aria(AriaKey.disabled -> "true") else shell.onClick(close)
                         List(pressable(GlyphSvg(Icons.times, "p-icon")))
                     else Nil
 
@@ -180,7 +180,7 @@ final class Drawer private[uic] (private[uic] val p: Drawer.Props) extends Node,
                     .cssClass("p-drawer")
                     .cssClass("p-component")
                     .role("dialog")
-                    .aria("modal" -> "true")
+                    .aria(AriaKey.modal -> "true")
                     .focusTrap(true)
                     .tabIndex(-1)
                     // Open slides the panel in from its docking edge (Full fades); its exit
@@ -198,8 +198,8 @@ final class Drawer private[uic] (private[uic] val p: Drawer.Props) extends Node,
                             case TextValue.Const(t) => t
                             case TextValue.Dyn(s)   => s
                         }
-                access.name.orElse(headerName).foreach(n => box = box.aria("label" -> n))
-                access.nameRef.foreach(n => box = box.aria("labelledby" -> n))
+                access.name.orElse(headerName).foreach(n => box = box.aria(AriaKey.label -> n))
+                access.nameRef.foreach(n => box = box.aria(AriaKey.labelledby -> n))
                 if !fixed then
                     box = box.onKeyDown { e =>
                         e.key match
