@@ -271,7 +271,7 @@ object ApolloSignal:
         val operation = call.requestBuilder.operation
         ActiveQueryRegistry.Target(
             ActiveQueryRegistry.QueryKey(operation.name, operation.document, operation.variables),
-            ApolloEffect.asExecuteFailure(call.fetchPolicy(FetchPolicy.NetworkOnly).data.unit),
+            ApolloEffect.asExecuteFailure(CallData.of(call.fetchPolicy(FetchPolicy.NetworkOnly)).unit),
             during.fold(Kyo.unit)(_.set(Present(NetworkStatus.Refetch))),
             during.fold(Kyo.unit)(_.set(Absent)),
             followsCache = true,
