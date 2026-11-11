@@ -59,7 +59,7 @@ final class Message private[uic] (private[uic] val p: Message.Props) extends Nod
 
     /** Runs `action` when the close button is pressed. Past tense on purpose: the
       * message has been dismissed by the user, and nothing has been hidden; remove
-      * it from your own state if you want it gone. Contrast [[Dialog.onClose]],
+      * it from your own state if you want it gone. Contrast [[Dialog.onOpenChange]],
       * which fires after the component has already written its own visibility ref.
       */
     def onDismissed(action: => UI.Action)(using Frame): Message =
