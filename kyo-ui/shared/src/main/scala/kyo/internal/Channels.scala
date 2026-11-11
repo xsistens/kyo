@@ -70,14 +70,27 @@ private[kyo] object Channels:
                                 Present(off.combineLatest(muted).map(both => both._1 || both._2))
                             case Absent => Present(off)
                     case Absent => attrs.silentSignal
-        follows.flatMap { quiet =>
-            val events = HtmlRenderer.eventList(el)
-            if events.isEmpty then Absent
-            else
-                given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
-                Present(quiet.map(silent => if silent then Absent else Present(events)))
-            end if
-        }
+        val events = HtmlRenderer.eventList(el)
+        if fixed || events.isEmpty then Absent
+        else
+            given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
+            // What the element lists while it is not silent: every event, or under UI.Element.silentExcept only the kept ones,
+            // which is nothing where none is kept (no attribute).
+            val kept                                   = events.split(',').filter(attrs.partialKeep.contains).mkString(",")
+            def listed(partly: Boolean): Maybe[String] =
+                if !partly then Present(events)
+                else if kept.isEmpty then Absent
+                else Present(kept)
+            attrs.partialSignal match
+                case Absent =>
+                    follows.map(quiet => quiet.map(silent => if silent then Absent else listed(attrs.partial)))
+                case Present(partSig) =>
+                    follows match
+                        case Absent         => Present(partSig.map(partly => listed(partly)))
+                        case Present(quiet) =>
+                            Present(quiet.combineLatest(partSig).map((silent, partly) => if silent then Absent else listed(partly)))
+            end match
+        end if
     end silencedEvents
 
     /** What puts `el` back after the edit `event`, for an element that follows a signal: compares, once the event has finished bubbling, what

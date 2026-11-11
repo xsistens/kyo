@@ -1937,6 +1937,24 @@ object UI:
                 case s: Signal[Boolean] @unchecked => withAttrs(attrs.copy(silentSignal = Present(s)))
                 case b: Boolean                    => withAttrs(attrs.copy(silent = b))
 
+            /** Silences every event of the element but those named in `keep` while `v` holds: the element lists only the kept events, so
+              * a click or key on it goes on to the nearest ancestor that takes it, while the kept events (`"blur"`, `"keydown"`, ...) run
+              * their handlers as on an element that is not silent. `keep` names the events by the tokens the client reports them under,
+              * which are the `data-kyo-ev` names. Keeping `"blur"` keeps the `"blurtext"` token too, so a text field's blur still carries its text.
+              * Silent through [[silent]] or `disabled`, the element is silent for every event, as before.
+              *
+              * Like [[silent]], a `Boolean` decides it at render and a `Signal[Boolean]` patches the listed events in place on emission. The
+              * handlers stay on the element, so an event it does not hear reaches no handler, and one it hears runs its handler again.
+              */
+            def silentExcept(v: Boolean | Signal[Boolean], keep: String*): Self =
+                // "blurtext" is the token that makes a text field's blur carry its text, so a kept blur keeps it too.
+                val kept = if keep.contains("blur") then keep.toSet + "blurtext" else keep.toSet
+                v match
+                    case s: Signal[Boolean] @unchecked => withAttrs(attrs.copy(partialSignal = Present(s), partialKeep = kept))
+                    case b: Boolean                    => withAttrs(attrs.copy(partial = b, partialKeep = kept))
+                end match
+            end silentExcept
+
             // Visual
             def style(v: Style): Self               = withAttrs(attrs.copy(uiStyle = attrs.uiStyle ++ v))
             def style(f: Style.type => Style): Self = style(f(Style))
@@ -3317,6 +3335,11 @@ object UI:
             // kyo.internal.Channels.of); where it is bound the constant is not consulted.
             silent: Boolean = false,
             silentSignal: Maybe[Signal[Boolean]] = Absent,
+            // Element.silentExcept: while `partial` holds (or its signal), only the events in `partialKeep` are heard. Where a signal is
+            // bound it is the value, as for `silent`.
+            partial: Boolean = false,
+            partialSignal: Maybe[Signal[Boolean]] = Absent,
+            partialKeep: Set[String] = Set.empty,
             // The channels a `when` over a signal bound (by attribute name; the silence channel as `data-kyo-ev`), which a later
             // toggle on the same name composes with; a channel a setter bound is the value, and a toggle leaves it (UI.Ast.Toggle).
             toggled: Set[String] = Set.empty
@@ -3325,7 +3348,7 @@ object UI:
             def hasChannels: Boolean =
                 reactiveAttrs.nonEmpty || reactiveMaybeAttrs.nonEmpty || reactiveBoolAttrs.nonEmpty || reactiveClasses.nonEmpty ||
                     reactiveClassNames.nonEmpty ||
-                    reactiveStyle.nonEmpty || silentSignal.nonEmpty
+                    reactiveStyle.nonEmpty || silentSignal.nonEmpty || partialSignal.nonEmpty
         end Attrs
 
         // ---- Non-element AST cases ----

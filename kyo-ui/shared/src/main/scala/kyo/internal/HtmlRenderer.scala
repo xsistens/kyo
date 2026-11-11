@@ -769,7 +769,7 @@ private[kyo] object HtmlRenderer:
             case Present(Bound.Ref(ref)) => SignalNow(ref)
             case Present(Bound.Const(s)) => s
             case _                       => ""
-        renderDropdownWithValue(sb, dd, path, baseId, currentVal, cssRules, ddStyle, listens = !silentNow(dd))
+        renderDropdownWithValue(sb, dd, path, baseId, currentVal, cssRules, ddStyle, events = dropdownEventsNow(dd))
     end renderDropdown
 
     private def renderDropdownWithValue(
@@ -780,15 +780,16 @@ private[kyo] object HtmlRenderer:
         currentVal: String,
         cssRules: Maybe[CssCollector],
         channelStyle: Seq[(String, String)],
-        // Whether the wrapper lists its events: not while the dropdown is silent (UI.Element.silent).
-        listens: Boolean
+        // The events the wrapper lists: none while the dropdown is silent (UI.Element.silent), only the kept ones under
+        // UI.Element.silentExcept.
+        events: String
     )(using
         Frame
     ): Unit =
         val pathStr     = pathAttr(path)
         val idAttr      = if baseId.nonEmpty then s""" id="${esc(baseId)}"""" else ""
         val ddAttr      = if baseId.nonEmpty then s""" data-kyo-dropdown="${esc(baseId)}"""" else " data-kyo-dropdown"
-        val evAttr      = if listens then s""" data-kyo-ev="$dropdownEvents"""" else ""
+        val evAttr      = if events.nonEmpty then s""" data-kyo-ev="$events"""" else ""
         val hidAttr     = if dd.attrs.hidden.getOrElse(false) then " hidden" else ""
         val tabAttr     = dd.attrs.tabIndex.map(n => s""" tabindex="$n"""").getOrElse("")
         val pseudoClass = registerPseudoClass(cssRules, dd.attrs.uiStyle)
@@ -1356,17 +1357,20 @@ private[kyo] object HtmlRenderer:
 
     /** Writes `data-kyo-ev` with every event the element's handlers and bindings make the client forward, and
       * answers whether there was one. A silent element (see UI.Element.silent) writes none: the bytes of the
-      * same element with no handler.
+      * same element with no handler. A partly silent one (UI.Element.silentExcept) writes only the events it keeps.
       */
     private def renderEventAttr(sb: StringBuilder, elem: Element)(using AllowUnsafe, Frame, SignalNow.Locals): Boolean =
         if silentNow(elem) then false
         else
             // Written as they are found: the attribute opens with the first event and closes at the end, so a
             // plain element allocates nothing here.
-            var first = true
+            val partial = partialNow(elem)
+            val keep    = elem.attrs.partialKeep
+            var first   = true
             declaredEvents(elem) { name =>
-                discard(sb.append(if first then " data-kyo-ev=\"" else ",").append(name))
-                first = false
+                if !partial || keep.contains(name) then
+                    discard(sb.append(if first then " data-kyo-ev=\"" else ",").append(name))
+                    first = false
             }
             if !first then sb.append('"')
             !first
@@ -1388,6 +1392,22 @@ private[kyo] object HtmlRenderer:
                     discard(sb.append(name))
                 }
                 sb.toString
+
+    /** The events the Dropdown wrapper lists as it renders: none while it is silent, and only the kept ones under a partial silence. */
+    private def dropdownEventsNow(dd: Dropdown)(using AllowUnsafe, Frame, SignalNow.Locals): String =
+        if silentNow(dd) then ""
+        else if partialNow(dd) then dropdownEvents.split(',').filter(dd.attrs.partialKeep.contains).mkString(",")
+        else dropdownEvents
+
+    /** Whether `elem` hides every event but those in `partialKeep` as it renders (UI.Element.silentExcept), read from its channel where
+      * one is bound, else from the constant.
+      */
+    private def partialNow(elem: Element)(using AllowUnsafe, Frame, SignalNow.Locals): Boolean =
+        val attrs = elem.attrs
+        attrs.partialSignal match
+            case Present(sig) => SignalNow(sig)
+            case Absent       => attrs.partial
+    end partialNow
 
     /** Whether `elem` is silent as it renders: `disabled` (on an element that has it) or `silent`, each read from
       * its channel where one is bound, else from the constant. Allocates nothing for an element that binds neither.
