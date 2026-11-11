@@ -56,7 +56,7 @@ final class Icon private[uic] (private[uic] val p: Icon.Props) extends Node, Has
         val base = span
             .cssClass("p-icon")
             .cssClass("p-uic-icon")
-            .data("uic-icon" -> glyph.name)
+            .data(data"data-uic-icon" -> glyph.name)
         val withTip  = if showTooltipFlag then base.jsProp("title", glyph.name) else base
         val withMode = modeV match
             case Present(m) => applyMode(withTip, m)
@@ -70,15 +70,15 @@ final class Icon private[uic] (private[uic] val p: Icon.Props) extends Node, Has
             case IconMode.Image =>
                 val img = el.role("img")
                 access.name match
-                    case Present(n) => img.aria("label" -> n)
+                    case Present(n) => img.aria(AriaKey.label -> n)
                     case _          => img
                 end match
             case IconMode.Decorative =>
-                el.role("presentation").aria("hidden" -> "true")
+                el.role("presentation").aria(AriaKey.hidden -> "true")
             case IconMode.Interactive =>
                 val btn      = el.role("button").tabIndex(0)
                 val withName = access.name match
-                    case Present(n) => btn.aria("label" -> n)
+                    case Present(n) => btn.aria(AriaKey.label -> n)
                     case _          => btn
                 onClickEff.map(e => operable(withName, e)).getOrElse(withName)
 
@@ -87,8 +87,8 @@ final class Icon private[uic] (private[uic] val p: Icon.Props) extends Node, Has
       */
     private def implicitMode(el: Ast.SpanElement)(using Frame): Ast.SpanElement =
         val withA11y = access.name match
-            case Present(n) => el.role("img").aria("label" -> n)
-            case _          => el.aria("hidden" -> "true")
+            case Present(n) => el.role("img").aria(AriaKey.label -> n)
+            case _          => el.aria(AriaKey.hidden -> "true")
         onClickEff match
             case Present(e) => operable(withA11y.role("button").tabIndex(0), e)
             case Absent     => withA11y

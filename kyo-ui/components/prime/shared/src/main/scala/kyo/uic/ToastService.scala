@@ -170,7 +170,7 @@ object ToastService:
                 .cssClass("p-component")
                 .cssClass(s"p-toast-${position.token}")
                 .role("alert")
-                .aria("live" -> "polite")(
+                .aria(AriaKey.live -> "polite")(
                     UI.children(queued.map(q => messageUI(q, position, remove)))*
                 )
 
@@ -189,7 +189,7 @@ object ToastService:
                     button
                         .cssClass("p-toast-close-button")
                         .jsProp("type", "button")
-                        .aria("label" -> "Close")
+                        .aria(AriaKey.label -> "Close")
                         .onClick(remove(q.id))(GlyphSvg(Icons.times, "p-toast-close-icon"))
                 )
         var message = div
@@ -200,8 +200,8 @@ object ToastService:
             // the leave ghost.
             .enterTransition(Toast.enterClass(position))
             .leaveTransition("p-toast-message-leave-active")
-            .data("uic-toast-id" -> q.id)
-        msg.life.foreach(d => message = message.data("uic-life" -> d.toMillis))
+            .data(data"data-uic-toast-id" -> q.id)
+        msg.life.foreach(d => message = message.data(data"data-uic-life" -> d.toMillis))
         message(
             div.cssClass("p-toast-message-content")(
                 UI.children((icon :: text :: closeBtn))*

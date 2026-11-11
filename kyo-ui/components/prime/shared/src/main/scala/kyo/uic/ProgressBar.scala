@@ -56,9 +56,9 @@ final class ProgressBar private[uic] (private[uic] val p: ProgressBar.Props) ext
             .cssClass("p-progressbar")
             .cssClass("p-component")
             .role("progressbar")
-            .aria("valuemin" -> "0")
-            .aria("valuemax" -> "100")
-        access.name.foreach(n => el = el.aria("label" -> n))
+            .aria(AriaKey.valuemin -> "0")
+            .aria(AriaKey.valuemax -> "100")
+        access.name.foreach(n => el = el.aria(AriaKey.label -> n))
         el
     end root
 
@@ -69,7 +69,7 @@ final class ProgressBar private[uic] (private[uic] val p: ProgressBar.Props) ext
             else List(div.cssClass("p-progressbar-label")(valueTemplateV.map(_(pct)).getOrElse(s"$pct%")))
         root
             .cssClass("p-progressbar-determinate")
-            .aria("valuenow" -> pct)(
+            .aria(AriaKey.valuenow -> pct)(
                 div.cssClass("p-progressbar-value").style(_.width(pct.pct))(UI.children(label)*)
             )
     end determinateBody

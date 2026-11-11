@@ -166,8 +166,8 @@ final class VirtualScroller[A] private[uic] (private[uic] val p: VirtualScroller
                     .style(_.position(_.absolute).width(1.px).height(totalHeight.px))
                 div
                     .cssClass("p-virtualscroller-content")
-                    .data("uic-vs-first" -> firstIdx)
-                    .data("uic-vs-count" -> (lastIdx - firstIdx))(UI.children(spacer :: rows)*)
+                    .data(data"data-uic-vs-first" -> firstIdx)
+                    .data(data"data-uic-vs-count" -> (lastIdx - firstIdx))(UI.children(spacer :: rows)*)
     end window
 
     /** The window over a [[RowSource]]: the same geometry, with the rows taken from what
@@ -199,8 +199,8 @@ final class VirtualScroller[A] private[uic] (private[uic] val p: VirtualScroller
                     .style(_.position(_.absolute).width(1.px).height((count * itemSizeV).px))
                 div
                     .cssClass("p-virtualscroller-content")
-                    .data("uic-vs-first" -> firstIdx)
-                    .data("uic-vs-count" -> (lastIdx - firstIdx))(UI.children(spacer :: rows)*)
+                    .data(data"data-uic-vs-first" -> firstIdx)
+                    .data(data"data-uic-vs-count" -> (lastIdx - firstIdx))(UI.children(spacer :: rows)*)
     end sourceWindow
 end VirtualScroller
 

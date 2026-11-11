@@ -115,8 +115,8 @@ final class Breadcrumb private[uic] (private[uic] val p: Breadcrumb.Props) exten
     private[uic] def render(using Frame): UI =
         val navBase  = UI.nav.cssClass("p-breadcrumb").cssClass("p-component")
         val labelled = access.name match
-            case Present(v) => navBase.aria("label" -> v)
-            case _          => navBase.aria("label" -> "Breadcrumb")
+            case Present(v) => navBase.aria(AriaKey.label -> v)
+            case _          => navBase.aria(AriaKey.label -> "Breadcrumb")
         // Only the list follows a live trail: which crumb is last, and so current, moves with it.
         labelled(entries.render(items => UI.ol.cssClass("p-breadcrumb-list")(UI.children(trail(items))*)))
     end render
@@ -133,7 +133,7 @@ final class Breadcrumb private[uic] (private[uic] val p: Breadcrumb.Props) exten
             val sep: List[UI] =
                 if i < lastIdx then
                     List(
-                        li.cssClass("p-breadcrumb-separator").aria("hidden" -> "true")(
+                        li.cssClass("p-breadcrumb-separator").aria(AriaKey.hidden -> "true")(
                             GlyphSvg(sepGlyph, "p-breadcrumb-separator-icon")
                         )
                     )
@@ -158,7 +158,7 @@ final class Breadcrumb private[uic] (private[uic] val p: Breadcrumb.Props) exten
                 anchor = anchor.href(Href.Path(h))
                 Breadcrumb.parseTarget(it.p.target).foreach(t => anchor = anchor.target(t))
             case Absent =>
-                if isCurrent then anchor = anchor.aria("current" -> "page")
+                if isCurrent then anchor = anchor.aria(AriaKey.current -> "page")
         end match
         val iconSlot: List[UI]  = it.p.icon.toList.map(g => GlyphSvg(g, "p-breadcrumb-item-icon"))
         val labelSlot: List[UI] = it.p.text match

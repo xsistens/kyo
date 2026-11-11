@@ -115,16 +115,16 @@ final class TextArea private[uic] (private[uic] val p: TextArea.Props) extends N
         // `<textarea>` has no native `rows` attribute in the kyo AST, so the row count
         // is exposed as `data-rows` (wire/discoverability hook) and reflected visually
         // as a minimum height (~1.4rem per row).
-        b = rowsV.map(n => b.data("rows" -> n).style(_.minHeight((n * 22).px))).getOrElse(b)
+        b = rowsV.map(n => b.data(data"data-rows" -> n).style(_.minHeight((n * 22).px))).getOrElse(b)
         b = disabledFlag.foldFlag(b)(b.disabled(_))
         b = readonlyFlag.foldFlag(b)(b.readOnly(_))
-        if requiredFlag.getOrElse(false) then b = b.aria("required" -> "true").jsProp("required", "true")
+        if requiredFlag.getOrElse(false) then b = b.aria(AriaKey.required -> "true").jsProp("required", "true")
         b = nameV.map(v => b.jsProp("name", v)).getOrElse(b)
         b = maxLengthV.map(n => b.jsProp("maxLength", n.toString)).getOrElse(b)
         b = access.name match
-            case Present(v) => b.aria("label" -> v)
+            case Present(v) => b.aria(AriaKey.label -> v)
             case _          => b
-        b = access.nameRef.map(v => b.aria("labelledby" -> v)).getOrElse(b)
+        b = access.nameRef.map(v => b.aria(AriaKey.labelledby -> v)).getOrElse(b)
         b = valueSlot.hearer.map(f => b.onInput(f)).getOrElse(b)
         b = onChangeF.map(f => b.onChange(f)).getOrElse(b)
         // The blur carries the text the field holds as focus leaves it: what the reader typed, whatever binds the field.

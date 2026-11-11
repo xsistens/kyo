@@ -145,12 +145,12 @@ final class SpeedDial private[uic] (private[uic] val p: SpeedDial.Props) extends
             .extraClass("p-speeddial-button")
             .extraClass("p-speeddial-rotate")
             .accessibleName(access.name.getOrElse("Toggle actions"))
-            .ariaRaw("haspopup", "menu")
-            .ariaRaw("expanded", isOpen.toString)
+            .ariaRaw(AriaKey.haspopup, "menu")
+            .ariaRaw(AriaKey.expanded, isOpen.toString)
             .disabled(disabledFlag)
         if fixed then toggleBtn = toggleBtn.ariaDisabled(true)
         // A test may render with no base, and then there is no list id to point at.
-        if base.nonEmpty then toggleBtn = toggleBtn.ariaRaw("controls", listId)
+        if base.nonEmpty then toggleBtn = toggleBtn.ariaRaw(AriaKey.controls, listId)
         if !disabledFlag && !fixed then
             toggleBtn = toggleBtn.onClick(toggle).onKeyDownRaw { e =>
                 // Enter and Space are the browser's, since this IS a `<button>` and its click
