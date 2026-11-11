@@ -56,7 +56,7 @@ import kyo.apollo.runtime.ResponseStream
   *
   * ==What it hands out==
   *
-  * [[query]] / [[mutation]] / [[subscription]] seed an [[ApolloRequest]] with the
+  * [[query]] / [[mutation]] / [[subscription]] seed an `ApolloRequest` with the
   * client defaults (headers, HTTP method, custom-scalar registry) and wrap it in
   * an [[ApolloCall]]. The call carries fluent per-request overrides
   * (`.addHttpHeader`, `.httpMethod`, …) and is executed stream-first via

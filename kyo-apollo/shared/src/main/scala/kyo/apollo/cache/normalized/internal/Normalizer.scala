@@ -24,7 +24,7 @@ import scala.collection.mutable
   *     object lists, scalars for scalar lists);
   *   - `null` becomes `RecordValue.Null`.
   *
-  * Each object's storage `CacheKey` comes from the [[CacheKeyGenerator]]
+  * Each object's storage `CacheKey` comes from the `CacheKeyGenerator`
   * (typically `__typename` + id), falling back to a position-based key from the
   * response path when the object carries no stable id. Two occurrences of the
   * same key within one response are merged into a single record before the map
