@@ -31,7 +31,7 @@ import kyo.apollo.runtime.ResponseStream
   * network conditions.
   *
   * Serialization stays delegated: [[HttpRequestComposer]] owns request-body
-  * composition and [[GraphQLResponse.parse]] owns response decoding — the
+  * composition and `GraphQLResponse.parse` owns response decoding — the
   * transport only wires them to the engine and maps errors.
   *
   * @param serverUrl the GraphQL endpoint every request is sent to; a URL that does

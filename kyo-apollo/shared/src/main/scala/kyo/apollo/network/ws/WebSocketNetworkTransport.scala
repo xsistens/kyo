@@ -27,7 +27,7 @@ import scala.collection.immutable.VectorMap
   * protocol `stop`/`complete` for its id.
   *
   * '''Concurrency model.''' All connection and routing state is one `State`
-  * whose [[Phase]] is `Idle`, `Connecting`, `Open`, `Reconnecting` or `Closed`;
+  * whose `Phase` is `Idle`, `Connecting`, `Open`, `Reconnecting` or `Closed`;
   * each phase carries exactly the socket, fibers and timers that exist in it, so
   * an open socket without a connection, a reconnect without a timer, or an
   * acknowledged handshake that still waits for its ack cannot be written down.

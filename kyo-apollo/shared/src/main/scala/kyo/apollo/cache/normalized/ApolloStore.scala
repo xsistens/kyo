@@ -907,7 +907,7 @@ final class ApolloStore(
       *
       * A reachability mark-and-sweep, seeded from the well-known operation roots
       * (`CacheKey.QueryRoot` / `CacheKey.MutationRoot` /
-      * [[CacheKey.SubscriptionRoot]]), every record any live optimistic layer holds
+      * `CacheKey.SubscriptionRoot`), every record any live optimistic layer holds
       * or points at — so a record kept alive *only* by a pending optimistic mutation
       * survives GC and reappears if that mutation rolls back — and the retain set:
       * the key set of every live `watch()`'s last read and every key of an open

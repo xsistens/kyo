@@ -27,7 +27,7 @@ import kyo.apollo.runtime.ResponseStream
   * "cache then network" is the cache value followed by the network stream. Mirrors
   * apollo-kotlin's `CacheInterceptor` / fetch-policy interceptors.
   *
-  * Only an [[Operation.Normalizable]] operation is written back. An operation whose
+  * Only an `Operation.Normalizable` operation is written back. An operation whose
   * data decodes only — one built from a `.map` projection — runs under every policy
   * and its responses reach the caller decoded, but they are not normalized (nor is
   * its optimistic data overlaid); each skip is logged at debug level. Its cache reads

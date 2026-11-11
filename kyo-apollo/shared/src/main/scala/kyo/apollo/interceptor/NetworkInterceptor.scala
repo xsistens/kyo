@@ -15,7 +15,7 @@ import kyo.apollo.runtime.ResponseStream
   *
   * It routes by operation kind, mirroring apollo-kotlin's `NetworkInterceptor`:
   *   - a `Subscription` is a long-lived stream, so it goes to the
-  *     [[WebSocketNetworkTransport]] whose `subscribe` returns the cold,
+  *     `WebSocketNetworkTransport` whose `subscribe` returns the cold,
   *     multi-emission `Flow` of subscription events directly; and
   *   - every other operation (query / mutation) is a single request/response, so
   *     it goes to the [[HttpNetworkTransport]] and its `Future[ApolloResponse]` is
