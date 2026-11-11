@@ -16,7 +16,7 @@ import scala.collection.mutable
   * alongside the response data map — the *same* `CompiledField` tree the typed
   * decoder uses — flattening the nested response into deduplicated records:
   *
-  *   - a scalar leaf stays inline as a [[RecordValue.Scalar]];
+  *   - a scalar leaf stays inline as a `RecordValue.Scalar`;
   *   - a nested object is lifted into its own [[Record]] and replaced by a
   *     [[RecordValue.Reference]] in its parent, so the same entity referenced
   *     from several places is stored once;
