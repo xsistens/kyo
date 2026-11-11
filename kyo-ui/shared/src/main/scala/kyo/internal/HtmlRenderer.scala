@@ -975,6 +975,8 @@ private[kyo] object HtmlRenderer:
         attrs.scrollAuto.foreach(v => if v then w(sb, """ data-kyo-scroll-auto="1""""))
         // Marker only: stop-propagation is decided server-side in EventDispatch.dispatchToElement; the client never reads this.
         attrs.stopPropagation.foreach(v => if v then w(sb, """ data-kyo-stop="1""""))
+        // Read by the click handlers (the page script and DomBackend), which decline the browser's default for a blocked link.
+        attrs.blocked.foreach(v => if v then w(sb, """ data-kyo-blocked="1""""))
         // enter/leave transition class lists (read client-side by the patch-application code).
         attrs.enterTransition.foreach(c => w(sb, s""" data-kyo-enter="${esc(c)}""""))
         attrs.leaveTransition.foreach(c => w(sb, s""" data-kyo-leave="${esc(c)}""""))
@@ -1134,6 +1136,7 @@ private[kyo] object HtmlRenderer:
             case b: Button =>
                 w(sb, " type=\"submit\"")
                 boolAttr(sb, "disabled", b.disabled)
+                b.form.foreach(f => w(sb, s""" form="${esc(f)}""""))
             case fs: Fieldset =>
                 boolAttr(sb, "disabled", fs.disabled)
             case cb: Checkbox =>
@@ -2594,6 +2597,10 @@ private[kyo] object HtmlRenderer:
            |var __scrRaf=0,__scrEl=null,__scrPath=null;
            |function __scrFlush(){__scrRaf=0;if(__scrEl){var stid=__scrEl.id?__scrEl.id:null;var sp={path:__scrPath,scrollTop:__scrEl.scrollTop,scrollLeft:__scrEl.scrollLeft};if(stid)sp.targetId=stid;post({ScrollPosition:sp});}}
            |function handle(e){
+           |  // A blocked link (marked data-kyo-blocked) is no navigation: its plain, modified and middle clicks decline the browser's
+           |  // default. A middle click (auxclick) is not a click event, so it runs nothing.
+           |  if((e.type==="click"||e.type==="auxclick")&&e.target&&e.target.closest&&e.target.closest('a[data-kyo-blocked]'))e.preventDefault();
+           |  if(e.type==="auxclick")return;
            |  var el=fp(e.target);
            |  if(!el)return;
            |  var p=pa(el),t=e.type;
@@ -2932,7 +2939,7 @@ private[kyo] object HtmlRenderer:
            |  else return;
            |  if(nv!==v)kyoSetVal(t,nv);
            |}
-           |["click","contextmenu","input","change","submit","keydown","keyup","focus","blur","mouseover","mouseout"].forEach(function(t){
+           |["click","auxclick","contextmenu","input","change","submit","keydown","keyup","focus","blur","mouseover","mouseout"].forEach(function(t){
            |  document.body.addEventListener(t,handle,true);
            |});
            |document.body.addEventListener("wheel",handle,{capture:true,passive:false});

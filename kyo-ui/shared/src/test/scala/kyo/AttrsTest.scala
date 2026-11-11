@@ -515,4 +515,17 @@ class AttrsTest extends UITest:
         end for
     }
 
+    // ---- a button's form ----
+
+    "a button's form is the native form attribute, the id of the form it submits" in {
+        def html(ui: UI)(using Frame) = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
+        for
+            withForm <- html(UI.button("Save").form("profile"))
+            plain    <- html(UI.button("Save"))
+        yield
+            assert(withForm.contains(""" form="profile""""), withForm)
+            assert(!plain.contains(" form="), plain)
+        end for
+    }
+
 end AttrsTest

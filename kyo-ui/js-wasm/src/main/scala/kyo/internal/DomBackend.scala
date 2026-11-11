@@ -1480,6 +1480,11 @@ private[kyo] object DomBackend:
             if e.`type` == "click" then
                 val tgt = e.target.asInstanceOf[dom.Element]
                 if tgt != null && tgt.closest("[data-kyo-inert]") != null then e.preventDefault()
+            // A blocked link (marked data-kyo-blocked by the blocked setter) declines its plain, modified and middle click, so
+            // the browser never follows its href. Twin of the handle function in clientJs.
+            if e.`type` == "click" || e.`type` == "auxclick" then
+                val tgt = e.target.asInstanceOf[dom.Element]
+                if tgt != null && tgt.closest("a[data-kyo-blocked]") != null then e.preventDefault()
             // A dropdown's own gesture is the client's (dropdownStep): handled in place it goes no further, and a pick is the
             // dropdown's Change. Twin of the dropdown blocks in clientJs, which also return before the event is posted.
             val dropdown = dropdownStep(e)
@@ -1702,6 +1707,7 @@ private[kyo] object DomBackend:
             }
         val scrollOptions = js.Dynamic.literal(capture = true, passive = true).asInstanceOf[dom.EventListenerOptions]
         listeners.add("click", handler, true)
+        listeners.add("auxclick", handler, true)
         listeners.add("contextmenu", handler, true)
         listeners.add("input", handler, true)
         listeners.add("change", handler, true)

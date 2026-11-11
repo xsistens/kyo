@@ -196,6 +196,7 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
                 val expected = Seq(
                     // setupEventDelegation
                     "click",
+                    "auxclick",
                     "contextmenu",
                     "input",
                     "change",
@@ -466,6 +467,48 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
         yield
             assert(prevented._1)
             assert(!prevented._2)
+        end for
+    }
+
+    "a blocked anchor declines the browser's default for a plain, modified and middle click" in {
+        for
+            ready   <- Sync.defer(new DomTestEnv.MountReady)
+            clicked <- Latch.init(5)
+            fiber   <- Fiber.initUnscoped(Scope.run(DomBackend.mount(
+                UI.div(UI.a.href(
+                    UI.Href.Path("/target")
+                ).id("blocked-click").aria(AriaKey.disabled -> "true").blocked(true).onClick(clicked.release)("Link")),
+                ready
+            )))
+            _ <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("blocked-click") != null), installBudget)
+            prevented <- Sync.defer {
+                val target                                                      = dom.document.getElementById("blocked-click")
+                def dispatch(eventType: String, init: scalajs.Dynamic): Boolean =
+                    val event = scalajs.Dynamic.newInstance(dom.window.asInstanceOf[scalajs.Dynamic].MouseEvent)(eventType, init)
+                    discard(target.asInstanceOf[scalajs.Dynamic].dispatchEvent(event))
+                    event.defaultPrevented.asInstanceOf[Boolean]
+                end dispatch
+                Seq(
+                    dispatch("click", scalajs.Dynamic.literal(bubbles = true, cancelable = true)),
+                    dispatch("click", scalajs.Dynamic.literal(bubbles = true, cancelable = true, ctrlKey = true)),
+                    dispatch("click", scalajs.Dynamic.literal(bubbles = true, cancelable = true, metaKey = true)),
+                    dispatch("click", scalajs.Dynamic.literal(bubbles = true, cancelable = true, shiftKey = true)),
+                    dispatch("click", scalajs.Dynamic.literal(bubbles = true, cancelable = true, altKey = true)),
+                    dispatch("auxclick", scalajs.Dynamic.literal(bubbles = true, cancelable = true, button = 1))
+                )
+            }
+            // The five clicks reached the handler; the middle click is not a click event and posts nothing. The wait is bounded, so
+            // a handler that never runs fails the test instead of hanging it.
+            _ <- Abort.run[Timeout](Async.timeout(10.seconds)(clicked.await))
+            _ <- fiber.interrupt
+            _ <- fiber.getResult
+        yield
+            assert(prevented(0))
+            assert(prevented(1))
+            assert(prevented(2))
+            assert(prevented(3))
+            assert(prevented(4))
+            assert(prevented(5))
         end for
     }
 

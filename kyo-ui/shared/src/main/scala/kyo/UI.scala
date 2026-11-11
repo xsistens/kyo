@@ -1121,12 +1121,12 @@ object UI:
     ):
         // ---- Self-addressing: id minting + id-addressed command/measure ----
 
-        /** Mint a session-unique element id (`"kyo-uic-N"`, N monotonically increasing from 1). Deterministic within a
+        /** Mint a session-unique element id (`"kyo-id-N"`, N monotonically increasing from 1). Deterministic within a
           * session and unique across the page (no clock/random). The self-addressing pattern: a reusable component mints
           * an id here, stamps it on one of its own elements (`.id(theId)`: id is a settable prop), and then drives
           * [[focusId]] / [[scrollIntoViewId]] / [[requestMeasureById]] at that id.
           */
-        def freshId(using Frame): String < Sync = idCounter.incrementAndGet.map(n => s"kyo-uic-$n")
+        def freshId(using Frame): String < Sync = idCounter.incrementAndGet.map(n => s"kyo-id-$n")
 
         /** Send a whitelisted imperative `verb` (`"focus"`, `"scrollIntoView"`) to the element with DOM id `id` (resolved
           * client-side via `document.getElementById`). Unknown verbs are ignored by the client (forward-compatible).
@@ -3240,6 +3240,7 @@ object UI:
             focusRestore: Maybe[Boolean] = Absent,
             scrollAuto: Maybe[Boolean] = Absent,
             stopPropagation: Maybe[Boolean] = Absent,
+            blocked: Maybe[Boolean] = Absent,
             enterTransition: Maybe[String] = Absent,
             leaveTransition: Maybe[String] = Absent,
             // Client-local portal: the client re-homes the element to document.body behind a placeholder slot.
@@ -3868,13 +3869,19 @@ object UI:
         final case class Button(
             attrs: Attrs = Attrs(),
             children: Chunk[UI] = Chunk.empty,
-            disabled: Maybe[Boolean] = Absent
+            disabled: Maybe[Boolean] = Absent,
+            form: Maybe[String] = Absent
         )(using val frame: Frame) extends Inline with Interactive with Focusable with HasDisabled with Activatable with Clickable:
             type Self = Button
             def withAttrs(a: Attrs): Button = copy(attrs = a)
 
             def apply(cs: HtmlChildVal*): Button              = copy(children = children ++ Chunk.from(cs.map(_.value)))
             private[kyo] def withDisabled(v: Boolean): Button = copy(disabled = Present(v))
+
+            /** The id of the form this button submits, written as the native `form` attribute, so the button submits that form from
+              * anywhere in the page. Package-internal: the prime button is the one caller, and the attribute has no other element here.
+              */
+            private[kyo] def form(v: String): Button = copy(form = Present(v))
         end Button
 
         // ---- Boolean inputs (checked + onChange: Boolean) ----
@@ -4281,6 +4288,13 @@ object UI:
             def download(filename: String): Anchor    = copy(download = Present(filename))
             def href(v: Href, target: Target): Anchor = copy(href = Present(v), target = Present(target))
             def target(v: Target): Anchor             = copy(target = Present(v))
+
+            /** Marks a link blocked (`data-kyo-blocked="1"`): the clients decline its plain, modified and middle clicks, so the
+              * browser follows no `href` for them. The click still reaches the element's handlers, and what a blocked click does
+              * beyond that is the application's to decide. A context-menu "open in new tab" is not a click and still follows the
+              * `href`. `false` leaves the marker out.
+              */
+            def blocked(v: Boolean): Anchor = withAttrs(attrs.copy(blocked = Maybe.when(v)(true)))
         end Anchor
 
         final case class Img(
