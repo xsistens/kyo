@@ -22,7 +22,7 @@ import scala.collection.mutable
   *     from several places is stored once;
   *   - a list becomes a `RecordValue.RList` of element values (references for
   *     object lists, scalars for scalar lists);
-  *   - `null` becomes [[RecordValue.Null]].
+  *   - `null` becomes `RecordValue.Null`.
   *
   * Each object's storage `CacheKey` comes from the [[CacheKeyGenerator]]
   * (typically `__typename` + id), falling back to a position-based key from the
