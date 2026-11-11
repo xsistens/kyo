@@ -83,7 +83,7 @@ final class FlexBox private[uic] (private[uic] val p: FlexBox.Props) extends Nod
         if wrapReverseFlag then box = box.cssClass("p-uic-flex--wrap-reverse")
         if fitContainerV then box = box.cssClass("p-uic-flex--fit")
         gapRaw match
-            case Present(v) => box = box.data("uic-gap" -> v)
+            case Present(v) => box = box.data(data"data-uic-gap" -> v)
             case Absent     => ()
         box.style(s)(UI.children(kids)*)
     end render

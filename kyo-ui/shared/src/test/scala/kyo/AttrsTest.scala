@@ -340,10 +340,10 @@ class AttrsTest extends UITest:
         for
             on     <- Signal.initRef(true)
             off    <- Signal.initRef(false)
-            yes    <- html(UI.span.aria("disabled" -> true))
-            no     <- html(UI.span.aria("disabled" -> false))
-            sigYes <- html(UI.span.aria("disabled" -> (on: Signal[Boolean])))
-            sigNo  <- html(UI.span.aria("disabled" -> (off: Signal[Boolean])))
+            yes    <- html(UI.span.aria(AriaKey.disabled -> true))
+            no     <- html(UI.span.aria(AriaKey.disabled -> false))
+            sigYes <- html(UI.span.aria(AriaKey.disabled -> (on: Signal[Boolean])))
+            sigNo  <- html(UI.span.aria(AriaKey.disabled -> (off: Signal[Boolean])))
         yield
             assert(yes.contains("""aria-disabled="true"""") && sigYes.contains("""aria-disabled="true""""), s"$yes / $sigYes")
             assert(no.contains("""aria-disabled="false"""") && sigNo.contains("""aria-disabled="false""""), s"$no / $sigNo")

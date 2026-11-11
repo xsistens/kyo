@@ -285,7 +285,7 @@ final class Tabs[K] private[uic] (private[uic] val p: Tabs.Props[K]) extends Nod
         focus: String => UI.Action,
         navigable: List[Int]
     )(using Frame): E =
-        var out = el.role("tab").aria("selected" -> isActive)
+        var out = el.role("tab").aria(AriaKey.selected -> isActive)
         if isActive then out = out.cssClass("p-tab-active")
         // The id goes on before the disabled branch, not inside it. While ids were minted
         // only to move the arrow focus, giving one to a header the arrows skip was pointless;
@@ -294,7 +294,7 @@ final class Tabs[K] private[uic] (private[uic] val p: Tabs.Props[K]) extends Nod
         for h <- headerId(base, t); pid <- panelId(base, t) do
             out = out.id(h)
             // A lazy strip has only the active panel in the page, so only its header may point at one.
-            if !lazyPanelsFlag || isActive then out = out.aria("controls" -> pid)
+            if !lazyPanelsFlag || isActive then out = out.aria(AriaKey.controls -> pid)
         end for
         if t.p.disabled then out = out.cssClass("p-disabled")
         else
@@ -310,7 +310,7 @@ final class Tabs[K] private[uic] (private[uic] val p: Tabs.Props[K]) extends Nod
             // A fixed strip keeps every header a stop the arrows reach, and an inactive one says it switches nothing: a
             // tab has no readonly state, so it says it the way a radio does. A url header still navigates, so it says
             // nothing.
-            else if selectedSlot.fixed && !isActive && t.p.urlV.isEmpty then out = out.aria("disabled" -> "true")
+            else if selectedSlot.fixed && !isActive && t.p.urlV.isEmpty then out = out.aria(AriaKey.disabled -> "true")
             end if
             // The roving tabindex above takes every inactive tab OUT of the Tab order, which
             // is what the ARIA tablist pattern asks for and what leaves the arrows as the only
@@ -338,7 +338,7 @@ final class Tabs[K] private[uic] (private[uic] val p: Tabs.Props[K]) extends Nod
     private def body(base: Maybe[String], focus: String => UI.Action)(using Frame): UI =
         def panel(t: Tab[K]): UI.Ast.Div =
             var el = div.cssClass("p-tabpanel").role("tabpanel")
-            for h <- headerId(base, t); pid <- panelId(base, t) do el = el.id(pid).aria("labelledby" -> h)
+            for h <- headerId(base, t); pid <- panelId(base, t) do el = el.id(pid).aria(AriaKey.labelledby -> h)
             el
         end panel
         val listed     = entries.and(selectedSlot.reading(Absent))
@@ -378,7 +378,7 @@ final class Tabs[K] private[uic] (private[uic] val p: Tabs.Props[K]) extends Nod
             val iconSlot: List[UI]  = t.p.icon.toList.map(g => GlyphSvg(g, "p-uic-tab-icon"))
             val countSlot: List[UI] = t.p.additionalText.toList.map(c => span.cssClass("p-uic-tab-count")(c))
             val barSlot: List[UI]   =
-                if isActive then List(span.cssClass("p-tablist-active-bar").aria("hidden" -> "true"))
+                if isActive then List(span.cssClass("p-tablist-active-bar").aria(AriaKey.hidden -> "true"))
                 else Nil
             val textSlot: UI = t.p.text match
                 case TextValue.Const(x) => span(x): UI
@@ -391,7 +391,7 @@ final class Tabs[K] private[uic] (private[uic] val p: Tabs.Props[K]) extends Nod
                     // href and says so through ARIA instead: Link's handling, for the same
                     // reason.
                     var el = interactive(a.cssClass("p-tab"), t, isActive, i, base, ids, focus, navigable)
-                    if t.p.disabled then el = el.aria("disabled" -> "true")
+                    if t.p.disabled then el = el.aria(AriaKey.disabled -> "true")
                     else el = el.href(Href.Path(u))
                     el(kids*)
                 case Absent =>

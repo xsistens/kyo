@@ -537,8 +537,8 @@ private[uic] object MenuRender:
         // the negative spelling is written out rather than omitted so the attribute the channel
         // writes into exists from the first render.
         it.p.currentFlag match
-            case Present(BoolValue.Const(true)) => link = link.aria("current" -> "page")
-            case Present(BoolValue.Dyn(sig))    => link = link.aria("current" -> sig.map(if _ then "page" else "false"))
+            case Present(BoolValue.Const(true)) => link = link.aria(AriaKey.current -> "page")
+            case Present(BoolValue.Dyn(sig))    => link = link.aria(AriaKey.current -> sig.map(if _ then "page" else "false"))
             case _                              => ()
         end match
         if !it.p.disabledFlag.constTrue then

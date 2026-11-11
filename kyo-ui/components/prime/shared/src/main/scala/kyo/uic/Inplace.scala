@@ -50,7 +50,7 @@ final class Inplace private[uic] (private[uic] val p: Inplace.Props) extends Nod
     private def displaySide(using Frame): UI =
         var d = div.cssClass("p-inplace-display").role("button").tabIndex(0)
         if disabledFlag then d = d.cssClass("p-disabled")
-        else if activeSlot.fixed then d = d.aria("disabled" -> "true")
+        else if activeSlot.fixed then d = d.aria(AriaKey.disabled -> "true")
         else
             val open = activeSlot.change(true)
             // A `role="button"` owes the reader both keys, and a div is not a button, so the
@@ -73,8 +73,8 @@ final class Inplace private[uic] (private[uic] val p: Inplace.Props) extends Nod
                     .cssClass("p-component")
                     .cssClass("p-button-icon-only")
                     .jsProp("type", "button")
-                    .aria("label" -> "Close")
-                val pressable = if activeSlot.fixed then b.aria("disabled" -> "true") else b.onClick(activeSlot.change(false))
+                    .aria(AriaKey.label -> "Close")
+                val pressable = if activeSlot.fixed then b.aria(AriaKey.disabled -> "true") else b.onClick(activeSlot.change(false))
                 List(pressable(GlyphSvg(Icons.times, "p-button-icon")))
         div.cssClass("p-inplace-content")(UI.children(contentV.toList ++ closeBtn)*)
     end contentSide
@@ -85,7 +85,7 @@ final class Inplace private[uic] (private[uic] val p: Inplace.Props) extends Nod
         Controlled.draw(activeSlot, Inplace.activeName, start = false)(s => new Inplace(this.p.copy(activeSlot = s)).drawn)
 
     private def drawn(using Frame): UI =
-        div.cssClass("p-inplace").cssClass("p-component").aria("live" -> "polite")(
+        div.cssClass("p-inplace").cssClass("p-component").aria(AriaKey.live -> "polite")(
             activeSlot.reading(false).render(a => if a then contentSide else displaySide)
         )
 end Inplace

@@ -113,7 +113,7 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
             sectioned <- Signal.initRef(false)
             content = outer.map(_ =>
                 (sectioned.map { authored =>
-                    if authored then UI.tbody(UI.tr(UI.td("authored"))).id("local-authored").data("state" -> "kept"): UI
+                    if authored then UI.tbody(UI.tr(UI.td("authored"))).id("local-authored").data(data"data-state" -> "kept"): UI
                     else UI.tr(UI.td("row").id("local-row")): UI
                 }: UI)
             )

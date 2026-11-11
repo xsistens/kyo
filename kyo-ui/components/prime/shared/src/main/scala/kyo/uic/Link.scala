@@ -73,13 +73,13 @@ final class Link private[uic] (private[uic] val p: Link.Props) extends Node, Has
     private def anchor(using Frame): Ast.Anchor =
         var el = a.cssClass("p-uic-link")
         if wrapFlag then el = el.cssClass("p-uic-link-wrap")
-        access.name.foreach(n => el = el.aria("label" -> n))
-        access.nameRef.foreach(r => el = el.aria("labelledby" -> r))
-        el = el.aria("description" -> accessibleDescriptionV).title(tooltipV)
+        access.name.foreach(n => el = el.aria(AriaKey.label -> n))
+        access.nameRef.foreach(r => el = el.aria(AriaKey.labelledby -> r))
+        el = el.aria(AriaKey.description -> accessibleDescriptionV).title(tooltipV)
         if accessibleRoleV == LinkAccessibleRole.Button then el = el.role("button")
         if disabledFlag then
             val disabledRole = if accessibleRoleV == LinkAccessibleRole.Button then "button" else "link"
-            el = el.cssClass("p-disabled").role(disabledRole).aria("disabled" -> "true").tabIndex(-1)
+            el = el.cssClass("p-disabled").role(disabledRole).aria(AriaKey.disabled -> "true").tabIndex(-1)
         else
             hrefV.foreach(h => el = el.href(Href.Path(h)))
             targetV.foreach(t => el = applyTarget(el, t))

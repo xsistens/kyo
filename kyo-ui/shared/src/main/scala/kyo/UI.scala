@@ -1829,7 +1829,7 @@ object UI:
             end when
 
             /** The element with the setters `f` makes on a [[kyo.UI.Ast.Toggle]] applied while `cond` holds, constant or reactive
-              * through one setter: `el.when(fluid)(_.cssClass("p-fluid"))`, `el.when(checked)(_.cssClass("on").aria("pressed" -> "true"))`.
+              * through one setter: `el.when(fluid)(_.cssClass("p-fluid"))`, `el.when(checked)(_.cssClass("on").aria(AriaKey.pressed -> "true"))`.
               *
               * A `Boolean` applies them as the element's own setters would, or leaves the element as it is, so it is the bytes of
               * `when(cond: Boolean)` with the same setters (a plain `Boolean` picks that overload anyway). A `Signal[Boolean]`
@@ -1965,7 +1965,7 @@ object UI:
 
             // ARIA attributes
             /** Sets `aria-*` attributes from `name -> value` entries, the name being the part after `aria-`:
-              * `el.aria("label" -> name, "pressed" -> checked, "valuemin" -> 0)`. Each value is written by its type's
+              * `el.aria(AriaKey.label -> name, AriaKey.pressed -> checked, AriaKey.valuemin -> 0)`. Each value is written by its type's
               * [[kyo.UI.Ast.AttrValue]]: a value writes what it is (`true` as `"true"`, `false` as `"false"`, a number its text),
               * `Absent` writes nothing, so an optional accessible name stays in the chain, and a signal is the attribute's channel,
               * patched in place on emission with no re-render (a signal of a `Maybe` leaves the attribute out while it holds
@@ -1995,7 +1995,7 @@ object UI:
 
             // Data attributes (kyo- prefix is reserved)
             /** Sets `data-*` attributes from `name -> value` entries, the name being the part after `data-`:
-              * `el.data("uic-vs-first" -> firstIdx, "uic-form" -> form)`. Each value is written as [[aria]] writes it, by its type's
+              * `el.data(data"data-vs-first" -> firstIdx, data"data-form" -> form)`. Each value is written as [[aria]] writes it, by its type's
               * [[kyo.UI.Ast.AttrValue]]: what it is, nothing for `Absent`, and a signal as the attribute's channel, patched in place.
               *
               * @throws java.lang.IllegalArgumentException
@@ -2153,7 +2153,7 @@ object UI:
           *
           * {{{
           * el.when(fluid)(_.cssClass("p-password-fluid"))
-          * el.when(checked)(_.cssClass("p-togglebutton-checked").aria("pressed" -> "true"))
+          * el.when(checked)(_.cssClass("p-togglebutton-checked").aria(AriaKey.pressed -> "true"))
           * }}}
           *
           * Over a constant each setter is the element's own: `true` applies it, `false` leaves the element as it is. Over a signal
@@ -2240,6 +2240,7 @@ object UI:
             // as a constant does, and from a signal of the value as one channel over both, with nothing where it holds `Absent`.
             private def entry(e: Entry, kind: AttrKind): Toggle[S] =
                 given Frame = element.frame
+                e.checkKind(kind)
                 cond match
                     case s: Signal[Boolean] @unchecked =>
                         val key = kind.key(e.name)
@@ -2416,9 +2417,6 @@ object UI:
 
             /** `v` as a [[kyo.UI.Ast.Toggle]] applies it: the value, none, or a signal of the value. */
             private[kyo] def held(v: V)(using Frame): Maybe[String] | Signal[Maybe[String]]
-
-            // One per instance, so a pair converts to an entry with no allocation but the entry.
-            private[kyo] val conversion: Conversion[(String, V), Entry] = p => new Entry(p._1, p._2, this)
         end AttrValue
 
         object AttrValue extends AttrValueOfMaybe:
@@ -2523,27 +2521,44 @@ object UI:
         /** One `aria-*` or `data-*` attribute for [[kyo.UI.Ast.Element.aria]] and [[kyo.UI.Ast.Element.data]]: a name, the part after
           * `aria-` or `data-`, and a value of a type with an [[AttrValue]], which decides how the value is written.
           *
-          * A pair converts to an entry where a setter takes entries, with no import:
+          * A pair converts to an entry where a setter takes entries, with no import. The key is an [[kyo.AriaKey]] for `aria` and a
+          * [[kyo.DataKey]] for `data`, each built by its interpolator or named by its constant:
           * {{{
-          * el.aria("label" -> name, "pressed" -> checked, "valuemin" -> 0)
-          * el.data("uic-vs-first" -> firstIdx)
+          * el.aria(AriaKey.label -> name, aria"aria-pressed" -> checked, aria"aria-valuemin" -> 0)
+          * el.data(data"data-vs-first" -> firstIdx)
           * }}}
           *
           * A group of entries to hand to several setters is built with [[Entry.of]] and spread:
           * {{{
-          * val range = Entry.of("valuemin" -> 0, "valuemax" -> max)
+          * val range = Entry.of(AriaKey.valuemin -> 0, AriaKey.valuemax -> max)
           * el.aria(range*)
           * }}}
           */
-        final class Entry private[kyo] (private[kyo] val name: String, value: Any, writer: AttrValue[Nothing]):
+        final class Entry private[kyo] (
+            private[kyo] val name: String,
+            value: Any,
+            writer: AttrValue[Nothing],
+            kind: AttrKind
+        ):
 
             // Unsafe: `writer` is the instance the conversion found for `value`'s static type.
             private def any: AttrValue[Any] = writer.asInstanceOf[AttrValue[Any]]
 
+            /** Refuses an entry whose key is of the other kind: an `AriaKey` pair given to `data(...)`, or the reverse. The entry types
+              * are shared by both setters, so the kind is checked when the entry is written.
+              */
+            private[kyo] def checkKind(into: AttrKind): Unit =
+                if kind != into then
+                    val article = if kind == AttrKind.Aria then "an" else "a"
+                    throw new IllegalArgumentException(
+                        s"the key '${kind.prefix}$name' is $article ${kind.toString.toLowerCase} key, and this setter takes ${into.toString.toLowerCase} keys"
+                    )
+
             /** `a` with this entry written as an attribute of `kind`. */
-            private[kyo] def write(a: Attrs, kind: AttrKind)(using Frame): Attrs =
-                kind.check(name)
-                any.write(a, kind, name, value)
+            private[kyo] def write(a: Attrs, into: AttrKind)(using Frame): Attrs =
+                checkKind(into)
+                into.check(name)
+                any.write(a, into, name, value)
             end write
 
             /** The value as a [[kyo.UI.Ast.Toggle]] applies it. */
@@ -2557,14 +2572,19 @@ object UI:
               */
             def of(entries: into[Entry]*): Chunk[Entry] = Chunk.from(entries)
 
-            /** A pair `name -> value` as an entry, where `value`'s type has an [[AttrValue]]. */
-            given entry[V](using v: AttrValue[V]): Conversion[(String, V), Entry] = v.conversion
+            /** A pair `key -> value` where the key is an [[kyo.AriaKey]], where `value`'s type has an [[AttrValue]]: an `aria` entry. */
+            given keyed[V](using v: AttrValue[V]): Conversion[(AriaKey, V), Entry] =
+                p => new Entry(AriaKey.name(p._1), p._2, v, AttrKind.Aria)
 
-            /** The entry `name -> value` where the value may be a signal: the form `UI.reactive` gives a pair whose value reads, so
-              * that the read is the entry's channel, as it is for any setter that takes a `UI.Prop`.
+            /** A pair `key -> value` where the key is a [[kyo.DataKey]], where `value`'s type has an [[AttrValue]]: a `data` entry. */
+            given dataKeyed[V](using v: AttrValue[V]): Conversion[(DataKey, V), Entry] =
+                p => new Entry(DataKey.name(p._1), p._2, v, AttrKind.Data)
+
+            /** The entry `key -> value` where the value may be a signal: the form `UI.reactive` gives a pair whose value reads, so that
+              * the read is the entry's channel, as it is for any setter that takes a `UI.Prop`. `data` says the key is a data key.
               */
-            private[kyo] def channel[V](name: String, value: UI.Prop[V])(using v: AttrValue[UI.Prop[V]]): Entry =
-                new Entry(name, value, v)
+            private[kyo] def channel[V](data: Boolean, name: String, value: UI.Prop[V])(using v: AttrValue[UI.Prop[V]]): Entry =
+                new Entry(name, value, v, if data then AttrKind.Data else AttrKind.Aria)
 
             /** `a` with each of `entries` written as an attribute of `kind`, in order. */
             private[kyo] def writeAll(a: Attrs, entries: Seq[Entry], kind: AttrKind)(using Frame): Attrs =

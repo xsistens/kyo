@@ -47,7 +47,7 @@ class UICssClassTest extends kyo.test.Test[Any]:
     }
 
     "cssClass coexists with id and data attributes" in {
-        renderHtml(UI.div.id("x").data("k" -> "v").cssClass("c")).map { s =>
+        renderHtml(UI.div.id("x").data(data"data-k" -> "v").cssClass("c")).map { s =>
             assert(s.contains("id=\"x\""))
             assert(s.contains("data-k=\"v\""))
             assert(s.contains("class=\"c\""))
