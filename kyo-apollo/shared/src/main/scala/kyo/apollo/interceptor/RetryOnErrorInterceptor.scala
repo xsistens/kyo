@@ -31,7 +31,7 @@ import kyo.apollo.runtime.ResponseStream
   * otherwise forwarded unchanged: an `@defer` operation streams incrementally and a
   * `CacheAndNetwork` query emits the cache hit then the network result, so collapsing
   * to the first emission would silently drop the deferred patches / network refresh.
-  * A [[Subscription]] is a live stream and is passed through without any retry wrapping.
+  * A `Subscription` is a live stream and is passed through without any retry wrapping.
   *
   * Mirrors apollo-kotlin's `RetryOnErrorInterceptor`.
   *

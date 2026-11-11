@@ -18,7 +18,7 @@ import scala.collection.immutable.VectorMap
   * throwing, keeping the parse total (a stray or future message type never
   * breaks an active socket).
   *
-  * Operation-scoped frames (`Data`, [[Error]], [[Complete]]) carry the string
+  * Operation-scoped frames (`Data`, [[Error]], `Complete`) carry the string
   * operation `id` the transport assigned in [[WsProtocol.startOperation]], so it
   * can dispatch each to the right subscriber `Flow`. Connection-scoped frames
   * ([[ConnectionAck]], [[ConnectionError]], [[Ping]], [[Pong]], [[KeepAlive]])

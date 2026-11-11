@@ -31,7 +31,7 @@ import kyo.apollo.json.Json
   *
   * Failures stay values, not throws: a failed call surfaces as
   * `error = Present(...)` rather than escaping the public API.
-  * [[GraphQLResponse.parse]] remains the single response decoder; construct the
+  * `GraphQLResponse.parse` remains the single response decoder; construct the
   * server-answered case with [[ApolloResponse.fromGraphQLResponse]] rather than
   * re-walking the JSON.
   *
