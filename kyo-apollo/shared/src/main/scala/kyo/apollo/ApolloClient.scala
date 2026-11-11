@@ -50,7 +50,7 @@ import kyo.apollo.runtime.ResponseStream
   *      `webSocketServerUrl` for subscriptions; both are the single place
   *      network/HTTP/parse/socket failures become `ApolloResponse.error`
   *      values;
-  *   1. the **Apollo tier** — the configured [[ApolloInterceptor]]s followed by
+  *   1. the **Apollo tier** — the configured `ApolloInterceptor`s followed by
   *      a terminal [[NetworkInterceptor]] that routes each operation to the right
   *      transport (queries/mutations over HTTP, subscriptions over WebSocket).
   *

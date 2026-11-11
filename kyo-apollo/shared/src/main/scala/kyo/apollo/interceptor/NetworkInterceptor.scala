@@ -31,7 +31,7 @@ import kyo.apollo.runtime.ResponseStream
   * @param webSocketTransport the terminal WebSocket transport subscriptions use;
   *                           `None` when the client configured no subscription
   *                           endpoint, in which case a subscription surfaces a
-  *                           clear [[ApolloNetworkException]] value rather than
+  *                           clear `ApolloNetworkException` value rather than
   *                           throwing (failures stay values)
   */
 final class NetworkInterceptor(
