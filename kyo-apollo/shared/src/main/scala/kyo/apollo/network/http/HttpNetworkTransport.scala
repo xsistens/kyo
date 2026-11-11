@@ -35,7 +35,7 @@ import kyo.apollo.runtime.ResponseStream
   * transport only wires them to the engine and maps errors.
   *
   * @param serverUrl the GraphQL endpoint every request is sent to; a URL that does
-  *                  not parse makes every response an [[ApolloNetworkException]]
+  *                  not parse makes every response an `ApolloNetworkException`
   * @param engine    the wire round-trip (defaults to the platform engine; tests
   *                  inject a fake)
   * @param composer  the [[ApolloRequest]] → [[HttpEngine.Request]] lowering

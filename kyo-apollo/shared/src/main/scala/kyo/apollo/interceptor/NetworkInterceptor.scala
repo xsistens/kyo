@@ -18,7 +18,7 @@ import kyo.apollo.runtime.ResponseStream
   *     `WebSocketNetworkTransport` whose `subscribe` returns the cold,
   *     multi-emission `Flow` of subscription events directly; and
   *   - every other operation (query / mutation) is a single request/response, so
-  *     it goes to the [[HttpNetworkTransport]] and its `Future[ApolloResponse]` is
+  *     it goes to the `HttpNetworkTransport` and its `Future[ApolloResponse]` is
   *     lifted into a one-emission `Flow`.
   *
   * Because both transports already fold every network/HTTP/parse failure into
