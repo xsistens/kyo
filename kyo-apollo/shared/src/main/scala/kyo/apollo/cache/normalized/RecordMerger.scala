@@ -14,7 +14,7 @@ import kyo.apollo.json.Json
   * `RecordMerger`.
   *
   * The `default` is the field-wise union ("incoming wins") shared by every
-  * backend (see [[NormalizedCache.mergeRecords]]). [[fieldPolicies]] wraps that
+  * backend (see [[NormalizedCache.mergeRecords]]). `fieldPolicies` wraps that
   * with per-field overrides from a [[FieldPolicies]] registry, so a
   * [[kyo.apollo.cache.normalized.api.ConnectionFieldPolicy]] can union paginated
   * edges instead of replacing them. An [[ApolloStore]] builds one merger and uses

@@ -19,7 +19,7 @@ import scala.collection.immutable.VectorMap
   *
   * Starting from the operation's root record, it follows the *same*
   * `CompiledField` tree the [[Normalizer]] wrote against (via the shared
-  * [[FieldCollector]]), resolving each [[RecordValue.Reference]] to its stored
+  * [[FieldCollector]]), resolving each `RecordValue.Reference` to its stored
   * [[Record]] and reassembling a nested [[Json.JObj]]. A required record or
   * field that is absent ends the read as a `CacheMissException` failure (a
   * `Result`, never a throw) rather than producing partial data — so

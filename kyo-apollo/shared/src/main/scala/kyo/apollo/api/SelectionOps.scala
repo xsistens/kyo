@@ -188,7 +188,7 @@ extension [Origin, A <: AnyNamedTuple](sb: SelectionBuilder.Bidirectional[Origin
       * with no generated marker does not compile.
       *
       * Like `toQuery`, the builder itself is installed as the fragment's
-      * [[Fragment.dataCodec]], and the selection's fields become the fragment's
+      * `Fragment.dataCodec`, and the selection's fields become the fragment's
       * `rootField` selections — so a `Fragment.of` reads/writes exactly what an
       * equivalent query selection would. Only a bidirectional selection builds a
       * fragment, since writing a fragment encodes its data.

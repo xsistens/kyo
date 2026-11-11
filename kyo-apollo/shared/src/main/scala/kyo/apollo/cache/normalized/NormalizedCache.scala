@@ -68,7 +68,7 @@ trait NormalizedCache:
       * on the newer state. That is what makes a change decided by the whole store
       * (garbage collection, a cascading evict) safe against a concurrent write: the
       * set is computed and removed on one state. `cacheHeaders` carries write hints
-      * such as `CacheHeaders.Date` (expiry stamp) or [[CacheHeaders.DoNotStore]]
+      * such as `CacheHeaders.Date` (expiry stamp) or `CacheHeaders.DoNotStore`
       * (commit nothing).
       */
     def transact[A](
