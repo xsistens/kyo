@@ -91,7 +91,7 @@ class MaskedFragmentSignalSpec extends kyo.test.Test[Any]:
         "seeds from the normalized record the response landed in" in {
             for
                 c    <- client(germanyBody)
-                data <- c.query(countryQuery).data
+                data <- CallData.of(c.query(countryQuery))
                 sig  <-
                     given ApolloClient = c
                     Apollo.fragment(data.country.countryCard)
@@ -102,7 +102,7 @@ class MaskedFragmentSignalSpec extends kyo.test.Test[Any]:
         "re-emits when a targeted write touches the entity" in {
             for
                 c    <- client(germanyBody)
-                data <- c.query(countryQuery).data
+                data <- CallData.of(c.query(countryQuery))
                 ref = data.country.countryCard
                 sig <-
                     given ApolloClient = c
@@ -119,7 +119,7 @@ class MaskedFragmentSignalSpec extends kyo.test.Test[Any]:
                 germany <- ApolloClient.init(shared.httpEngine(StaticEngine(germanyBody)))
                 // Created from the same config: the second client shares the store.
                 france <- ApolloClient.init(shared.httpEngine(StaticEngine(franceBody)))
-                data   <- germany.query(countryQuery).data
+                data   <- CallData.of(germany.query(countryQuery))
                 ref = data.country.countryCard
                 key              <- germany.apolloStore.keyOf(ref.typeName, ref.raw)
                 removedWhileOpen <- Scope.run {
@@ -127,7 +127,7 @@ class MaskedFragmentSignalSpec extends kyo.test.Test[Any]:
                     for
                         _ <- Apollo.fragment(ref)
                         // The query now points at France: no root reaches Germany's record.
-                        _       <- france.query(countryQuery).fetchPolicy(FetchPolicy.NetworkOnly).data
+                        _       <- CallData.of(france.query(countryQuery).fetchPolicy(FetchPolicy.NetworkOnly))
                         removed <- germany.apolloStore.garbageCollect
                     yield removed
                     end for
@@ -142,7 +142,7 @@ class MaskedFragmentSignalSpec extends kyo.test.Test[Any]:
         "stays total on a cache-less client: the ref's own slice seeds the signal" in {
             for
                 c    <- ApolloClient.init(ApolloClient.Config(serverUrl).httpEngine(StaticEngine(germanyBody)))
-                data <- c.query(countryQuery).data
+                data <- CallData.of(c.query(countryQuery))
                 sig  <-
                     given ApolloClient = c
                     Apollo.fragment(data.country.countryCard)
@@ -159,7 +159,7 @@ class MaskedFragmentSignalSpec extends kyo.test.Test[Any]:
             val cache = TrapCache(MemoryCache())
             for
                 c    <- trapped(cache)
-                data <- c.query(countryQuery).data
+                data <- CallData.of(c.query(countryQuery))
                 ref = data.country.countryCard
                 key <- c.apolloStore.keyOf(ref.typeName, ref.raw)
                 _   <- cache.arm(key)(rename(c, key, "Deutschland"))
@@ -177,7 +177,7 @@ class MaskedFragmentSignalSpec extends kyo.test.Test[Any]:
                 c <- ApolloClient.init(
                     ApolloClient.Config(serverUrl).httpEngine(StaticEngine(germanyBody)).normalizedCache(MemoryCache())
                 )
-                data <- c.query(countryQuery).data
+                data <- CallData.of(c.query(countryQuery))
                 sig  <-
                     given ApolloClient = c
                     Apollo.fragment(data.country.countryCard)
@@ -192,7 +192,7 @@ class MaskedFragmentSignalSpec extends kyo.test.Test[Any]:
             val cache = TrapCache(MemoryCache())
             for
                 c    <- trapped(cache)
-                data <- c.query(countryQuery).data
+                data <- CallData.of(c.query(countryQuery))
                 ref = data.country.countryCard
                 key <- c.apolloStore.keyOf(ref.typeName, ref.raw)
                 _   <- cache.arm(key)(rename(c, key, "Deutschland"))
@@ -207,7 +207,7 @@ class MaskedFragmentSignalSpec extends kyo.test.Test[Any]:
         "follows the record, and blanks while it is gone" in {
             for
                 c    <- client(germanyBody)
-                data <- c.query(countryQuery).data
+                data <- CallData.of(c.query(countryQuery))
                 ref = data.country.countryCard
                 key <- c.apolloStore.keyOf(ref.typeName, ref.raw)
                 sig <-

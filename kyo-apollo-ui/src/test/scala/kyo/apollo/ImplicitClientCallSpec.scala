@@ -22,8 +22,8 @@ class ImplicitClientCallSpec extends kyo.test.Test[Any]:
             cacheless(StaticEngine(body("Alice"))).map { client =>
                 given ApolloClient = client
                 for
-                    viaCall   <- Abort.run(CurrentUserQuery().call.data)
-                    viaClient <- Abort.run(client.query(CurrentUserQuery()).data)
+                    viaCall   <- Abort.run(CallData.of(CurrentUserQuery().call))
+                    viaClient <- Abort.run(CallData.of(client.query(CurrentUserQuery())))
                 yield viaCall match
                     case Result.Success(data) =>
                         assert(data == userData("Alice"))

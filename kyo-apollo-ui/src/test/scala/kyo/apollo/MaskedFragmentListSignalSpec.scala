@@ -106,7 +106,7 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
         "seeds every row from the records the response landed in, in list order" in {
             for
                 c    <- client(body)
-                data <- c.query(countriesQuery).data
+                data <- CallData.of(c.query(countriesQuery))
                 refs <- Signal.initRef(data.countries.map(e => Entry.Country(e.countryCard)): Seq[Entry])
                 sig  <-
                     given ApolloClient = c
@@ -118,7 +118,7 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
         "re-emits when a targeted write touches ONE of the rows" in {
             for
                 c    <- client(body)
-                data <- c.query(countriesQuery).data
+                data <- CallData.of(c.query(countriesQuery))
                 refs <- Signal.initRef(data.countries.map(e => Entry.Country(e.countryCard)): Seq[Entry])
                 sig  <-
                     given ApolloClient = c
@@ -131,7 +131,7 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
         "follows the caller's list when it grows, and watches what the new row depends on" in {
             for
                 c    <- client(body)
-                data <- c.query(countriesQuery).data
+                data <- CallData.of(c.query(countriesQuery))
                 all = data.countries.map(e => Entry.Country(e.countryCard))
                 // Start with a first page of one row, then append the rest.
                 refs <- Signal.initRef(all.take(1): Seq[Entry])
@@ -154,7 +154,7 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
         "carries elements that hold no ref through untouched" in {
             for
                 c    <- client(body)
-                data <- c.query(countriesQuery).data
+                data <- CallData.of(c.query(countriesQuery))
                 mixed = Entry.Heading("Europe") +: data.countries.map(e => Entry.Country(e.countryCard))
                 refs <- Signal.initRef(mixed: Seq[Entry])
                 sig  <-
@@ -167,7 +167,7 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
         "the bare-ref form needs no carrier at all" in {
             for
                 c    <- client(body)
-                data <- c.query(countriesQuery).data
+                data <- CallData.of(c.query(countriesQuery))
                 refs <- Signal.initRef(data.countries.map(_.countryCard): Seq[CountryCard.fields.Ref])
                 sig  <-
                     given ApolloClient = c
@@ -191,7 +191,7 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
                         .httpEngine(StaticEngine(body))
                         .normalizedCache(cache, CacheIdentity.generator(summon[CacheIdentity[CountryT]]))
                 )
-                data <- c.query(countriesQuery).data
+                data <- CallData.of(c.query(countriesQuery))
                 germany = data.countries.head.countryCard
                 key  <- c.apolloStore.keyOf(germany.typeName, germany.raw)
                 _    <- cache.arm(key)(Abort.run[CacheReadFailure](rename(c, germany, "Deutschland")).unit)
@@ -207,7 +207,7 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
         "stays total on a cache-less client: each ref's own slice is its value" in {
             for
                 c    <- ApolloClient.init(ApolloClient.Config(serverUrl).httpEngine(StaticEngine(body)))
-                data <- c.query(countriesQuery).data
+                data <- CallData.of(c.query(countriesQuery))
                 refs <- Signal.initRef(data.countries.map(e => Entry.Country(e.countryCard)): Seq[Entry])
                 sig  <-
                     given ApolloClient = c
