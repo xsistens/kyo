@@ -1,12 +1,16 @@
 package kyo.uic
 
 import kyo.*
+import kyo.UI.Href
 import kyo.UI.render
+import kyo.internal.MouseEventData
+import kyo.internal.ReactiveUI
+import kyo.internal.UIEvent
 
 /** A button reads its three switches as one region, whichever of them follow a signal, and with none it draws no region at all. */
 class ButtonTest extends UicTest:
 
-    // Freed of every loss in its wave (T19): a region that takes the reader's state again fails the leaf.
+    // Armed: a region that takes the reader's state again fails the leaf.
     override private[uic] def armed: Boolean = true
 
     private def button(using Frame) = uic.Button("Save")
@@ -131,8 +135,8 @@ class ButtonTest extends UicTest:
 
     /** Runs a button with `disabled` and `loading` over refs, hands `drive` the refs once it reads them, and says whether the page
       * ended on both set: the region's observer of `loading` parked again, so what it read is what the region left, and the last
-      * paint shows both. Only `loading` is the region's read: `disabled` is a channel, and a loading button draws itself disabled
-      * and reads it no more, so nothing waits on it then.
+      * paint shows both. Only `loading` is the region's read: `disabled` is a channel, and a loading button leaves it to that channel,
+      * which the region never waits on.
       */
     private def endsOnBoth(log: kyo.internal.RecordingExchange)(drive: (SignalRef[Boolean], SignalRef[Boolean]) => Any < Async)(using
         Frame
@@ -204,6 +208,210 @@ class ButtonTest extends UicTest:
                 case _                => false
             assert(off && !mount, s"disabled $off, mount $mount")
         end for
+    }
+
+    // ---- loading is aria-disabled, not native disabled ----
+
+    "a loading button is aria-disabled and greyed, not natively disabled, and stays in the tab order" in {
+        for
+            el     <- elementWithClass(uic.Button("Save").loading(true).render, "p-button")
+            ad     <- ariaNow(el, "disabled")
+            greyed <- carriesClass(el, "p-uic-aria-disabled")
+        yield el match
+            case b: UI.Ast.Button =>
+                assert(
+                    !b.disabled.contains(true) && ad.contains("true") && greyed && b.attrs.tabIndex.isEmpty,
+                    s"disabled ${b.disabled}, aria-disabled $ad, greyed $greyed, tabindex ${b.attrs.tabIndex}"
+                )
+            case other => fail(s"not a button: $other")
+        end for
+    }
+
+    "a loading button's handler runs nothing while the button loads" in {
+        for
+            heard <- AtomicInt.init(0)
+            el    <- elementWithClass(uic.Button("Save").loading(true).onClick(heard.incrementAndGet.unit).render, "p-button")
+            _     <- el match
+                case b: UI.Ast.Button if b.attrs.onClick.nonEmpty => b.attrs.onClick.getOrElse(Kyo.unit)
+                case other                                        => fail(s"not a button with a handler: $other")
+            n <- heard.get
+        yield assert(n == 0, s"the handler ran $n times while loading")
+        end for
+    }
+
+    "a loading link keeps its href, is aria-disabled and greyed, and stays in the tab order" in {
+        for
+            el     <- elementWithClass(uic.Button("Go").href("/go").loading(true).render, "p-button")
+            ad     <- ariaNow(el, "disabled")
+            greyed <- carriesClass(el, "p-uic-aria-disabled")
+        yield el match
+            case a: UI.Ast.Anchor =>
+                assert(
+                    a.href.contains(Href.Path("/go")) && ad.contains("true") && greyed && a.attrs.tabIndex.contains(0),
+                    s"href ${a.href}, aria-disabled $ad, greyed $greyed, tabindex ${a.attrs.tabIndex}"
+                )
+            case other => fail(s"not a link: $other")
+        end for
+    }
+
+    "a loading link's handler runs nothing while it loads" in {
+        for
+            heard <- AtomicInt.init(0)
+            el    <- elementWithClass(
+                uic.Button("Go").href("/go").loading(true).onClick(heard.incrementAndGet.unit).render,
+                "p-button"
+            )
+            _ <- el match
+                case a: UI.Ast.Anchor if a.attrs.onClick.nonEmpty => a.attrs.onClick.getOrElse(Kyo.unit)
+                case other                                        => fail(s"not a link with a handler: $other")
+            n <- heard.get
+        yield assert(n == 0, s"the handler ran $n times while the link loads")
+        end for
+    }
+
+    "a loading button declines its browser default, and a loading or aria-disabled link is marked for the client to decline its click" in {
+        def declined(e: UI.Ast.Element): Boolean = e.attrs.dataAttrs.get("kyo-inert").contains("1")
+        def marked(e: UI.Ast.Element): Boolean   = e.attrs.blocked.contains(true)
+        for
+            submit  <- elementWithClass(uic.Button("Save").buttonType(ButtonType.Submit).loading(true).render, "p-button")
+            loading <- elementWithClass(uic.Button("Go").href("/go").loading(true).render, "p-button")
+            inert   <- elementWithClass(uic.Button("Go").href("/go").ariaDisabled(true).render, "p-button")
+            idle    <- elementWithClass(uic.Button("Go").href("/go").render, "p-button")
+        yield assert(
+            declined(submit) && marked(loading) && marked(inert) && !marked(idle) && !declined(loading) && !declined(idle),
+            s"loading button declined ${declined(submit)}, loading link marked ${marked(loading)} declined ${declined(loading)}, " +
+                s"inert link marked ${marked(inert)}, idle link marked ${marked(idle)}"
+        )
+        end for
+    }
+
+    /** Clicks a submit button inside a form and says how many times the form's `onSubmit` ran. The idle button is the positive
+      * control: the same path must reach the form when nothing holds the button back.
+      */
+    private def submitsOnClick(loading: Boolean)(using Frame): Int < (Async & Scope) =
+        for
+            submits <- AtomicInt.init(0)
+            ui =
+                UI.form.onSubmit(submits.getAndUpdate(_ + 1).unit)(uic.Button("Save").buttonType(ButtonType.Submit).loading(loading).render)
+            _ <- ReactiveUI.subscribed(ui) { subscription =>
+                subscription.handle(Seq("0"), UIEvent.Click(Seq("0"), MouseEventData(UI.Modifiers.none, Absent)))
+            }
+            n <- submits.get
+        yield n
+
+    "a submit button in a form submits on click when idle, and submits nothing while it loads" in {
+        for
+            idle    <- submitsOnClick(false)
+            loading <- submitsOnClick(true)
+        yield assert(idle == 1 && loading == 0, s"idle submitted $idle time(s), loading $loading")
+    }
+
+    "an aria-disabled link runs nothing on click, as the link it stands in for does" in {
+        for
+            heard <- AtomicInt.init(0)
+            el    <- elementWithClass(
+                uic.Button("Go").href("/go").ariaDisabled(true).onClick(heard.incrementAndGet.unit).render,
+                "p-button"
+            )
+            _ <- el match
+                case a: UI.Ast.Anchor if a.attrs.onClick.nonEmpty => a.attrs.onClick.getOrElse(Kyo.unit)
+                case other                                        => fail(s"not a link with a handler: $other")
+            n <- heard.get
+        yield assert(n == 0, s"the handler ran $n times on an inert link")
+    }
+
+    "a normal click runs a button's action and a link's once each, and a disabled link's click runs nothing" in {
+        for
+            heard <- AtomicInt.init(0)
+            saved <- elementWithClass(uic.Button("Save").onClick(heard.incrementAndGet.unit).render, "p-button")
+            went  <- elementWithClass(uic.Button("Go").href("/go").onClick(heard.incrementAndGet.unit).render, "p-button")
+            held  <- elementWithClass(uic.Button("Go").href("/go").disabled(true).onClick(heard.incrementAndGet.unit).render, "p-button")
+            _     <- saved match
+                case b: UI.Ast.Button if b.attrs.onClick.nonEmpty => b.attrs.onClick.getOrElse(Kyo.unit)
+                case other                                        => fail(s"not a button with a handler: $other")
+            afterButton <- heard.get
+            _           <- went match
+                case a: UI.Ast.Anchor if a.attrs.onClick.nonEmpty => a.attrs.onClick.getOrElse(Kyo.unit)
+                case other                                        => fail(s"not a link with a handler: $other")
+            afterLink <- heard.get
+            _         <- held match
+                case a: UI.Ast.Anchor if a.attrs.onClick.nonEmpty => a.attrs.onClick.getOrElse(Kyo.unit)
+                case other                                        => fail(s"not a link with a handler: $other")
+            afterHeld <- heard.get
+        yield assert(
+            (afterButton, afterLink, afterHeld) == (1, 2, 2),
+            s"handler counts after button $afterButton, link $afterLink, disabled link $afterHeld"
+        )
+        end for
+    }
+
+    // ---- an aria-disabled link is disabled as a link ----
+
+    "an aria-disabled link keeps its href, and is aria-disabled, out of the tab order and styled as disabled" in {
+        for
+            el  <- elementWithClass(uic.Button("Go").href("/go").ariaDisabled(true).render, "p-button")
+            ad  <- ariaNow(el, "disabled")
+            dis <- carriesClass(el, "p-disabled")
+        yield el match
+            case a: UI.Ast.Anchor =>
+                assert(
+                    a.href.contains(Href.Path("/go")) && ad.contains("true") && dis && a.attrs.tabIndex.contains(-1),
+                    s"href ${a.href}, aria-disabled $ad, disabled class $dis, tabindex ${a.attrs.tabIndex}"
+                )
+            case other => fail(s"not a link: $other")
+        end for
+    }
+
+    "a disabled link drops its href, and is aria-disabled, out of the tab order and styled as disabled" in {
+        for
+            el  <- elementWithClass(uic.Button("Go").href("/go").disabled(true).render, "p-button")
+            ad  <- ariaNow(el, "disabled")
+            dis <- carriesClass(el, "p-disabled")
+        yield el match
+            case a: UI.Ast.Anchor =>
+                assert(
+                    a.href.isEmpty && ad.contains("true") && dis && a.attrs.tabIndex.contains(-1),
+                    s"href ${a.href}, aria-disabled $ad, disabled class $dis, tabindex ${a.attrs.tabIndex}"
+                )
+            case other => fail(s"not a link: $other")
+        end for
+    }
+
+    // ---- icon-only: any icon, and an empty label is no label ----
+
+    "an end icon alone makes the button icon-only" in {
+        elementWithClass(uic.Button().endIcon(Icons.check).render, "p-button").flatMap(carriesClass(_, "p-button-icon-only"))
+            .map(icon => assert(icon, "an end icon alone did not make the button icon-only"))
+    }
+
+    "an empty label with an icon is icon-only and renders no empty label span" in {
+        val ui = uic.Button("").icon(Icons.check).render
+        for
+            el    <- elementWithClass(ui, "p-button")
+            icon  <- carriesClass(el, "p-button-icon-only")
+            spans <- elementsWithClass(ui, "p-button-label")
+        yield assert(icon && spans.isEmpty, s"icon-only $icon, label spans ${spans.size}")
+        end for
+    }
+
+    "a label signal that becomes empty gains the icon-only class in place" in {
+        for
+            label  <- Signal.initRef("Save")
+            el     <- elementWithClass(uic.Button(label).icon(Icons.check).render, "p-button")
+            before <- carriesClass(el, "p-button-icon-only")
+            _      <- label.set("")
+            after  <- carriesClass(el, "p-button-icon-only")
+        yield assert((before, after) == (false, true), s"icon-only before $before, after $after")
+        end for
+    }
+
+    // ---- form: the native form attribute ----
+
+    "form names the form the button submits, as the native form attribute" in {
+        renderHtml(UI.div(uic.Button("Save").form("profile").render)).map { html =>
+            assert(html.contains(""" form="profile""""), html)
+            assert(!html.contains("data-uic-form"), html)
+        }
     }
 
 end ButtonTest
