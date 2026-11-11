@@ -170,7 +170,7 @@ object ToastService:
                 .cssClass("p-component")
                 .cssClass(s"p-toast-${position.token}")
                 .role("alert")
-                .aria(AriaKey.live -> "polite")(
+                .aria(Aria.live -> "polite")(
                     UI.children(queued.map(q => messageUI(q, position, remove)))*
                 )
 
@@ -189,7 +189,7 @@ object ToastService:
                     button
                         .cssClass("p-toast-close-button")
                         .jsProp("type", "button")
-                        .aria(AriaKey.label -> "Close")
+                        .aria(Aria.label -> "Close")
                         .onClick(remove(q.id))(GlyphSvg(Icons.times, "p-toast-close-icon"))
                 )
         var message = div

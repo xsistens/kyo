@@ -124,7 +124,7 @@ final class Slider private[uic] (private[uic] val p: Slider.Props) extends Node,
             if horizontal then span.cssClass("p-slider-range").style(_.width(pct.pct))
             else span.cssClass("p-slider-range").style(_.height(pct.pct))
         val handle =
-            val base = span.cssClass("p-slider-handle").aria(AriaKey.hidden -> "true")
+            val base = span.cssClass("p-slider-handle").aria(Aria.hidden -> "true")
             if horizontal then base.style(_.left(pct.pct)) else base.style(_.bottom(pct.pct))
 
         // === interaction layer: the invisible native range input ================
@@ -135,9 +135,9 @@ final class Slider private[uic] (private[uic] val p: Slider.Props) extends Node,
             .step(if integerFlag then math.max(1.0, math.rint(stepV)) else stepV)
             .value(native)
         access.id.foreach(v => in = in.id(v))
-        access.name.foreach(v => in = in.aria(AriaKey.label -> v))
+        access.name.foreach(v => in = in.aria(Aria.label -> v))
         if disabledFlag.constTrue then in = in.disabled(true)
-        else if readonlyFlag then in = in.aria(AriaKey.readonly -> "true").preventActivation
+        else if readonlyFlag then in = in.aria(Aria.readonly -> "true").preventActivation
         else
             in = in.onChange(d => valueSlot.change(clamp(d)))
         end if

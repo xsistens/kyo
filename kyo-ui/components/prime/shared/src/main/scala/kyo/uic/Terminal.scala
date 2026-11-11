@@ -148,7 +148,7 @@ final class Terminal private[uic] (private[uic] val p: Terminal.Props) extends N
             row(
                 UI.children(span.cssClass("p-terminal-prompt-label")(promptV) ::
                     span.cssClass("p-terminal-command-value")(c.command) ::
-                    div.cssClass("p-terminal-command-response").aria(AriaKey.live -> "polite")(c.response) :: Nil)*
+                    div.cssClass("p-terminal-command-response").aria(Aria.live -> "polite")(c.response) :: Nil)*
             )
         }
         val list: UI = div.cssClass("p-terminal-command-list")(UI.children(rows)*)
@@ -158,7 +158,7 @@ final class Terminal private[uic] (private[uic] val p: Terminal.Props) extends N
         var field = input
             .cssClass("p-terminal-prompt-value")
             .value("")
-            .aria(AriaKey.label -> "Terminal command")
+            .aria(Aria.label -> "Terminal command")
         if fixed then field = field.readOnly(true)
         else if handlerF.isDefined && commandsSlot.binding.isDefined then field = field.onChange(line => execute(line, repaint))
         var promptDiv = div.cssClass("p-terminal-prompt")
@@ -169,7 +169,7 @@ final class Terminal private[uic] (private[uic] val p: Terminal.Props) extends N
         )
 
         var root = div.cssClass("p-terminal").cssClass("p-component")
-        access.name.foreach(v => root = root.aria(AriaKey.label -> v))
+        access.name.foreach(v => root = root.aria(Aria.label -> v))
         root(UI.children((welcome :+ list :+ promptRow))*)
     end body
 

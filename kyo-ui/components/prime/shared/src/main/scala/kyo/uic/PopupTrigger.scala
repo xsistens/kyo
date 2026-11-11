@@ -50,10 +50,10 @@ private[uic] object PopupTrigger:
         trigger match
             case t: PopupTrigger       => t.asPopupTrigger(popup, expanded, fixed = false, activate = Absent)
             case e: UI.Ast.Interactive =>
-                val el = e.aria(AriaKey.haspopup -> popup)
+                val el = e.aria(Aria.haspopup -> popup)
                 expanded match
-                    case s: String                    => el.aria(AriaKey.expanded -> s)
-                    case s: Signal[String] @unchecked => el.aria(AriaKey.expanded -> s)
+                    case s: String                    => el.aria(Aria.expanded -> s)
+                    case s: Signal[String] @unchecked => el.aria(Aria.expanded -> s)
         end match
     end announced
 
@@ -106,11 +106,11 @@ private[uic] object PopupTrigger:
                     tabIndex = e.attrs.tabIndex.orElse(Present(0)),
                     onKeyDownSelf = keys
                 ))
-        var el: UI.Ast.Element = reachable.aria(AriaKey.haspopup -> popup)
+        var el: UI.Ast.Element = reachable.aria(Aria.haspopup -> popup)
         el = expanded match
-            case s: String                    => el.aria(AriaKey.expanded -> s)
-            case s: Signal[String] @unchecked => el.aria(AriaKey.expanded -> s)
-        if fixed then el = el.aria(AriaKey.disabled -> "true")
+            case s: String                    => el.aria(Aria.expanded -> s)
+            case s: Signal[String] @unchecked => el.aria(Aria.expanded -> s)
+        if fixed then el = el.aria(Aria.disabled -> "true")
         if !native && el.attrs.role.isEmpty then el = el.role("button")
         el
     end element

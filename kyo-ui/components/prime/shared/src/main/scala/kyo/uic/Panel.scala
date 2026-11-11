@@ -101,7 +101,7 @@ final class Panel private[uic] (private[uic] val p: Panel.Props) extends Node, H
         on match
             case ReactiveValue.Const(b) => if b then shell = shell.cssClass("p-panel-toggleable")
             case ReactiveValue.Dyn(sig) => shell = shell.when(sig)(_.cssClass("p-panel-toggleable"))
-        access.name.foreach(n => shell = shell.aria(AriaKey.label -> n))
+        access.name.foreach(n => shell = shell.aria(Aria.label -> n))
 
         // The header slot content: a custom UI wins over the plain title text.
         // The shell without its child, so a signal title can go in as a text CHILD (kyo-ui's
@@ -110,7 +110,7 @@ final class Panel private[uic] (private[uic] val p: Panel.Props) extends Node, H
             span
                 .cssClass("p-panel-title")
                 .role("heading")
-                .aria(AriaKey.level -> headerLevelV.token.drop(1))
+                .aria(Aria.level -> headerLevelV.token.drop(1))
         val titleSlot: List[UI] = (headerUIV, headerText) match
             case (Present(u), _)                       => List(span.cssClass("p-panel-title")(u))
             case (Absent, Present(TextValue.Const(t))) => List(titleShell(t))
@@ -132,10 +132,12 @@ final class Panel private[uic] (private[uic] val p: Panel.Props) extends Node, H
                 .cssClass("p-button-text")
                 .cssClass("p-button-secondary")
                 .jsProp("type", "button")
-                .aria(AriaKey.expanded -> !c)
-                .aria(AriaKey.label -> "Toggle")
+                .aria(
+                    Aria.expanded -> !c,
+                    Aria.label    -> "Toggle"
+                )
             b =
-                if fixed then b.aria(AriaKey.disabled -> "true")
+                if fixed then b.aria(Aria.disabled -> "true")
                 else b.onClick(collapsedSlot.update(!_))
             // The toggle is Panel's own button, so it is not reachable by
             // wrapping the panel: the wrapper is not that button. It takes

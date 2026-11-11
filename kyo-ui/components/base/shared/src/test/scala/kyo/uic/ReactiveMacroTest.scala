@@ -90,7 +90,7 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
         "the attribute follows the signal in place and the block draws once, with no region" in {
             for
                 on <- Signal.initRef(false)
-                ui = UI.reactive(span.aria(AriaKey.checked -> on.read.toString))
+                ui = UI.reactive(span.aria(Aria.checked -> on.read.toString))
                 el <- ui match
                     case s: SpanElement => Kyo.lift(s)
                     case other          => Kyo.lift(fail(s"the block drew a region: $other"))
@@ -119,7 +119,7 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
 
         "over a constant it is the plain attribute" in {
             val on: Prop[Boolean] = true
-            UI.reactive(span.aria(AriaKey.checked -> on.read.toString)) match
+            UI.reactive(span.aria(Aria.checked -> on.read.toString)) match
                 case s: SpanElement =>
                     assert(s.attrs.ariaAttrs.get("checked").contains("true") && s.attrs.reactiveAttrs.isEmpty, s"${s.attrs}")
                 case other => fail(s"$other")
@@ -130,8 +130,8 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
             for
                 big <- Signal.initRef(false)
                 on  <- Signal.initRef(false)
-                ui = UI.reactive(if big.read then div.aria(AriaKey.checked -> on.read.toString)
-                else span.aria(AriaKey.checked -> on.read.toString))
+                ui = UI.reactive(if big.read then div.aria(Aria.checked -> on.read.toString)
+                else span.aria(Aria.checked -> on.read.toString))
                 drawn <- ui match
                     case r: Reactive[?] => r.signal.current
                     case other          => Kyo.lift(fail(s"the condition drew no region: $other"))
@@ -144,7 +144,7 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
             for
                 on <- Signal.initRef(false)
                 n  <- Signal.initRef(1)
-                ui = UI.reactive(span.aria(AriaKey.pressed -> on.read, AriaKey.busy -> true).data(data"data-uic-n" -> n.read))
+                ui = UI.reactive(span.aria(Aria.pressed -> on.read, Aria.busy -> true).data(data"data-uic-n" -> n.read))
                 el <- ui match
                     case s: SpanElement => Kyo.lift(s)
                     case other          => Kyo.lift(fail(s"the block drew a region: $other"))
@@ -158,10 +158,10 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
             yield assert(before == "false" && el.attrs.ariaAttrs == Map("busy" -> "true"), s"$before ${el.attrs}")
         }
 
-        "a read handed to aria under an AriaKey is that entry's channel, as it is under the string name" in {
+        "a read handed to aria under an Aria is that entry's channel, as it is under the string name" in {
             for
                 on <- Signal.initRef(false)
-                ui = UI.reactive(span.aria(AriaKey.pressed -> on.read))
+                ui = UI.reactive(span.aria(Aria.pressed -> on.read))
                 el <- ui match
                     case s: SpanElement => Kyo.lift(s)
                     case other          => Kyo.lift(fail(s"the block drew a region: $other"))
@@ -176,14 +176,14 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
             for
                 ref <- Signal.initRef[Maybe[String]](Absent)
                 name: Prop[Maybe[String]] = ref
-            yield UI.reactive(span.aria(AriaKey.label -> name.read)) match
+            yield UI.reactive(span.aria(Aria.label -> name.read)) match
                 case s: SpanElement => assert(s.attrs.reactiveMaybeAttrs.contains("aria-label"), s"${s.attrs}")
                 case other          => fail(s"the block drew a region: $other")
         }
 
         "an entry's value over a constant is the plain attribute" in {
             val on: Prop[Boolean] = true
-            UI.reactive(span.aria(AriaKey.checked -> on.read)) match
+            UI.reactive(span.aria(Aria.checked -> on.read)) match
                 case s: SpanElement =>
                     assert(s.attrs.ariaAttrs.get("checked").contains("true") && s.attrs.reactiveAttrs.isEmpty, s"${s.attrs}")
                 case other => fail(s"$other")
@@ -207,7 +207,7 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
                 ui = UI.reactive {
                     val x     = on.read
                     val label = x.toString
-                    span.aria(AriaKey.checked -> label)
+                    span.aria(Aria.checked -> label)
                 }
                 el <- ui match
                     case s: SpanElement => Kyo.lift(s)
@@ -223,7 +223,7 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
                 on <- Signal.initRef(false)
                 ui = UI.reactive {
                     val held = on.read
-                    span.aria(AriaKey.pressed -> held)
+                    span.aria(Aria.pressed -> held)
                 }
                 el <- ui match
                     case s: SpanElement => Kyo.lift(s)
@@ -239,7 +239,7 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
                 on <- Signal.initRef(true)
                 ui = UI.reactive {
                     val x = on.read
-                    if x then div.aria(AriaKey.pressed -> x) else span
+                    if x then div.aria(Aria.pressed -> x) else span
                 }
                 drawn <- ui match
                     case r: Reactive[?] => r.signal.current
@@ -254,7 +254,7 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
                 on <- Signal.initRef(true)
                 ui = UI.reactive {
                     val x = on.read
-                    if x then div.aria(AriaKey.checked -> x.toString) else span
+                    if x then div.aria(Aria.checked -> x.toString) else span
                 }
                 drawn <- ui match
                     case r: Reactive[?] => r.signal.current
@@ -267,7 +267,7 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
         "a read the region already has is its value of the run in a channel argument too" in {
             for
                 on <- Signal.initRef(true)
-                ui = UI.reactive(if on.read then div.aria(AriaKey.checked -> on.read.toString) else span)
+                ui = UI.reactive(if on.read then div.aria(Aria.checked -> on.read.toString) else span)
                 drawn <- ui match
                     case r: Reactive[?] => r.signal.current
                     case other          => Kyo.lift(fail(s"the condition drew no region: $other"))
@@ -280,7 +280,7 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
             for
                 a <- Signal.initRef(true)
                 b <- Signal.initRef("x")
-                ui = UI.reactive(if a.read then div.aria(AriaKey.label -> s"${a.read}-${b.read}") else span)
+                ui = UI.reactive(if a.read then div.aria(Aria.label -> s"${a.read}-${b.read}") else span)
                 drawn <- ui match
                     case r: Reactive[?] => r.signal.current
                     case other          => Kyo.lift(fail(s"the condition drew no region: $other"))
@@ -329,8 +329,8 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
                 on <- Signal.initRef(false)
                 el <-
                     drawnOnce(UI.reactive(span.when(on.read)(_.aria(
-                        AriaKey.pressed  -> true,
-                        AriaKey.valuenow -> 3
+                        Aria.pressed  -> true,
+                        Aria.valuenow -> 3
                     ).data(data"data-uic-x" ->
                         "on"))))
             yield assert(
@@ -345,7 +345,7 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
                 on <- Signal.initRef(false)
                 el <- drawnOnce(UI.reactive {
                     val held = on.read
-                    span.when(held)(_.cssClass("x").aria(AriaKey.pressed -> "true")).aria(AriaKey.busy -> held)
+                    span.when(held)(_.cssClass("x").aria(Aria.pressed -> "true")).aria(Aria.busy -> held)
                 })
                 _ <- on.set(true)
                 _ <- assertEventually(classed(el, "x"))
@@ -374,7 +374,7 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
             yield
                 val handler = UI.reactive(span.when(on.read)(_.onClick(Kyo.unit)))
                 val mixed   = UI.reactive(span.when(on.read)(_.cssClass("x").style(_.bold)))
-                val signal  = UI.reactive(span.when(on.read)(_.aria(AriaKey.label -> (name: Signal[String])).cssClass("x")))
+                val signal  = UI.reactive(span.when(on.read)(_.aria(Aria.label -> (name: Signal[String])).cssClass("x")))
                 assert(
                     handler.isInstanceOf[Reactive[?]] && mixed.isInstanceOf[Reactive[?]] && signal.isInstanceOf[Reactive[?]],
                     s"$handler | $mixed | $signal"

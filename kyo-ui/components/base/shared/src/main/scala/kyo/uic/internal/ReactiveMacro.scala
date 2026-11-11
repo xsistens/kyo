@@ -113,21 +113,21 @@ private[kyo] object ReactiveMacro:
                 case _ => None
         end Read
 
-        // The entry an `aria(...)` or `data(...)` pair converts to, and its parts (see the entry pass below). An AriaKey converts through
-        // `keyed` and a DataKey through `dataKeyed`; `AriaKey.name` or `DataKey.name` makes the String `channel` takes, with the kind.
+        // The entry an `aria(...)` or `data(...)` pair converts to, and its parts (see the entry pass below). An Aria converts through
+        // `keyed` and a Data through `dataKeyed`; `Aria.name` or `Data.name` makes the String `channel` takes, with the kind.
         val entryModule    = TypeRepr.of[UI.Ast.Entry.type].termSymbol
         val entryGiven     = List("keyed", "dataKeyed").flatMap(entryModule.methodMember(_).headOption)
         val dataKeyedGiven = entryModule.methodMember("dataKeyed").headOption
         val entryChannel   = entryModule.methodMember("channel").headOption.getOrElse(
             report.errorAndAbort("kyo-ui has no `Entry.channel`: the expansion of `UI.reactive` needs it.")
         )
-        val ariaKeyModule = TypeRepr.of[kyo.AriaKey.type].termSymbol
+        val ariaKeyModule = TypeRepr.of[kyo.Aria.type].termSymbol
         val ariaKeyName   = ariaKeyModule.methodMember("name").headOption.getOrElse(
-            report.errorAndAbort("kyo-ui has no `AriaKey.name`: the expansion of `UI.reactive` needs it.")
+            report.errorAndAbort("kyo-ui has no `Aria.name`: the expansion of `UI.reactive` needs it.")
         )
-        val dataKeyModule = TypeRepr.of[kyo.DataKey.type].termSymbol
+        val dataKeyModule = TypeRepr.of[kyo.Data.type].termSymbol
         val dataKeyName   = dataKeyModule.methodMember("name").headOption.getOrElse(
-            report.errorAndAbort("kyo-ui has no `DataKey.name`: the expansion of `UI.reactive` needs it.")
+            report.errorAndAbort("kyo-ui has no `Data.name`: the expansion of `UI.reactive` needs it.")
         )
         val tuple2Module = TypeRepr.of[Tuple2.type].termSymbol
         // The name and the value of a pair written in place: `name -> value` or `(name, value)`.

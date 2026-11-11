@@ -243,8 +243,8 @@ final class Tree[K] private[uic] (private[uic] val p: Tree.Props[K]) extends Nod
                 )
             else Nil
         var list = ul.cssClass("p-tree-root-children").role("tree")
-        access.name.foreach(v => list = list.aria(AriaKey.label -> v))
-        if multiSelect then list = list.aria(AriaKey.multiselectable -> "true")
+        access.name.foreach(v => list = list.aria(Aria.label -> v))
+        if multiSelect then list = list.aria(Aria.multiselectable -> "true")
         // The tree is ONE tab stop: the reader arrives on the list and moves inside it with
         // the arrows, rather than tabbing once per node through a folder structure.
         //
@@ -271,7 +271,7 @@ final class Tree[K] private[uic] (private[uic] val p: Tree.Props[K]) extends Nod
                     .onKeyDown(keyHandler(exp, r))
                     .onFocus(seedFocus)
                     .onBlur(r.ref.set(-1))
-                if focus >= 0 then list = list.aria(AriaKey.activedescendant -> nodeId(r.idBase, focus))
+                if focus >= 0 then list = list.aria(Aria.activedescendant -> nodeId(r.idBase, focus))
             end if
         }
 
@@ -341,7 +341,7 @@ final class Tree[K] private[uic] (private[uic] val p: Tree.Props[K]) extends Nod
         var toggleBtn = button
             .cssClass("p-tree-node-toggle-button")
             .jsProp("type", "button")
-            .aria(AriaKey.hidden -> "true")
+            .aria(Aria.hidden -> "true")
             .tabIndex(-1)
         if hasChildren && !expansionFixed then toggleBtn = toggleBtn.onClick(toggleNode(node.id))
         val toggle: UI = toggleBtn(
@@ -355,10 +355,10 @@ final class Tree[K] private[uic] (private[uic] val p: Tree.Props[K]) extends Nod
         // class), mirroring CheckBox's indeterminate skin.
         val checkboxSlot: List[UI] =
             if multiSelect then
-                var cb = div.cssClass("p-checkbox").cssClass("p-component").cssClass("p-tree-node-checkbox").aria(AriaKey.hidden -> "true")
+                var cb = div.cssClass("p-checkbox").cssClass("p-component").cssClass("p-tree-node-checkbox").aria(Aria.hidden -> "true")
                 if isSelected then cb = cb.cssClass("p-checkbox-checked")
                 if selectionModeV == SelectionMode.Checkbox then
-                    cb = cb.aria(AriaKey.checked -> (if isSelected then "true" else if isIndeterminate then "mixed" else "false"))
+                    cb = cb.aria(Aria.checked -> (if isSelected then "true" else if isIndeterminate then "mixed" else "false"))
                 if selectable && !selectionFixed then cb = cb.onClick(selectNode(node.id))
                 val icon: List[UI] =
                     if isSelected then List(GlyphSvg(Icons.check, "p-checkbox-icon"))
@@ -399,9 +399,9 @@ final class Tree[K] private[uic] (private[uic] val p: Tree.Props[K]) extends Nod
         var item = li.cssClass("p-tree-node").role("treeitem")
         if isFocused then roving.foreach(r => item = item.id(nodeId(r.idBase, myRow)))
         if !hasChildren then item = item.cssClass("p-tree-node-leaf")
-        if hasChildren then item = item.aria(AriaKey.expanded -> isExpanded)
-        if isSelected then item = item.aria(AriaKey.selected -> "true")
-        node.accessibleName.foreach(v => item = item.aria(AriaKey.label -> v))
+        if hasChildren then item = item.aria(Aria.expanded -> isExpanded)
+        if isSelected then item = item.aria(Aria.selected -> "true")
+        node.accessibleName.foreach(v => item = item.aria(Aria.label -> v))
         item(UI.children(contentEl :: childrenUI)*)
     end renderNode
 

@@ -480,11 +480,11 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
         // the form's focus-first-invalid reach it; the options derive theirs from the same value.
         access.id.foreach(v => list = list.id(v))
         if selectionModeV == SelectionMode.Multiple || selectionModeV == SelectionMode.Checkbox then
-            list = list.aria(AriaKey.multiselectable -> "true")
+            list = list.aria(Aria.multiselectable -> "true")
         // A fixed list is read-only, not disabled: it stays the one tab stop, so a reader still reaches what it holds, and
         // answers no key and no click (see "readonly is one thing" in this module's CLAUDE.md).
         if fixedFlag then
-            list = list.aria(AriaKey.readonly -> "true")
+            list = list.aria(Aria.readonly -> "true")
             if !disabledFlag then list = list.tabIndex(0)
         end if
         // The listbox is ONE tab stop and roves a highlight inside it, which is what the ARIA
@@ -498,9 +498,9 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
         // root they would never run, which is how `onBlur` came to be silently dead.
         if interactive then
             list = list.tabIndex(0).preventScrollKeys.onKeyDown(keyHandler).onFocus(seedFocus).onBlur(leaveList)
-            if focused >= 0 then idBase.foreach(base => list = list.aria(AriaKey.activedescendant -> optionId(base, focused)))
-        access.name.foreach(v => list = list.aria(AriaKey.label -> v))
-        access.nameRef.foreach(v => list = list.aria(AriaKey.labelledby -> v))
+            if focused >= 0 then idBase.foreach(base => list = list.aria(Aria.activedescendant -> optionId(base, focused)))
+        access.name.foreach(v => list = list.aria(Aria.label -> v))
+        access.nameRef.foreach(v => list = list.aria(Aria.labelledby -> v))
         val listUI: UI = list(UI.children(rows ++ emptyRow)*)
 
         def header: UI =
@@ -509,7 +509,7 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
                 .cssClass("p-inputtext")
                 .cssClass("p-component")
                 .role("searchbox")
-                .aria(AriaKey.label -> "Filter")
+                .aria(Aria.label -> "Filter")
             // Absent only in the static projection of a listbox that owns its query, before
             // the mount allocates it: the header still renders, it just does not filter yet.
             // Two way, the field writes the query itself; one way it follows what the owner holds and reports what the reader
@@ -552,13 +552,13 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
         val checkSlot: List[UI] =
             if checkmarkFlag then
                 if isSel then List(GlyphSvg(Icons.check, "p-listbox-option-check-icon", "p-icon"))
-                else List(span.cssClass("p-listbox-option-blank-icon").cssClass("p-icon").aria(AriaKey.hidden -> "true"))
+                else List(span.cssClass("p-listbox-option-blank-icon").cssClass("p-icon").aria(Aria.hidden -> "true"))
             else Nil
         val iconSlot: List[UI]  = it.icon.toList.map(g => GlyphSvg(g, "p-uic-option-icon"))
         val extraSlot: List[UI] =
             it.additionalText.toList.map(t => span.cssClass("p-uic-option-extra")(t))
 
-        var row = li.cssClass("p-listbox-option").role("option").aria(AriaKey.selected -> isSel)
+        var row = li.cssClass("p-listbox-option").role("option").aria(Aria.selected -> isSel)
         if isSel then row = row.cssClass("p-listbox-option-selected")
         if focused then
             row = row.cssClass("p-focus").scrollAuto(true)
