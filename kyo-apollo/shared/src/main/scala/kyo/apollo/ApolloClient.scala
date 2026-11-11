@@ -42,7 +42,7 @@ import kyo.apollo.runtime.ResponseStream
   *
   *   1. the **HTTP tier** — the configured `HttpInterceptor`s presented as a
   *      single [[kyo.apollo.network.http.HttpEngine]] via
-  *      [[HttpInterceptorChain.asEngine]], wrapping the real
+  *      `HttpInterceptorChain.asEngine`, wrapping the real
   *      [[kyo.apollo.network.http.FetchHttpEngine]] (or an injected one for tests);
   *   1. the **transports** — an [[HttpNetworkTransport]] bound to `serverUrl` for
   *      queries/mutations, and a

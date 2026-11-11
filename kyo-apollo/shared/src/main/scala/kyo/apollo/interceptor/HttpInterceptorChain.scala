@@ -12,7 +12,7 @@ import kyo.apollo.network.http.HttpEngine
 trait HttpInterceptorChain:
 
     /** Continue processing `request` at the next link, completing with its
-      * `HttpEngine.Response` or aborting with the engine's [[HttpEngineFailure]].
+      * `HttpEngine.Response` or aborting with the engine's `HttpEngineFailure`.
       */
     def proceed(request: HttpEngine.Request)(using Frame): HttpEngine.Response < (Async & Abort[HttpEngineFailure])
 end HttpInterceptorChain

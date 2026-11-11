@@ -14,7 +14,7 @@ import kyo.apollo.network.ExecutionContext
   * [[RefetchPolicy.Default]] (`CacheOnly`) — the cheap, network-free re-read that
   * makes reactivity zero-cost, matching apollo-kotlin's default watch behaviour.
   *
-  * The two update strategies (see the `watch()` extension in [[Watcher]]):
+  * The two update strategies (see the `watch()` extension in `Watcher`):
   *
   *   - `CacheOnly` (default) — re-read the operation from the store through the
   *     same [[kyo.apollo.cache.normalized.internal.CacheBatchReader]] the initial read

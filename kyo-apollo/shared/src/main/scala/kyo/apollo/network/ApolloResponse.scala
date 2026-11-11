@@ -22,12 +22,12 @@ import kyo.apollo.json.Json
   *
   * Every way an operation can fall short of a clean result lands in [[error]]:
   * a network drop, a non-2xx status, a malformed body, a cache miss, and the
-  * server's own GraphQL `errors` (as an [[ApolloGraphQLException]]). There is
+  * server's own GraphQL `errors` (as an `ApolloGraphQLException`). There is
   * no second field to also consult, so "did this succeed" is one question with
   * one answer, and a response cannot represent the contradictory state of
   * carrying a transport failure and server-side errors at once. This is Apollo
   * Client 4's consolidation; the typed GraphQL errors remain reachable through
-  * the [[errors]] projection or by matching [[ApolloGraphQLException]] directly.
+  * the [[errors]] projection or by matching `ApolloGraphQLException` directly.
   *
   * Failures stay values, not throws: a failed call surfaces as
   * `error = Present(...)` rather than escaping the public API.
@@ -96,7 +96,7 @@ object ApolloResponse:
     /** Lift a decoded `GraphQLResponse` into an [[ApolloResponse]], copying
       * `data` and `extensions` verbatim and attaching transport metadata.
       *
-      * A non-empty `errors` list becomes an [[ApolloGraphQLException]] on
+      * A non-empty `errors` list becomes an `ApolloGraphQLException` on
       * [[ApolloResponse.error]] — including when `data` is also present, which is
       * the partial-data case: both fields are populated and neither is lost.
       */

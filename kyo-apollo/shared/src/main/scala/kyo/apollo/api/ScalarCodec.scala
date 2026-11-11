@@ -21,7 +21,7 @@ import kyo.apollo.json.SchemaJson
   * Crucially, nothing on this path introduces a new `derives`, so it stays clear
   * of the Scala.js linker issues sum-type derivation hits at kyo RC5.
   *
-  * A value of the wrong JSON type decodes to an [[ApolloParseException]] failure
+  * A value of the wrong JSON type decodes to an `ApolloParseException` failure
   * built with the caller's frame, naming the type expected and the JSON type found,
   * never the value; a codec raises nothing on that path.
   */
@@ -96,7 +96,7 @@ object ScalarCodec:
     /** Reuse a kyo-schema `Schema` (e.g. a generated enum's string-transform
       * `given`, or a mapped custom scalar) as a leaf codec, via `SchemaJson`.
       * A value the schema rejects is the `ApolloParseException` failure
-      * [[SchemaJson.decode]] builds with the caller's frame.
+      * `SchemaJson.decode` builds with the caller's frame.
       */
     def fromSchema[V](using Schema[V]): ScalarCodec[V] =
         new ScalarCodec[V]:

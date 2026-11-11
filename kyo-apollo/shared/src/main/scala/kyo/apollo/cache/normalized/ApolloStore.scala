@@ -278,7 +278,7 @@ final class ApolloStore(
       *
       * The result is a flat object whose keys are record cache-ids; every
       * `RecordValue.Reference` renders as `{"__ref": "<key>"}`, lists as JSON
-      * arrays, scalars inline and [[RecordValue.Null]] as `null`. kyo's well-known
+      * arrays, scalars inline and `RecordValue.Null` as `null`. kyo's well-known
       * root keys (`QUERY_ROOT` / `MUTATION_ROOT` / `SUBSCRIPTION_ROOT`) are
       * translated to Apollo's (`ROOT_QUERY` / `ROOT_MUTATION` / `ROOT_SUBSCRIPTION`)
       * on both record keys and reference targets, so the panel renders a
@@ -547,7 +547,7 @@ final class ApolloStore(
       * captured slice and its concrete type, never a key of its own, and a read
       * asks `keyOf(ref.typeName, ref.raw)`. That is the generator which normalized
       * the response, so the ref names the record that was actually written even
-      * when the store keys the type differently from the [[CacheIdentity]] the
+      * when the store keys the type differently from the `CacheIdentity` the
       * fragment was declared with. `typeName` overrides any `__typename` in `obj`.
       * No response path is supplied, so the generator's positional fallback cannot
       * apply: an entity without a usable identity has no key rather than a
@@ -906,7 +906,7 @@ final class ApolloStore(
       * returning — and [[publish]]ing — the set of removed keys.
       *
       * A reachability mark-and-sweep, seeded from the well-known operation roots
-      * (`CacheKey.QueryRoot` / [[CacheKey.MutationRoot]] /
+      * (`CacheKey.QueryRoot` / `CacheKey.MutationRoot` /
       * [[CacheKey.SubscriptionRoot]]), every record any live optimistic layer holds
       * or points at — so a record kept alive *only* by a pending optimistic mutation
       * survives GC and reappears if that mutation rolls back — and the retain set:

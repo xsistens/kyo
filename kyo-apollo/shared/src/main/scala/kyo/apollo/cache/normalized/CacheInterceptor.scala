@@ -18,7 +18,7 @@ import kyo.apollo.runtime.ResponseStream
   * layer. Inserted before the terminal `NetworkInterceptor`, it reads from and
   * writes back to an [[ApolloStore]] according to the request's [[FetchPolicy]],
   * and emits the response sequence that policy prescribes — each stamped with
-  * [[CacheInfo]] so callers can see whether a value came from cache or network.
+  * `CacheInfo` so callers can see whether a value came from cache or network.
   *
   * Everything is a composition of [[Stream]] and the store's effectful
   * `readOperationStamped` / `writeOperation`: a policy that reads the cache first
@@ -257,7 +257,7 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
 
     /** A cache-served success response carrying `data`, the `dependentKeys` the
       * read touched and the store `generation` it was read at (stamped onto
-      * [[CacheInfo]] for watchers) — built by the shared [[CacheResponses]] so
+      * `CacheInfo` for watchers) — built by the shared [[CacheResponses]] so
       * re-reads in `watch()` stamp identical metadata.
       */
     private def cacheHit[D](
