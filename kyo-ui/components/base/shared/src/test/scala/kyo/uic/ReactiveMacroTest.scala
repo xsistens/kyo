@@ -427,12 +427,15 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
     }
 
     "a read the block would not evaluate once while it runs is a compile error that says what to write" - {
-        "a read outside a block does not exist" in {
-            typeCheckFailure("""
-                import kyo.*
-                val s: Signal[Int] = ???
-                s.read
-            """)("read is not a member")
+        "a read outside a block is the value now, and a signal's value is its current one" in {
+            for
+                ref <- Signal.initRef(1)
+                c: Prop[Int] = 10
+                a <- ref.read
+                _ <- ref.set(5)
+                b <- ref.read
+                k <- c.read
+            yield assert(a == 1 && b == 5 && k == 10)
         }
 
         "a read of a value the block defines" in {

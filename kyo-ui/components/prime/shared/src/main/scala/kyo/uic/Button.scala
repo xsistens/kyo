@@ -130,12 +130,12 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
       * as the button starts to load does not run its action.
       */
     private def answering(a: UI.Action, link: Boolean)(using Frame): UI.Action =
-        for
-            inert <- if link then Prop.current(p.ariaDisabled) else Kyo.lift(false)
-            busy  <- Prop.current(p.loading)
-            off   <- Prop.current(p.disabled)
-            _     <- if inert || busy || off then Kyo.unit else a
-        yield ()
+        direct {
+            val inert = if link then p.ariaDisabled.read.now else false
+            val busy  = p.loading.read.now
+            val off   = p.disabled.read.now
+            if inert || busy || off then () else a.now
+        }
     end answering
 
     /** The `.p-button` class chain, shared by the button and anchor renderings: a constant is a class, a signal a class channel. */

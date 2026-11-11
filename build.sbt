@@ -4347,7 +4347,7 @@ lazy val `kyo-ui-components-prime` =
     crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
         .crossType(CrossType.Full)
         .in(file("kyo-ui/components/prime"))
-        .dependsOn(`kyo-ui-components-base`)
+        .dependsOn(`kyo-ui-components-base`, `kyo-direct`)
         .withKyoTest
         .settings(`kyo-settings`)
         .jvmSettings(mimaCheck(false))
