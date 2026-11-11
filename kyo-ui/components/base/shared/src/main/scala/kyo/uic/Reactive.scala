@@ -1,12 +1,12 @@
 package kyo.uic
 
 import kyo.*
+import scala.util.NotGiven
 
 /** What a [[reactive]] block reads with: `.read` on a prop or a signal, which exists only inside the block.
   *
-  * Outside a block there is no `.read` at all, so nothing beside it (kyo-direct's `.now` on every value among them) can be
-  * ambiguous with it. The expansion takes every read out of the block; a read it reaches only through this scope handed on to other
-  * code is a compile error.
+  * Outside a block `.read` is the value now (see the extensions after this class), and `NotGiven` keeps those from applying here. The
+  * expansion takes every read out of the block; a read it reaches only through this scope handed on to other code is a compile error.
   */
 final class ReactiveScope private[kyo] ():
 
@@ -21,6 +21,17 @@ final class ReactiveScope private[kyo] ():
         @scala.annotation.targetName("readSignal")
         inline def read: A = ${ kyo.uic.internal.ReactiveMacro.strayImpl[A]('self) }
 end ReactiveScope
+
+/** A prop's value now, outside a [[reactive]] block: a read a handler makes when its event comes, with no region and no subscription.
+  * Sequenced with kyo-direct's `.now`, as `p.loading.read.now`. Inside a block the block's own `.read` applies instead.
+  */
+extension [A](self: UI.Prop[A])
+    def read(using notInBlock: NotGiven[ReactiveScope], frame: Frame): A < Sync = UI.Prop.current(self)(using frame)
+
+/** A signal's value now, outside a [[reactive]] block; see the prop form. */
+extension [A](self: Signal[A])
+    @scala.annotation.targetName("readSignalNow")
+    def read(using notInBlock: NotGiven[ReactiveScope], frame: Frame): A < Sync = self.current(using frame)
 
 /** A block over props and signals, written as if each were a plain value and read with `.read`, called as `UI.reactive`:
   *
