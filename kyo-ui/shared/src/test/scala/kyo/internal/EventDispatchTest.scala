@@ -143,4 +143,54 @@ class EventDispatchTest extends kyo.test.Test[Any]:
         end for
     }
 
+    private def blur(path: String*): UIEvent = UIEvent.Blur(path, MouseEventData(UI.Modifiers.none, Absent))
+
+    "a partly silent element runs the handler of the event it keeps, and lets its click go on to the parent" in {
+        for
+            parent <- counter
+            quiet  <- counter
+            kept   <- counter
+            ui = UI.div(UI.div.onClick(bump(parent))(
+                UI.button("p").onClick(bump(quiet)).onBlur(bump(kept)).silentExcept(true, "blur")
+            ))
+            result <- ReactiveUI.subscribed(ui) { sub =>
+                for
+                    _ <- sub.handle(Seq("0", "0"), click("0", "0"))
+                    _ <- sub.handle(Seq("0", "0"), blur("0", "0"))
+                    _ <- assertEventually(Sync.defer(parent.get == 1))
+                yield (quiet.get, kept.get, parent.get)
+            }
+        yield assert(result == (0, 1, 1), s"(click handler, blur handler, parent click) = $result")
+        end for
+    }
+
+    "a partly silent element from a signal hides the events it does not keep only while the signal holds" in {
+        for
+            parent  <- counter
+            clicked <- counter
+            blurred <- counter
+            muted   <- Signal.initRef(false)
+            ui = UI.div(UI.div.onClick(bump(parent))(
+                UI.button("p").onClick(bump(clicked)).onBlur(bump(blurred)).silentExcept(muted: Signal[Boolean], "blur")
+            ))
+            result <- ReactiveUI.subscribed(ui) { sub =>
+                def clickAndBlur(clicks: Int): Int < Async =
+                    sub.handle(Seq("0", "0"), click("0", "0"))
+                        .andThen(sub.handle(Seq("0", "0"), blur("0", "0")))
+                        .andThen(assertEventually(Sync.defer(parent.get == clicks)))
+                        .andThen(Sync.defer(clicked.get))
+                for
+                    heard  <- clickAndBlur(1)
+                    _      <- muted.set(true)
+                    quiet  <- clickAndBlur(2)
+                    _      <- muted.set(false)
+                    heard2 <- clickAndBlur(3)
+                    blurs  <- Sync.defer(blurred.get)
+                yield Seq(heard, quiet, heard2, blurs)
+                end for
+            }
+        yield assert(result == Seq(1, 1, 2, 3), s"(click, click while muted, click again, blurs) = $result")
+        end for
+    }
+
 end EventDispatchTest

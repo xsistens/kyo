@@ -547,7 +547,14 @@ private[kyo] object EventDispatch:
         def run = runHandlers(elem, event, isTarget, selfPath, disabledTarget, submitOrigin, enterSubmits, controlTarget)
         event match
             case _: UIEvent.Attach => run
-            case _                 => isSilent(elem).map(silent => if silent then true else run)
+            case _                 =>
+                isSilent(elem).flatMap { silent =>
+                    if silent then Kyo.lift(true)
+                    // An element with no partial silence (the common case) runs its handlers with no further check.
+                    else if elem.attrs.partialSignal.isEmpty && !elem.attrs.partial then run
+                    else hiddenByPartial(elem, event).flatMap(hidden => if hidden then Kyo.lift(true) else run)
+                }
+        end match
     end dispatchToElement
 
     /** Whether `elem` is silent right now: disabled (see [[isDisabled]]) or `silent`, each read from its channel where one is
@@ -562,6 +569,47 @@ private[kyo] object EventDispatch:
                     case Present(sig) => sig.current
                     case Absent       => elem.attrs.silent
         )
+
+    /** Whether a partial silence (UI.Element.silentExcept) holds on `elem` now and does not keep `event`: the element then runs no handler
+      * for it and lets it go on, as an element with no handler for it does. Read when the event arrives, as [[isSilent]] is.
+      */
+    private def hiddenByPartial(elem: Element, event: UIEvent)(using Frame): Boolean < Sync =
+        val attrs                  = elem.attrs
+        val partly: Boolean < Sync = attrs.partialSignal match
+            case Present(sig) => sig.current
+            case Absent       => Kyo.lift(attrs.partial)
+        partly.map(p => p && !attrs.partialKeep.contains(eventToken(event)))
+    end hiddenByPartial
+
+    /** The token a client reports `event` under, which a partial silence keeps or hides it by (the `data-kyo-ev` names); empty for an
+      * event no element declares, which a partial silence always hides.
+      */
+    private def eventToken(event: UIEvent): String = event match
+        case _: UIEvent.Click | _: UIEvent.ClickSelf                                 => "click"
+        case _: UIEvent.ContextMenu                                                  => "contextmenu"
+        case _: UIEvent.Focus                                                        => "focus"
+        case _: UIEvent.Blur                                                         => "blur"
+        case _: UIEvent.KeyDown                                                      => "keydown"
+        case _: UIEvent.KeyUp                                                        => "keyup"
+        case _: UIEvent.Input                                                        => "input"
+        case _: UIEvent.Change | _: UIEvent.ChangeChecked | _: UIEvent.ChangeNumeric => "change"
+        case _: UIEvent.FileSelect                                                   => "fileselect"
+        case _: UIEvent.Submit                                                       => "submit"
+        case _: UIEvent.Hover                                                        => "mouseover"
+        case _: UIEvent.Unhover                                                      => "mouseout"
+        case _: UIEvent.Scroll                                                       => "wheel"
+        case _: UIEvent.ScrollPosition                                               => "scroll"
+        case _: UIEvent.DragStart                                                    => "dragstart"
+        case _: UIEvent.DragEnd                                                      => "dragend"
+        case _: UIEvent.DragEnter                                                    => "dragenter"
+        case _: UIEvent.DragLeave                                                    => "dragleave"
+        case _: UIEvent.DragOver                                                     => "dragover"
+        case _: UIEvent.Drop                                                         => "drop"
+        case _: UIEvent.SortMove                                                     => "sortmove"
+        case _: UIEvent.PointerDown                                                  => "pointerdown"
+        case _: UIEvent.PointerMove                                                  => "pointermove"
+        case _: UIEvent.PointerUp                                                    => "pointerup"
+        case _                                                                       => ""
 
     /** [[dispatchToElement]] for an element that is not silent: runs its handlers for `event`. */
     private def runHandlers(

@@ -374,6 +374,40 @@ class AttrsTest extends UITest:
         end for
     }
 
+    "a partly silent element writes data-kyo-ev with only the events it keeps, from a constant or a signal" in {
+        def html(ui: UI)(using Frame) = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
+        val button                    = UI.button("Go").onClick(Kyo.unit).onBlur(Kyo.unit)
+        for
+            on       <- Signal.initRef(true)
+            off      <- Signal.initRef(false)
+            heard    <- html(button.silentExcept(false, "blur"))
+            kept     <- html(button.silentExcept(true, "blur"))
+            muted    <- html(button.silentExcept(on: Signal[Boolean], "blur"))
+            unmuted  <- html(button.silentExcept(off: Signal[Boolean], "blur"))
+            nothing  <- html(button.silentExcept(true, "keyup"))
+            allQuiet <- html(button.silentExcept(true, "blur").silent(true))
+        yield
+            assert(heard.contains(""" data-kyo-ev="click,blur""""), s"not silent: $heard")
+            assert(kept.contains(""" data-kyo-ev="blur""""), s"constant partial: $kept")
+            assert(muted.contains(""" data-kyo-ev="blur""""), s"signal partial on: $muted")
+            assert(unmuted.contains(""" data-kyo-ev="click,blur""""), s"signal partial off: $unmuted")
+            assert(!nothing.contains("data-kyo-ev"), s"no kept event writes no attribute: $nothing")
+            assert(!allQuiet.contains("data-kyo-ev"), s"fully silent writes no attribute: $allQuiet")
+        end for
+    }
+
+    "a partly silent text field that keeps blur also keeps blurtext, so the blur still carries its text" in {
+        def html(ui: UI)(using Frame) = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
+        val field                     = UI.input.onBlur((_, _) => Kyo.unit)
+        for
+            heard <- html(field)
+            kept  <- html(field.silentExcept(true, "blur"))
+        yield
+            assert(heard.contains(""" data-kyo-ev="blur,blurtext""""), s"not silent: $heard")
+            assert(kept.contains(""" data-kyo-ev="blur,blurtext""""), s"partly silent drops blurtext: $kept")
+        end for
+    }
+
     "silent or disabled from a signal writes data-kyo-ev for the current state, and the path either way" in {
         def html(ui: UI)(using Frame) = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
         for
