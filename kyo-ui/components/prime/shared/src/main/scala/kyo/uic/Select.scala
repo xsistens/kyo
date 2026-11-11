@@ -500,7 +500,7 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
                     button
                         .cssClass("p-select-clear-icon")
                         .jsProp("type", "button")
-                        .aria(AriaKey.label -> "Clear")
+                        .aria(Aria.label -> "Clear")
                         .onClick(clearEffect)
                         // The clear sits inside the field, whose click opens the panel.
                         .stopPropagation(true)(GlyphSvg(Icons.times, "p-icon"))
@@ -537,9 +537,9 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
         if isOpen then el = el.cssClass("p-select-open").cssClass("p-uic-overlay-anchor")
         el = validity.mark(el)
         if disabledFlag then el = el.cssClass("p-disabled")
-        if readonlyFlag then el = el.cssClass("p-uic-select-readonly").aria(AriaKey.readonly -> "true")
-        if requiredFlag then el = el.aria(AriaKey.required -> "true")
-        if loading then el = el.aria(AriaKey.busy -> "true")
+        if readonlyFlag then el = el.cssClass("p-uic-select-readonly").aria(Aria.readonly -> "true")
+        if requiredFlag then el = el.aria(Aria.required -> "true")
+        if loading then el = el.aria(Aria.busy -> "true")
         sizeV match
             case Size.Small  => el = el.cssClass("p-select-sm")
             case Size.Large  => el = el.cssClass("p-select-lg")
@@ -548,8 +548,8 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
         if variantV == FieldVariant.Filled then el = el.cssClass("p-variant-filled")
         if fluidFlag then el = el.cssClass("p-select-fluid")
         el = el.title(tooltipV)
-        access.name.foreach(v => el = el.aria(AriaKey.label -> v))
-        access.nameRef.foreach(v => el = el.aria(AriaKey.labelledby -> v))
+        access.name.foreach(v => el = el.aria(Aria.label -> v))
+        access.nameRef.foreach(v => el = el.aria(Aria.labelledby -> v))
         // WHICH element is the combobox is decided by whether there is a filter header, and it is
         // decided once: the combobox is whatever holds focus while the list is open, because
         // `aria-activedescendant` is read off the focused element or off nothing at all. Without a
@@ -562,13 +562,15 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
             case BoolValue.Dyn(on) => el.withReactiveAttr("role", on.map(isOn => if isOn then "button" else "combobox"))
             case _                 => el.role(if filtering then "button" else "combobox")
         el = el
-            .aria(AriaKey.haspopup -> "listbox")
-            .aria(AriaKey.expanded -> isOpen)
+            .aria(
+                Aria.haspopup -> "listbox",
+                Aria.expanded -> isOpen
+            )
         st.idBase.foreach { b =>
-            el = el.aria(AriaKey.controls -> listId(b))
+            el = el.aria(Aria.controls -> listId(b))
             if !filtering then
                 val (_, _, _, hiEff) = shownState(st)
-                if st.isOpen && hiEff >= 0 then el = el.aria(AriaKey.activedescendant -> optionId(b, hiEff))
+                if st.isOpen && hiEff >= 0 then el = el.aria(Aria.activedescendant -> optionId(b, hiEff))
             end if
         }
         // readonly keeps the field FOCUSABLE and says `aria-readonly` above; it simply answers no
@@ -705,11 +707,11 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
             val checkSlot: List[UI] =
                 if checkmarkFlag then
                     if isSel then List(GlyphSvg(Icons.check, "p-select-option-check-icon", "p-icon"))
-                    else List(span.cssClass("p-select-option-blank-icon").cssClass("p-icon").aria(AriaKey.hidden -> "true"))
+                    else List(span.cssClass("p-select-option-blank-icon").cssClass("p-icon").aria(Aria.hidden -> "true"))
                 else Nil
-            var row = li.cssClass("p-select-option").role("option").aria(AriaKey.selected -> isSel)
+            var row = li.cssClass("p-select-option").role("option").aria(Aria.selected -> isSel)
             if isSel then row = row.cssClass("p-select-option-selected")
-            if isDis then row = row.cssClass("p-disabled").aria(AriaKey.disabled -> "true")
+            if isDis then row = row.cssClass("p-disabled").aria(Aria.disabled -> "true")
             if i == hiEff then row = row.cssClass("p-focus").scrollAuto(true)
             // The id the list points `aria-activedescendant` at. Stamped on every option rather
             // than on the highlighted one alone, so the attribute names a target that is already
@@ -719,7 +721,7 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
             val content: UI = itemTemplateF match
                 case Present(t) =>
                     // The template may hold no text at all, so the row names itself.
-                    row = row.aria(AriaKey.label -> labelF(a))
+                    row = row.aria(Aria.label -> labelF(a))
                     t(a)
                 case Absent => span.cssClass("p-select-option-label")(labelF(a))
             row(UI.children(checkSlot :+ content)*)
@@ -756,9 +758,11 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
                     // icon, so stamp the deterministic IconField padding class.
                     .cssClass("p-uic-iconfield-end")
                     .role("combobox")
-                    .aria(AriaKey.label -> "Filter")
-                    .aria(AriaKey.haspopup -> "listbox")
-                    .aria(AriaKey.expanded -> "true")
+                    .aria(
+                        Aria.label    -> "Filter",
+                        Aria.haspopup -> "listbox",
+                        Aria.expanded -> "true"
+                    )
                 // Two way, the field writes the query itself; one way it follows what the owner holds and reports what the reader
                 // types, and kyo-ui puts it back to the owner's query.
                 s.q.bound.foreach(v => filterEl = filterEl.value(v))
@@ -776,8 +780,8 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
                     .preventScrollKeys
                     .onKeyDown(panelKey(shown, navigable, hiEff, s, pick))
                 s.idBase.foreach { b =>
-                    filterEl = filterEl.aria(AriaKey.controls -> listId(b))
-                    if hiEff >= 0 then filterEl = filterEl.aria(AriaKey.activedescendant -> optionId(b, hiEff))
+                    filterEl = filterEl.aria(Aria.controls -> listId(b))
+                    if hiEff >= 0 then filterEl = filterEl.aria(Aria.activedescendant -> optionId(b, hiEff))
                 }
                 List(
                     div.cssClass("p-select-header")(

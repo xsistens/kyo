@@ -40,7 +40,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
       * `aria-expanded`) not part of Button's own public surface. A signal is a channel,
       * patched in place.
       */
-    private[uic] def ariaRaw(name: AriaKey, value: Prop[String]): Button =
+    private[uic] def ariaRaw(name: Aria, value: Prop[String]): Button =
         new Button(p.copy(extraArias = p.extraArias :+ (name -> value)))
 
     // A button is a native control: its keys are its click, so `activate` has nothing left to answer.
@@ -50,7 +50,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
         fixed: Boolean,
         activate: Maybe[UI.Action]
     )(using Frame): UI =
-        val trigger = ariaRaw(AriaKey.haspopup, popup).ariaRaw(AriaKey.expanded, expanded)
+        val trigger = ariaRaw(Aria.haspopup, popup).ariaRaw(Aria.expanded, expanded)
         trigger.when(fixed)(_.ariaDisabled(true)).render
     end asPopupTrigger
 
@@ -119,7 +119,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
                     val says = (busy || p.ariaDisabled.read) && !off
                     renderButton(busy).disabled(off)
                         .when(pressed)((el, act) => el.onClick(act))
-                        .aria(AriaKey.disabled -> says)
+                        .aria(Aria.disabled -> says)
                         .when(says)(_.cssClass("p-uic-aria-disabled"))(contentChildren(busy)*)
                 }
         end match
@@ -132,9 +132,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
     private def answering(a: UI.Action, link: Boolean)(using Frame): UI.Action =
         direct {
             val inert = if link then p.ariaDisabled.read.now else false
-            val busy  = p.loading.read.now
-            val off   = p.disabled.read.now
-            if inert || busy || off then () else a.now
+            if inert || p.loading.read.now || p.disabled.read.now then () else a.now
         }
     end answering
 
@@ -171,11 +169,13 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
             .when(p.role)(_.role(_))
             .when(p.focusSeed)(_.focusAuto(true).focusRestore(true))
             .when(p.onKeyDown)(_.onKeyDown(_))
-            .aria(AriaKey.label -> p.access.name)
-            .aria(AriaKey.labelledby -> p.access.nameRef)
-            .aria(AriaKey.description -> p.description)
+            .aria(
+                Aria.label       -> p.access.name,
+                Aria.labelledby  -> p.access.nameRef,
+                Aria.description -> p.description
+            )
             .title(p.tooltip)
-            .when(loading)(_.aria(AriaKey.busy -> true))
+            .when(loading)(_.aria(Aria.busy -> true))
     end shared
 
     /** The `<button>` with what only it carries besides its flags: the form type, its own role, the tab stop and the form. A loading
@@ -209,9 +209,9 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
         // An inert link leaves the tab order outright, so the host's roving tabindex has nothing left to say about it.
         val linked =
             if disabled || ariaDisabled then
-                (if disabled then el else el.href(Href.Path(h))).cssClass("p-disabled").aria(AriaKey.disabled -> true).tabIndex(-1)
+                (if disabled then el else el.href(Href.Path(h))).cssClass("p-disabled").aria(Aria.disabled -> true).tabIndex(-1)
             else if loading then
-                el.href(Href.Path(h)).cssClass("p-uic-aria-disabled").aria(AriaKey.disabled -> true).tabIndex(p.tabIndex.getOrElse(0))
+                el.href(Href.Path(h)).cssClass("p-uic-aria-disabled").aria(Aria.disabled -> true).tabIndex(p.tabIndex.getOrElse(0))
             else el.when(p.tabIndex)(_.tabIndex(_)).href(Href.Path(h))
         linked.when(pressed)((node, act) => node.onClick(act))(contentChildren(loading)*)
     end renderAnchor
@@ -299,7 +299,7 @@ object Button:
         @noSetter onKeyDown: Maybe[KeyboardEvent => UI.Action] = Absent,
         @noSetter extraChildren: List[UI] = Nil,
         @noSetter extraClasses: List[String] = Nil,
-        @noSetter extraArias: List[(AriaKey, Prop[String])] = Nil,
+        @noSetter extraArias: List[(Aria, Prop[String])] = Nil,
         @noSetter role: Maybe[String] = Absent,
         @noSetter tabIndex: Maybe[Int] = Absent,
         @noSetter focusSeed: Boolean = false

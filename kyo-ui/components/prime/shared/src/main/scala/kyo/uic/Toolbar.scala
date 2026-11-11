@@ -28,8 +28,8 @@ final class Toolbar private[uic] (private[uic] val p: Toolbar.Props) extends Nod
     private[uic] def withAccessibility(v: Accessibility): Self = new Toolbar(p.copy(access = v))
     private[uic] def render(using Frame): UI                   =
         var bar = div.cssClass("p-toolbar").cssClass("p-component").role("toolbar")
-        access.name.foreach(n => bar = bar.aria(AriaKey.label -> n))
-        access.nameRef.foreach(r => bar = bar.aria(AriaKey.labelledby -> r))
+        access.name.foreach(n => bar = bar.aria(Aria.label -> n))
+        access.nameRef.foreach(r => bar = bar.aria(Aria.labelledby -> r))
         bar(
             div.cssClass("p-toolbar-start")(UI.children(startKids)*),
             div.cssClass("p-toolbar-center")(UI.children(centerKids)*),

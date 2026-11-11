@@ -46,7 +46,7 @@ final class Skeleton private[uic] (private[uic] val p: Skeleton.Props) extends N
     def animation(v: Boolean): Skeleton = new Skeleton(p.copy(animationFlag = v))
 
     private[uic] def render(using Frame): UI =
-        var el = div.cssClass("p-skeleton").cssClass("p-component").aria(AriaKey.hidden -> "true")
+        var el = div.cssClass("p-skeleton").cssClass("p-component").aria(Aria.hidden -> "true")
         if shapeV == SkeletonShape.Circle then el = el.cssClass("p-skeleton-circle")
         if !animationFlag then el = el.cssClass("p-skeleton-animation-none")
         val (w, h) = sizeV match

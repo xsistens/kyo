@@ -295,12 +295,14 @@ object Input:
             .disabled(props(_.disabled))
             .readOnly(props(_.readonly))
             .required(required)
-            .aria(AriaKey.required -> required)
+            .aria(Aria.required -> required)
             .when(native.name)(_.jsProp("name", _))
             .when(native.maxLength)((e, n) => e.jsProp("maxLength", math.max(0, n).toString))
-            .aria(AriaKey.label -> b.access.name)
-            .aria(AriaKey.labelledby -> b.access.nameRef)
-            .aria(AriaKey.description -> b.description)
+            .aria(
+                Aria.label       -> b.access.name,
+                Aria.labelledby  -> b.access.nameRef,
+                Aria.description -> b.description
+            )
             .when(b.hearsInput)(_.onInput(heard.input))
             .when(b.hearsChange)(_.onChange(heard.change))
             .when(b.blurs)(_.onBlur(heard.blur))

@@ -208,9 +208,9 @@ final class Galleria private[uic] (private[uic] val p: Galleria.Props) extends N
                     .cssClass(cls)
                     .cssClass(navCls)
                     .jsProp("type", "button")
-                    .aria(AriaKey.label -> name)
+                    .aria(Aria.label -> name)
                 if off then b = b.cssClass("p-disabled").jsProp("disabled", "true")
-                else if fixed then b = b.aria(AriaKey.disabled -> "true")
+                else if fixed then b = b.aria(Aria.disabled -> "true")
                 else b = b.onClick(setActive(target))
                 b(GlyphSvg(glyph, iconCls))
             end navButton
@@ -274,7 +274,7 @@ final class Galleria private[uic] (private[uic] val p: Galleria.Props) extends N
                                         button
                                             .cssClass("p-galleria-indicator-button")
                                             .jsProp("type", "button")
-                                            .aria(AriaKey.label -> s"Item ${i + 1}")
+                                            .aria(Aria.label -> s"Item ${i + 1}")
                                             .tabIndex(if i == active then 0 else -1),
                                         base,
                                         dotId,
@@ -334,11 +334,13 @@ final class Galleria private[uic] (private[uic] val p: Galleria.Props) extends N
                             .cssClass("p-galleria-thumbnail")
                             .jsProp("type", "button")
                             .tabIndex(if i == active then 0 else -1)
-                            .aria(AriaKey.label -> s"Item ${i + 1}")
-                            .aria(AriaKey.current -> (if i == active then "page" else "false"))
+                            .aria(
+                                Aria.label   -> s"Item ${i + 1}",
+                                Aria.current -> (if i == active then "page" else "false")
+                            )
                         itemEl(
                             roving(
-                                if fixed then thumb.aria(AriaKey.disabled -> "true") else thumb.onClick(setActive(i)),
+                                if fixed then thumb.aria(Aria.disabled -> "true") else thumb.onClick(setActive(i)),
                                 base,
                                 thumbId,
                                 i,

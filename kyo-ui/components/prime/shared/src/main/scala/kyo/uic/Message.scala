@@ -90,8 +90,10 @@ final class Message private[uic] (private[uic] val p: Message.Props) extends Nod
             .cssClass("p-message")
             .cssClass("p-component")
             .role("alert")
-            .aria(AriaKey.live -> "assertive")
-            .aria(AriaKey.atomic -> "true")
+            .aria(
+                Aria.live   -> "assertive",
+                Aria.atomic -> "true"
+            )
             // Enter/leave: fades in when inserted, and, when the app removes
             // the message from its own reactive state, plays Prime's own
             // `p-message-leave-active` keyframe on the leave ghost.
@@ -135,7 +137,7 @@ final class Message private[uic] (private[uic] val p: Message.Props) extends Nod
                 var btn = button
                     .cssClass("p-message-close-button")
                     .jsProp("type", "button")
-                    .aria(AriaKey.label -> "Close")
+                    .aria(Aria.label -> "Close")
                 onDismissedEff.foreach(e => btn = btn.onClick(e))
                 List(btn(GlyphSvg(Icons.times, "p-message-close-icon")))
 

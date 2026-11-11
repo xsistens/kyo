@@ -126,7 +126,7 @@ final class Menubar private[uic] (private[uic] val p: Menubar.Props) extends Nod
         // The bar is one tab stop from the first render; its keys are wired once the mount has a focus to move.
         list = list.tabIndex(0)
         if focusRef.isDefined then list = list.preventScrollKeys.onKeyDown(keyHandler)
-        if focus.nonEmpty then partBase.foreach(b => list = list.aria(AriaKey.activedescendant -> s"$b-active"))
+        if focus.nonEmpty then partBase.foreach(b => list = list.aria(Aria.activedescendant -> s"$b-active"))
         val listUI: UI = list(UI.children(rowsUI)*)
         // The caller's id on the component's own root, as HasElementId requires of a container.
         var root = div.cssClass("p-menubar").cssClass("p-component")
@@ -210,15 +210,15 @@ private[uic] object MenuTree:
                             // and neither means anything on a row that also claims to be presentational.
                             // The row IS the menu item; the link inside it stays roleless, as in Prime.
                             .role("menuitem")
-                            .aria(AriaKey.haspopup -> "menu")
-                            .aria(AriaKey.expanded -> isOpen),
+                            .aria(Aria.haspopup -> "menu")
+                            .aria(Aria.expanded -> isOpen),
                         it
                     )
                     if isOpen then row = row.cssClass(s"p-$prefix-item-active")
                     if focused.exists(_ == p) then
                         row = row.cssClass("p-focus").scrollAuto(true)
                         idBase.foreach(b => row = row.id(s"$b-active"))
-                    if it.p.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria(AriaKey.disabled -> "true")
+                    if it.p.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria(Aria.disabled -> "true")
                     val act: Maybe[UI.Action] =
                         if subs.isDefined && !it.p.disabledFlag.constTrue then Present(toggle) else Absent
                     val content = MenuRender.itemContent(prefix, it, act, Present(subIcon), roving)
@@ -269,7 +269,7 @@ private[uic] object MenuTree:
                     if focused.exists(_ == p) then
                         row = row.cssClass("p-focus").scrollAuto(true)
                         idBase.foreach(b => row = row.id(s"$b-active"))
-                    if it.p.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria(AriaKey.disabled -> "true")
+                    if it.p.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria(Aria.disabled -> "true")
                     def activate: UI.Action =
                         for
                             _ <- it.p.actionV match

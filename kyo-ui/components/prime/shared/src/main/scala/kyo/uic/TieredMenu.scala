@@ -146,7 +146,7 @@ final class TieredMenu private[uic] (private[uic] val p: TieredMenu.Props) exten
             idBase = partBase
         )
         var list = ul.cssClass("p-tieredmenu-root-list").role("menu")
-        if focus.nonEmpty then partBase.foreach(b => list = list.aria(AriaKey.activedescendant -> s"$b-active"))
+        if focus.nonEmpty then partBase.foreach(b => list = list.aria(Aria.activedescendant -> s"$b-active"))
         // In a popup the component's root is the overlay panel, which this does not own, so the
         // caller's id lands on the `ul[role=menu]`; see Menu.body for the same split.
         if popupSlot.binding.isDefined then access.id.foreach(v => list = list.id(v))

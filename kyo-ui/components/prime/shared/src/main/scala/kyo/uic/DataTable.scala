@@ -3188,8 +3188,8 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
         // While rows are on their way the body stands in for them, which is what `aria-busy` tells
         // assistive technology: the rows it reads now are about to change.
         loadingV.foreach {
-            case BoolValue.Dyn(sig) => tbl = tbl.aria(AriaKey.busy -> sig)
-            case BoolValue.Const(b) => if b then tbl = tbl.aria(AriaKey.busy -> "true")
+            case BoolValue.Dyn(sig) => tbl = tbl.aria(Aria.busy -> sig)
+            case BoolValue.Const(b) => if b then tbl = tbl.aria(Aria.busy -> "true")
         }
         // Prime's own classes carry the clipping a sized column needs (a value too long
         // for its column is cut rather than widening it); the layout mode they leave to
@@ -3215,8 +3215,8 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
                 case ReactiveValue.Dyn(sig)  => tbl = tbl.inlineStyle(sig)
             end match
         end if
-        access.name.foreach(v => tbl = tbl.aria(AriaKey.label -> v))
-        access.nameRef.foreach(v => tbl = tbl.aria(AriaKey.labelledby -> v))
+        access.name.foreach(v => tbl = tbl.aria(Aria.label -> v))
+        access.nameRef.foreach(v => tbl = tbl.aria(Aria.labelledby -> v))
         // The header carries an id only where a frozen row needs to hold at its height,
         // which is the one thing about this table nothing can be told and nothing can work
         // out on its own.
@@ -4912,7 +4912,7 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
         else
             var handle = span
                 .cssClass("p-datatable-column-resizer")
-                .aria(AriaKey.hidden -> "true")
+                .aria(Aria.hidden -> "true")
                 .onClick(())
                 .stopPropagation(true)
             if size.live then
@@ -5265,10 +5265,12 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
                 var b     = button
                     .cssClass("p-datatable-row-toggle-button")
                     .jsProp("type", "button")
-                    .aria(AriaKey.expanded -> open)
-                    .aria(AriaKey.label -> (if open then "Row Group Collapse" else "Row Group Expand"))
+                    .aria(
+                        Aria.expanded -> open,
+                        Aria.label    -> (if open then "Row Group Collapse" else "Row Group Expand")
+                    )
                 // Fixed open groups show their toggle, a button that says it opens or closes nothing.
-                b = if groupsFixed then b.aria(AriaKey.disabled -> "true") else b.onClick(toggleGroup(path))
+                b = if groupsFixed then b.aria(Aria.disabled -> "true") else b.onClick(toggleGroup(path))
                 List(b(GlyphSvg(glyph, "p-datatable-row-toggle-icon")))
         val content: UI = level.p.headerF match
             case Present(f) => f(path, rows)
@@ -5301,7 +5303,7 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
             else
                 // Fixed rows keep the column, which is anatomy the grid lines up by, and swap the grip class, whose move
                 // cursor says a drag would change something, for the disabled look: a grip that reads as usable invites a drag.
-                var cell = td.aria(AriaKey.hidden -> "true")
+                var cell = td.aria(Aria.hidden -> "true")
                 cell = cell.cssClass(if movesFixed then "p-uic-aria-disabled" else "p-datatable-reorderable-row-handle")
                 if move.live then
                     val at = move.base + index
@@ -5319,10 +5321,12 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
                 var b     = button
                     .cssClass("p-datatable-row-toggle-button")
                     .jsProp("type", "button")
-                    .aria(AriaKey.expanded -> isExp)
-                    .aria(AriaKey.label -> (if isExp then "Row Collapse" else "Row Expand"))
+                    .aria(
+                        Aria.expanded -> isExp,
+                        Aria.label    -> (if isExp then "Row Collapse" else "Row Expand")
+                    )
                 // A fixed expansion shows its toggle, a button that says it opens or closes nothing.
-                b = if expansionFixed then b.aria(AriaKey.disabled -> "true") else b.onClick(toggleExpand(id))
+                b = if expansionFixed then b.aria(Aria.disabled -> "true") else b.onClick(toggleExpand(id))
                 val cell = td(b(GlyphSvg(glyph, "p-datatable-row-toggle-icon")))
                 List(freeze(cell, frozen.leadAt(expanderSlot)))
 
@@ -5330,7 +5334,7 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
         val checkboxTd: List[UI] =
             if !checkboxColumn then Nil
             else
-                var cb = div.cssClass("p-checkbox").cssClass("p-component").aria(AriaKey.hidden -> "true")
+                var cb = div.cssClass("p-checkbox").cssClass("p-component").aria(Aria.hidden -> "true")
                 if isSel then cb = cb.cssClass("p-checkbox-checked")
                 if canSelect && !selectionFixed then cb = cb.onClick(toggleSelect(id))
                 else cb = cb.cssClass("p-disabled")
@@ -5376,7 +5380,7 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
                 // rule that reaches a cell, so the class and the rule are both kyo's, over
                 // Prime's own selected-row tokens.
                 if cellSelectOn then
-                    cell = cell.aria(AriaKey.selected -> pickedCells.contains(path))
+                    cell = cell.aria(Aria.selected -> pickedCells.contains(path))
                     if pickedCells.contains(path) then cell = cell.cssClass("p-uic-dt-cell-selected")
                     if canSelect && !cellsFixed then cell = cell.onClick(toggleCell(here)).stopPropagation(true)
                 end if
@@ -5470,7 +5474,7 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
         // the pointer that says it is nor the state a reader would be told about.
         if rowClickSelects && canSelect && !cellSelectOn then row = row.cssClass("p-datatable-selectable-row")
         if isSel then row = row.cssClass("p-datatable-row-selected")
-        if selectionModeV != SelectionMode.None && !cellSelectOn then row = row.aria(AriaKey.selected -> isSel)
+        if selectionModeV != SelectionMode.None && !cellSelectOn then row = row.aria(Aria.selected -> isSel)
         // A second, separate mark: the reader is acting ON this row without changing what
         // is selected, which is why Prime gives it a class of its own.
         if contextRow then row = row.cssClass("p-datatable-contextmenu-row-selected")
@@ -5585,7 +5589,7 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
             case Present(LoadingContent.Rows(f)) => row(cell(f(spec.at, spec.run)))
             case content                         =>
                 // One invisible line makes the row as tall as a row of text; the content lies over the run.
-                val line: UI       = span.cssClass("p-uic-datatable-loading-line").aria(AriaKey.hidden -> "true")("\u00a0")
+                val line: UI       = span.cssClass("p-uic-datatable-loading-line").aria(Aria.hidden -> "true")("\u00a0")
                 val over: List[UI] =
                     if spec.at != 0 then Nil
                     else

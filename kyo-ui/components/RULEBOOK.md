@@ -87,7 +87,7 @@ private def renderAnchor(h: String, loading: Boolean, disabled: Boolean)(using F
 ## 3. An element is built as one chain, never as a `var` reassigned
 
 Optional and conditional settings stay in the chain: `when(maybe)(_.x(_))` for a `Maybe`, `when(cond)(_.x)` for a condition,
-and the setters that take a `Maybe` themselves (`aria(AriaKey.label -> access.name, AriaKey.labelledby -> access.nameRef)`). A branch
+and the setters that take a `Maybe` themselves (`aria(Aria.label -> access.name, Aria.labelledby -> access.nameRef)`). A branch
 that builds two different chains is a `val` of an `if`, not a `var` set in each arm.
 
 - **Why:** `var el = ...; x.foreach(v => el = el.x(v))` spends a line and a reassignment on every optional attribute, and
@@ -100,7 +100,7 @@ classed(el, loading)
     .when(p.access.id)(_.id(_))
     .focusAuto(p.focusSeed).focusRestore(p.focusSeed)
     .when(p.onKeyDown)(_.onKeyDown(_))
-    .aria(AriaKey.label -> p.access.name)
+    .aria(Aria.label -> p.access.name)
 ```
 
 - **A setter that takes the condition gets it directly** (`focusAuto(p.focusSeed)`, `disabled(off)`; kyo-ui's client-side markers
@@ -126,7 +126,7 @@ child (`liftPropString`). Never match it into its constant and its signal at the
 - **Shape:**
 
 ```scala
-.aria(AriaKey.label -> p.access.name, AriaKey.description -> p.description)
+.aria(Aria.label -> p.access.name, Aria.description -> p.description)
 .title(p.tooltip)
 ```
 
@@ -181,7 +181,7 @@ UI.reactive {
     val says = ariaDisabled.read && !off
     renderButton(busy).disabled(off)
         .when(p.onClick)(_.onClick(_))
-        .aria(AriaKey.disabled -> says)
+        .aria(Aria.disabled -> says)
         .when(says)(_.cssClass("p-uic-aria-disabled"))(...)
 }
 ```
@@ -201,7 +201,7 @@ UI.reactive {
   stays a place the reader reaches and leaves: `silent` would drop its blur too, and the form layer's `Blur` trigger listens
   there. So `readOnly(locked)` alone says it, and the handlers stay.
 - An `aria` or `data` value writes what it is, so a flag or a number is handed over as it is, never through `toString`:
-  `aria(AriaKey.pressed -> checked, AriaKey.disabled -> says, AriaKey.valuenow -> now)` writes `"true"`, `"false"` and the number's text, and
+  `aria(Aria.pressed -> checked, Aria.disabled -> says, Aria.valuenow -> now)` writes `"true"`, `"false"` and the number's text, and
   `aria-disabled="false"` means what no attribute means (ARIA 1.2). An attribute that must be left out names that with a
   `Maybe` (or a signal of one): `Absent` writes nothing. Several attributes are one call with several entries, and a group kept
   in a `val` is `Entry.of(...)`, spread with `aria(group*)`.

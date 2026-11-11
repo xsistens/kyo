@@ -315,7 +315,7 @@ final class TreeSelect[K] private[uic] (private[uic] val p: TreeSelect.Props[K])
 
         val labelContainerUI: UI = div.cssClass("p-treeselect-label-container")(labelUI)
 
-        val dd = div.cssClass("p-treeselect-dropdown").role("button").aria(AriaKey.haspopup -> "tree").aria(AriaKey.expanded -> isOpen)
+        val dd = div.cssClass("p-treeselect-dropdown").role("button").aria(Aria.haspopup -> "tree").aria(Aria.expanded -> isOpen)
         val dropdownUI: UI =
             if loading then dd(GlyphSvg(Icons.spinner, "p-treeselect-loading-icon", "p-icon", "p-icon-spin"))
             else dd(GlyphSvg(Icons.chevronDown, "p-treeselect-dropdown-icon", "p-icon"))
@@ -376,7 +376,7 @@ final class TreeSelect[K] private[uic] (private[uic] val p: TreeSelect.Props[K])
         // [[HasElementId]]. The tree's row and list ids derive from the same value.
         access.id.foreach(v => el = el.id(v))
         if selectedLabels.nonEmpty then el = el.cssClass("p-inputwrapper-filled")
-        if loading then el = el.aria(AriaKey.busy -> "true")
+        if loading then el = el.aria(Aria.busy -> "true")
         if isOpen then el = el.cssClass("p-treeselect-open").cssClass("p-uic-overlay-anchor")
         el = validity.mark(el)
         if disabledFlag then el = el.cssClass("p-disabled")
@@ -388,14 +388,14 @@ final class TreeSelect[K] private[uic] (private[uic] val p: TreeSelect.Props[K])
         if variantV == FieldVariant.Filled then el = el.cssClass("p-variant-filled")
         if fluidFlag then el = el.cssClass("p-treeselect-fluid")
         el = el.title(tooltipV)
-        access.name.foreach(v => el = el.aria(AriaKey.label -> v))
-        access.nameRef.foreach(v => el = el.aria(AriaKey.labelledby -> v))
-        el = el.role("combobox").aria(AriaKey.haspopup -> "tree").aria(AriaKey.expanded -> isOpen)
-        el = el.aria(AriaKey.controls -> Tree.rootListId(st.idBase))
-        if isOpen && st.hiV >= 0 then el = el.aria(AriaKey.activedescendant -> Tree.rowId(st.idBase, st.hiV))
+        access.name.foreach(v => el = el.aria(Aria.label -> v))
+        access.nameRef.foreach(v => el = el.aria(Aria.labelledby -> v))
+        el = el.role("combobox").aria(Aria.haspopup -> "tree").aria(Aria.expanded -> isOpen)
+        el = el.aria(Aria.controls -> Tree.rootListId(st.idBase))
+        if isOpen && st.hiV >= 0 then el = el.aria(Aria.activedescendant -> Tree.rowId(st.idBase, st.hiV))
         if !disabledFlag then
             el = el.tabIndex(0).preventScrollKeys
-            if fixed then el = el.aria(AriaKey.readonly -> "true")
+            if fixed then el = el.aria(Aria.readonly -> "true")
             // The one click listener: a click anywhere on the field toggles the panel.
             // A panel fixed open has no close for a click to ask for, so the field takes none.
             if !fixed && !openFixedOpen then el = el.onClick(toggle)
