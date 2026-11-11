@@ -49,12 +49,12 @@ import scala.collection.mutable
   * generator degrades gracefully to path-based keys when it is absent.
   *
   * @param variables         the operation's variables (name → encoded JSON), used
-  *                          to compute argument-aware [[FieldKey]]s
+  *                          to compute argument-aware `FieldKey`s
   * @param rootKey           the record key the root object is stored under
   *                          (see [[CacheKey.rootKey]])
   * @param cacheKeyGenerator the policy that assigns a `CacheKey` to each object
   * @param fieldPolicies     per-field policies consulted for the storage
-  *                          [[FieldKey]] (e.g. a connection field dropping its
+  *                          `FieldKey` (e.g. a connection field dropping its
   *                          pagination arguments)
   * @param merger            the record merger for two occurrences of one key in
   *                          the response — the store's own, so the response is
