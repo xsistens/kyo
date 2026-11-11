@@ -10,7 +10,7 @@ import kyo.apollo.json.SchemaJson
 /** Decodes a typed `data` payload `D` from the slim [[Json]] AST — what response
   * decoding ([[GraphQLResponse.parse]]) and a denormalized cache read need.
   *
-  * A payload of the wrong shape is an [[ApolloParseException]] failure built with
+  * A payload of the wrong shape is an `ApolloParseException` failure built with
   * the caller's frame. Anything a decoder throws is a defect: the callers run it
   * where a throw becomes a panic, never a failure.
   */
@@ -24,7 +24,7 @@ trait JsonDecoder[D]:
   * records back into `D`.
   *
   * A `data` payload's codec comes from one of two places:
-  *   - [[fromSchema]] wraps a kyo-schema `Schema[D]` — how an operation over a
+  *   - `fromSchema` wraps a kyo-schema `Schema[D]` — how an operation over a
   *     `derives Schema` case class supplies it; and
   *   - a [[SelectionBuilder]] supplies its own *structural* codec, so the
   *     inline-query path needs no `Schema` for its named-tuple result (avoiding
@@ -36,7 +36,7 @@ trait JsonCodec[D] extends JsonDecoder[D]:
 object JsonCodec:
 
     /** The codec of an operation or fragment over a `derives Schema` type: decodes and
-      * encodes through kyo-schema ([[SchemaJson]]). A payload the schema rejects is an
+      * encodes through kyo-schema (`SchemaJson`). A payload the schema rejects is an
       * `ApolloParseException` failure carrying kyo's `DecodeException` as cause.
       */
     def fromSchema[D](using schema: Schema[D]): JsonCodec[D] =

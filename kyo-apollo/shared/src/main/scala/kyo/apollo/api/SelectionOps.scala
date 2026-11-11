@@ -177,7 +177,7 @@ extension [A](sb: SelectionBuilder[RootSubscription, A])
 end extension
 
 extension [Origin, A <: AnyNamedTuple](sb: SelectionBuilder.Bidirectional[Origin, A])
-    /** Build a cache-access [[Fragment]] from this selection — the
+    /** Build a cache-access `Fragment` from this selection — the
       * targeted-read/write analogue of [[toQuery]].
       *
       * The GraphQL type the fragment applies to (naming the record's type

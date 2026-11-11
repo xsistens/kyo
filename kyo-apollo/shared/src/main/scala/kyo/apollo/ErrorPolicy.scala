@@ -6,7 +6,7 @@ import kyo.apollo.network.ExecutionContext
   * reduced to its data: the react-apollo `errorPolicy`.
   *
   * Like [[kyo.apollo.cache.normalized.FetchPolicy]], an `ErrorPolicy` is an
-  * [[ExecutionContext.Element]] keyed by its own companion, so it rides the
+  * `ExecutionContext.Element` keyed by its own companion, so it rides the
   * per-request context bag: `ApolloCall.errorPolicy(p)` attaches it and a consumer
   * reads it back with `context.get(ErrorPolicy)`. When none is attached,
   * [[ErrorPolicy.Default]] (`None`) applies.

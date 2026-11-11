@@ -37,14 +37,14 @@ trait Fragment[D]:
 
     /** The root field describing the fragment's selection set.
       *
-      * Its [[CompiledField.selections]] are the fragment's fields and its leaf type
+      * Its `CompiledField.selections` are the fragment's fields and its leaf type
       * names the type condition the fragment applies to (e.g. `User`). Unlike an
       * operation's root field this is not an operation-level `data` field but the
       * shape of the single object the fragment reads/writes.
       */
     def rootField: CompiledField
 
-    /** This fragment's variables as a [[Json.JObj]] of `name -> value` pairs, for
+    /** This fragment's variables as a `Json.JObj` of `name -> value` pairs, for
       * argument-aware [[FieldKey]]s and redirect resolution — the fragment analogue
       * of [[kyo.apollo.api.Operation.variables]]. Defaults to an empty object, since
       * most fragments select only argument-free fields.

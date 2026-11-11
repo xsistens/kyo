@@ -7,7 +7,7 @@ import kyo.apollo.json.Json
 /** A value stored under a field of a [[Record]].
   *
   * Deliberately narrow so a record is always a flat, storable shape: a JSON
-  * scalar stays inline, a nested object becomes a [[Reference]] to a separate
+  * scalar stays inline, a nested object becomes a `Reference` to a separate
   * record, lists recurse element-wise, and an absent/`null` value is its own
   * case. Object values never appear here — the normalizer lifts them into their
   * own records and leaves a reference behind. Mirrors apollo-kotlin, where a
@@ -20,7 +20,7 @@ object RecordValue:
       *
       * Reuses the existing [[kyo.apollo.json.Json]] scalars rather than inventing a
       * parallel scalar type. `null` is modelled by [[RecordValue.Null]], so a
-      * `Scalar` is expected to wrap a non-null scalar ([[Json.JStr]], a number
+      * `Scalar` is expected to wrap a non-null scalar (`Json.JStr`, a number
       * ([[Json.JInt]], [[Json.JDec]], [[Json.JNum]]) or [[Json.JBool]]); [[scalar]]
       * enforces this.
       */
@@ -37,7 +37,7 @@ object RecordValue:
     /** An explicit `null` field value. */
     case object Null extends RecordValue
 
-    /** Wrap a non-null JSON scalar, mapping [[Json.JNull]] to [[Null]].
+    /** Wrap a non-null JSON scalar, mapping `Json.JNull` to [[Null]].
       *
       * @throws IllegalArgumentException if `value` is a composite ([[Json.JObj]]
       *                                  or [[Json.JArr]]) — those must be

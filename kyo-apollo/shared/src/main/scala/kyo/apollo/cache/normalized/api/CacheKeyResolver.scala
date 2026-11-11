@@ -41,7 +41,7 @@ object CacheKeyResolver:
       * `<FieldLeafType>:<idValue>`, e.g. `book(id: "42"): Book` → `Book:42`.
       *
       * The typename comes from the field's own return type
-      * ([[CompiledField.fieldType]]'s leaf), and the id from the named argument
+      * (`CompiledField.fieldType`'s leaf), and the id from the named argument
       * resolved against `variables`. Fields without that argument are not
       * redirected. This is the common id-based redirect most schemas want.
       *

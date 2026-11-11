@@ -24,7 +24,7 @@ import scala.collection.immutable.VectorMap
   *     `operationName`, `variables`, and `extensions` when present), each
   *     percent-encoded. Suitable for cacheable reads and GET-based APQ.
   *   - every other method (`POST` by default) — a JSON body built by
-  *     [[OperationRequestBody]], the single source of request-body serialization.
+  *     `OperationRequestBody`, the single source of request-body serialization.
   *     The composer never hand-builds `{ query, … }`; it delegates and only feeds an
   *     `extensions` map in. With an [[kyo.apollo.Upload]] among the variables the
   *     body is `multipart/form-data` per the graphql-multipart-request-spec.

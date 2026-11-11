@@ -13,7 +13,7 @@ import kyo.apollo.exception.CacheReadFailure
   * cache hit from a miss — without inspecting `data`/`exception` heuristically.
   * It lives in `kyo.apollo.network` alongside [[ApolloResponse]] (rather than in the
   * cache package) so the response model keeps depending only on `network`, the
-  * leaf `exception` package and the cache's key VALUE type ([[CacheKey]]), never
+  * leaf `exception` package and the cache's key VALUE type (`CacheKey`), never
   * on the cache machinery: the dependency runs cache → network, not the reverse.
   * Mirrors apollo-kotlin's `CacheInfo`, pared down to the flags kyo-apollo uses.
   *

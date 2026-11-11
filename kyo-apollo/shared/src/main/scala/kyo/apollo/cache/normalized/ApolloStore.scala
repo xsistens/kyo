@@ -63,8 +63,8 @@ import scala.collection.mutable
   * handler.
   *
   * @param cache             the backing record store
-  * @param cacheKeyGenerator the write-side object → [[CacheKey]] policy
-  * @param cacheKeyResolver  the read-side field → [[CacheKey]] redirect policy
+  * @param cacheKeyGenerator the write-side object → `CacheKey` policy
+  * @param cacheKeyResolver  the read-side field → `CacheKey` redirect policy
   * @param fieldPolicies     per-field declarative policies (connection
   *                          pagination keys, field read redirects, custom
   *                          merges); defaults to the identity policy
@@ -82,7 +82,7 @@ final class ApolloStore(
     /** The record-merge policy derived from [[fieldPolicies]]: a per-field merger
       * (e.g. connection edge unioning) when policies are configured, otherwise the
       * default field-wise union. The store's ONE answer to "two records under one
-      * key": the [[Normalizer]] merges repeated keys of a response with it, a batch
+      * key": the `Normalizer` merges repeated keys of a response with it, a batch
       * of fragment writes merges repeated keys with it, and the backend merges every
       * commit with it — so merge policy lives with the store, not the storage layer.
       */
@@ -277,7 +277,7 @@ final class ApolloStore(
       * Devtools "Cache" tab reads via `client.cache.extract(true)`.
       *
       * The result is a flat object whose keys are record cache-ids; every
-      * [[RecordValue.Reference]] renders as `{"__ref": "<key>"}`, lists as JSON
+      * `RecordValue.Reference` renders as `{"__ref": "<key>"}`, lists as JSON
       * arrays, scalars inline and [[RecordValue.Null]] as `null`. kyo's well-known
       * root keys (`QUERY_ROOT` / `MUTATION_ROOT` / `SUBSCRIPTION_ROOT`) are
       * translated to Apollo's (`ROOT_QUERY` / `ROOT_MUTATION` / `ROOT_SUBSCRIPTION`)
@@ -305,7 +305,7 @@ final class ApolloStore(
     end extract
 
     /** The devtools dump's rendering of a record key — the one place [[extract]]
-      * lowers a [[CacheKey]] to a string. A kyo root key (or a path rooted at one)
+      * lowers a `CacheKey` to a string. A kyo root key (or a path rooted at one)
       * is translated to Apollo's convention so the Devtools cache view is
       * recognizable; all other keys pass through.
       */
@@ -334,7 +334,7 @@ final class ApolloStore(
 
     /** Normalize `operation`'s typed `data` into flat records without storing
       * them. The data is re-encoded through the operation's `dataCodec` into a
-      * response map and walked by the [[Normalizer]] — the same data map the
+      * response map and walked by the `Normalizer` — the same data map the
       * network path would have decoded from. Pure: it reads no store state.
       */
     def normalize[D](operation: Operation.Normalizable[D], data: D): Map[CacheKey, Record] =
@@ -399,7 +399,7 @@ final class ApolloStore(
       * and the write still returns its changed keys.
       *
       * @param cacheHeaders write hints forwarded to the backend (e.g. an expiry
-      *                     stamp, or [[CacheHeaders.DoNotStore]])
+      *                     stamp, or `CacheHeaders.DoNotStore`)
       */
     def writeOperation[D](
         operation: Operation.Normalizable[D],
@@ -420,7 +420,7 @@ final class ApolloStore(
     /** Reassemble `operation`'s typed `data` from the cache *and* the set of record
       * keys the read depended on (root plus every reference/redirect target).
       *
-      * The cache interceptor stamps these keys onto [[CacheInfo.dependentKeys]] so a
+      * The cache interceptor stamps these keys onto `CacheInfo.dependentKeys` so a
       * watcher knows exactly which keys to watch: it re-emits only when a write's
       * changed keys intersect this set. Fails like [[readOperation]].
       */
@@ -454,14 +454,14 @@ final class ApolloStore(
       * [[publish]]ing them so watchers react.
       *
       * The targeted-write counterpart to [[writeOperation]]: instead of rooting at
-      * an operation key it roots the [[Normalizer]] at `cacheKey`, so
+      * an operation key it roots the `Normalizer` at `cacheKey`, so
       * `writeFragment(userFragment, CacheKey("User", "1"), data)` merges straight
       * into `User:1` — the same record a full query reaches by reference — letting
       * app code imperatively update a single entity and have every watcher depending
       * on it re-emit.
       *
       * @param cacheHeaders write hints forwarded to the backend (e.g.
-      *                     [[CacheHeaders.DoNotStore]])
+      *                     `CacheHeaders.DoNotStore`)
       */
     def writeFragment[D](
         fragment: Fragment[D],
@@ -485,7 +485,7 @@ final class ApolloStore(
       *
       * Two entries may normalize to the same record key (the same entity written
       * twice, or a shared nested object). They are merged in argument order through
-      * the store's record merger — what [[Normalizer]] does with two occurrences of
+      * the store's record merger — what `Normalizer` does with two occurrences of
       * one key inside a single response, and what the backend does with two writes —
       * so a batch behaves like the one response it stands in for, field policies
       * included.
@@ -538,7 +538,7 @@ final class ApolloStore(
             .normalize(enriched, fragment.rootField)
     end fragmentRecords
 
-    /** The record key this store's [[CacheKeyGenerator]] gives an object of type
+    /** The record key this store's `CacheKeyGenerator` gives an object of type
       * `typeName` with the response fields `obj` — a
       * [[kyo.apollo.exception.NoCacheIdentityException]] on the row when the
       * generator has no identity for it.
@@ -568,7 +568,7 @@ final class ApolloStore(
       *
       * The targeted-read counterpart to [[readOperation]]: it denormalizes starting
       * at `cacheKey` rather than an operation root, reusing the same
-      * [[CacheBatchReader]] decode so the result equals what a full operation would
+      * `CacheBatchReader` decode so the result equals what a full operation would
       * have produced for that object. A [[kyo.apollo.exception.CacheMissException]]
       * on the row when the cache cannot satisfy every field the fragment selects; a
       * decode defect is a panic.
@@ -906,7 +906,7 @@ final class ApolloStore(
       * returning — and [[publish]]ing — the set of removed keys.
       *
       * A reachability mark-and-sweep, seeded from the well-known operation roots
-      * ([[CacheKey.QueryRoot]] / [[CacheKey.MutationRoot]] /
+      * (`CacheKey.QueryRoot` / [[CacheKey.MutationRoot]] /
       * [[CacheKey.SubscriptionRoot]]), every record any live optimistic layer holds
       * or points at — so a record kept alive *only* by a pending optimistic mutation
       * survives GC and reappears if that mutation rolls back — and the retain set:
@@ -914,7 +914,7 @@ final class ApolloStore(
       * [[retain]]. Not every read starts at an operation root: a fragment read starts
       * at any key, and a watch whose root field was re-pointed still depends on the
       * records its last read reached until it has read again. Reachability is
-      * transitively followed through [[Record.references]] (which already walks
+      * transitively followed through `Record.references` (which already walks
       * lists), and every stored key not reached is dropped.
       *
       * Marking and sweeping are one [[NormalizedCache.transact]]: the unreachable set
@@ -965,7 +965,7 @@ final class ApolloStore(
     /** The set of record keys reachable from a root, over the `all`-records
       * snapshot: the operation roots, every live optimistic layer's records and
       * their referents, and the `pinned` keys of the retain set, transitively closed
-      * through [[Record.references]]. Optimistic records live outside the backing
+      * through `Record.references`. Optimistic records live outside the backing
       * cache, so their keys *and* the keys they point at are seeded directly rather
       * than discovered by walking `all` — off one snapshot of the stack, like a read.
       */
@@ -992,7 +992,7 @@ final class ApolloStore(
       * The targeted-invalidation counterpart to the sweeping [[garbageCollect]]:
       * with `cascade = false` (the default) it drops just `cacheKey`; with
       * `cascade = true` it additionally drops every record transitively reachable
-      * from it through [[Record.references]], so evicting an entity also clears the
+      * from it through `Record.references`, so evicting an entity also clears the
       * subtree it owned (mirroring apollo-kotlin's `ApolloStore.remove(cacheKey,
       * cascade)`). Returns the empty set (and publishes nothing) when `cacheKey`
       * was already absent.
@@ -1010,7 +1010,7 @@ final class ApolloStore(
 
     /** `start` and every record transitively reachable from it over the `all`
       * snapshot — the keys a cascading [[evict]] removes. The traversal walks
-      * [[Record.references]] from each present record, so a cascade clears an entire
+      * `Record.references` from each present record, so a cascade clears an entire
       * owned subtree in one pass; absent keys along the way are simply skipped.
       */
     private def subtree(all: Map[CacheKey, Record], start: CacheKey): Set[CacheKey] =

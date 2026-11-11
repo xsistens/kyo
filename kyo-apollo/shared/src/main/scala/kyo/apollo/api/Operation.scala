@@ -38,7 +38,7 @@ sealed trait Operation[D]:
       */
     def rootField: CompiledField
 
-    /** This operation's variables as a [[Json.JObj]] of `name -> value` pairs.
+    /** This operation's variables as a `Json.JObj` of `name -> value` pairs.
       *
       * Built per-variable (not by deriving+encoding the whole operation) so the
       * wire behaviour of optionals is preserved exactly: an absent optional

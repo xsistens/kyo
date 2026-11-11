@@ -61,7 +61,7 @@ sealed trait SelectionBuilder[Origin, A] extends JsonDecoder[A]:
     private[api] def argEntries: Chunk[SelectionBuilder.Arg]
 
     /** Decode a GraphQL response object into the result `A`. A response of the wrong
-      * shape is an [[ApolloParseException]] failure naming the shape expected and the
+      * shape is an `ApolloParseException` failure naming the shape expected and the
       * JSON type found; anything a codec throws beyond that is a panic.
       */
     def decode(json: Json)(using Frame): Result[ApolloParseException, A]

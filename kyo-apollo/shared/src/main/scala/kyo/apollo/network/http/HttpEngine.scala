@@ -22,7 +22,7 @@ import kyo.apollo.exception.HttpEngineFailure
 trait HttpEngine:
 
     /** Send `request` and complete with its buffered [[HttpEngine.Response]]. The
-      * effect aborts with an [[HttpEngineFailure]] only when no response was received
+      * effect aborts with an `HttpEngineFailure` only when no response was received
       * (the connection failed, the request could not be sent); a non-2xx status still
       * completes successfully — status interpretation is the transport's job, not
       * the engine's. Interrupting the effect cancels the request. Anything else an

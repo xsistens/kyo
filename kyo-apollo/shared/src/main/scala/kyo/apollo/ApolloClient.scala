@@ -40,7 +40,7 @@ import kyo.apollo.runtime.ResponseStream
   *
   * At creation it composes, in order:
   *
-  *   1. the **HTTP tier** — the configured [[HttpInterceptor]]s presented as a
+  *   1. the **HTTP tier** — the configured `HttpInterceptor`s presented as a
   *      single [[kyo.apollo.network.http.HttpEngine]] via
   *      [[HttpInterceptorChain.asEngine]], wrapping the real
   *      [[kyo.apollo.network.http.FetchHttpEngine]] (or an injected one for tests);
@@ -180,7 +180,7 @@ final class ApolloClient private (
 end ApolloClient
 
 /** A prepared, not-yet-executed GraphQL operation carrying the
-  * [[ApolloRequest.Builder]] its executions are built from and a back-reference to
+  * `ApolloRequest.Builder` its executions are built from and a back-reference to
   * the [[ApolloClient]] that runs it.
   *
   * It is the concrete implementation of the [[kyo.apollo.runtime.ApolloCall]]
@@ -236,8 +236,8 @@ final class ApolloCall[D] private[apollo] (
     def httpMethod(method: HttpMethod): ApolloCall[D] =
         withRequest(_.httpMethod(method))
 
-    /** Pin the cache [[FetchPolicy]] for this call. The policy rides the request's
-      * [[ExecutionContext]] (no new request field), where the
+    /** Pin the cache `FetchPolicy` for this call. The policy rides the request's
+      * `ExecutionContext` (no new request field), where the
       * [[kyo.apollo.cache.normalized.CacheInterceptor]] reads it back; without a cache
       * installed it is inert metadata.
       */
@@ -245,7 +245,7 @@ final class ApolloCall[D] private[apollo] (
         withRequest(_.addExecutionContext(ExecutionContext.Empty + policy))
 
     /** Pin the [[ErrorPolicy]] for this call (react-apollo `errorPolicy`). Rides the
-      * request's [[ExecutionContext]] like [[fetchPolicy]], for a layer that reduces a
+      * request's `ExecutionContext` like [[fetchPolicy]], for a layer that reduces a
       * response to its data to read back (kyo-apollo-ui's `call.data`). This module's
       * own `stream`, `execute` and `watch()` do not consult it: they always yield the
       * full response, with `data` and `errors` as values.

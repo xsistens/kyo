@@ -18,7 +18,7 @@ import kyo.apollo.runtime.ResponseStream
   * GraphQL errors is a legitimate server answer, not a transient fault, so it is
   * passed straight through. The classifier is injectable via `retryWhen`; the
   * default [[RetryOnErrorInterceptor.transportErrors]] retries
-  * [[ApolloNetworkException]] and 5xx [[ApolloHttpException]]s.
+  * `ApolloNetworkException` and 5xx [[ApolloHttpException]]s.
   *
   * Each retry waits for the schedule's next delay with `Async.sleep` in the fiber
   * that consumes the response stream, so the wait reads the ambient `Clock`

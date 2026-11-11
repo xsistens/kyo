@@ -30,7 +30,7 @@ import scala.collection.immutable.TreeMap
   *     first.
   *   - **`expireAfterMillis`** — a per-**record** time-to-live. Each written
   *     record is stamped with the epoch-millis it was received (from
-  *     [[CacheHeaders.Date]] when present, otherwise the store's clock), and a
+  *     `CacheHeaders.Date` when present, otherwise the store's clock), and a
   *     record older than the TTL reads back as a miss.
   *   - **`maxAge`** — a per-**field** time-to-live. Each written field is
   *     stamped with its own received date, and a field older than `maxAge` reads
@@ -170,7 +170,7 @@ final class MemoryCache(
             }
         }
 
-    /** The epoch-millis to stamp a write with: the [[CacheHeaders.Date]] header
+    /** The epoch-millis to stamp a write with: the `CacheHeaders.Date` header
       * when supplied, else `now`.
       */
     private def writeDate(cacheHeaders: CacheHeaders, now: Long): Long =

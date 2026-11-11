@@ -6,7 +6,7 @@ import kyo.apollo.network.ApolloResponse
 import kyo.apollo.runtime.ResponseStream
 
 /** Intercepts at the **operation layer** — above HTTP, in terms of the typed
-  * [[ApolloRequest]] / [[ApolloResponse]] envelope. This is where cache reads,
+  * `ApolloRequest` / `ApolloResponse` envelope. This is where cache reads,
   * request retries, APQ negotiation, and subscription plumbing live.
   *
   * Unlike an [[HttpInterceptor]] (which sees exactly one request/response), an
@@ -22,7 +22,7 @@ import kyo.apollo.runtime.ResponseStream
 trait ApolloInterceptor:
 
     /** Handle `request`, delegating to `chain.proceed` to continue toward the
-      * network, and return the resulting stream of [[ApolloResponse]] values.
+      * network, and return the resulting stream of `ApolloResponse` values.
       */
     def intercept[D](
         request: ApolloRequest[D],

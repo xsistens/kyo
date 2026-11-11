@@ -10,7 +10,7 @@ import kyo.Present
 import kyo.Sync
 import kyo.apollo.api.Operation
 
-/** An immutable envelope around one [[Operation]] plus the per-request execution
+/** An immutable envelope around one `Operation` plus the per-request execution
   * metadata the transport needs — one execution of an operation.
   *
   * This carries **no serialization logic**: the body is composed by

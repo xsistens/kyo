@@ -23,7 +23,7 @@ import kyo.apollo.network.http.HttpRequestBody
   *   - the value of every header named in `redact` (compared case-insensitively),
   *     written as `<redacted>`;
   *   - the value of every operation variable: a JSON body is logged with its
-  *     `variables` passed through [[DevtoolsInterceptor.redactValues]] (names, nesting
+  *     `variables` passed through `DevtoolsInterceptor.redactValues` (names, nesting
   *     and `null`s stay, every value becomes `"<redacted>"`), each element of a
   *     batched array alike. The interceptor sees the wire body, not the operation, so
   *     it cannot tell a mutation's credentials from a query's arguments and redacts
@@ -83,7 +83,7 @@ object LoggingInterceptor:
     val sensitiveHeaders: Set[String] = Set("Authorization", "Cookie", "Set-Cookie", "Proxy-Authorization")
 
     /** `json` (a request body, or a batch of them) with the value of every operation's
-      * `variables` redacted by [[DevtoolsInterceptor.redactValues]].
+      * `variables` redacted by `DevtoolsInterceptor.redactValues`.
       */
     private def withoutVariableValues(json: Json): Json =
         json match

@@ -9,7 +9,7 @@ import kyo.apollo.Upload
 /** The JSON AST the client's response, variables and cache layers share.
   *
   * Numbers keep the precision the wire carries: an integer that fits a `Long` is a
-  * [[JInt]], a decimal a `Double` represents exactly is a [[JNum]], and anything
+  * `JInt`, a decimal a `Double` represents exactly is a [[JNum]], and anything
   * else (an integer beyond `Long`, a decimal with more digits than a `Double`
   * holds) is a [[JDec]]. [[JsonParser]] chooses the case, and [[render]] writes each
   * back in the form it was read.

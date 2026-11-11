@@ -8,7 +8,7 @@ import kyo.apollo.exception.HttpEngineFailure
   * of UTF-8 text chunks (a `multipart/mixed` incremental-delivery body). kyo-http
   * hands a live response body only inside `HttpClient.sendWith`'s continuation; the
   * seam hands it back to the transport as a lazy stream instead. A chunked body that
-  * drops mid-stream aborts with the engine's [[HttpEngineFailure]].
+  * drops mid-stream aborts with the engine's `HttpEngineFailure`.
   */
 enum HttpStreamBody:
     case Buffered(text: String)

@@ -14,7 +14,7 @@ import scala.collection.immutable.VectorMap
   * their otherwise-incompatible message shapes down onto this one sealed set, so
   * the [[kyo.apollo.network.ws.WebSocketNetworkTransport]] can route
   * messages protocol-agnostically. Only the frames the transport actually reacts
-  * to are modelled; anything unrecognised folds into [[Unknown]] rather than
+  * to are modelled; anything unrecognised folds into `Unknown` rather than
   * throwing, keeping the parse total (a stray or future message type never
   * breaks an active socket).
   *

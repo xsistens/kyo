@@ -10,9 +10,9 @@ import kyo.apollo.json.Json
 import scala.collection.mutable
 
 /** Turns a GraphQL response `data` map into a flat set of normalized
-  * [[Record]]s, keyed by [[CacheKey]].
+  * [[Record]]s, keyed by `CacheKey`.
   *
-  * The normalizer walks the operation's [[Operation.rootField]] selection tree
+  * The normalizer walks the operation's `Operation.rootField` selection tree
   * alongside the response data map — the *same* [[CompiledField]] tree the typed
   * decoder uses — flattening the nested response into deduplicated records:
   *
@@ -24,7 +24,7 @@ import scala.collection.mutable
   *     object lists, scalars for scalar lists);
   *   - `null` becomes [[RecordValue.Null]].
   *
-  * Each object's storage [[CacheKey]] comes from the [[CacheKeyGenerator]]
+  * Each object's storage `CacheKey` comes from the [[CacheKeyGenerator]]
   * (typically `__typename` + id), falling back to a position-based key from the
   * response path when the object carries no stable id. Two occurrences of the
   * same key within one response are merged into a single record before the map
@@ -52,7 +52,7 @@ import scala.collection.mutable
   *                          to compute argument-aware [[FieldKey]]s
   * @param rootKey           the record key the root object is stored under
   *                          (see [[CacheKey.rootKey]])
-  * @param cacheKeyGenerator the policy that assigns a [[CacheKey]] to each object
+  * @param cacheKeyGenerator the policy that assigns a `CacheKey` to each object
   * @param fieldPolicies     per-field policies consulted for the storage
   *                          [[FieldKey]] (e.g. a connection field dropping its
   *                          pagination arguments)
@@ -78,7 +78,7 @@ final class Normalizer(
       *
       * @param data      the response `data` object (as encoded by
       *                  `Operation.dataCodec`)
-      * @param rootField the operation's [[Operation.rootField]]; its
+      * @param rootField the operation's `Operation.rootField`; its
       *                  [[CompiledField.selections]] are the top-level fields and
       *                  its leaf type names the root object's GraphQL type
       * @return every record produced, keyed by cache key, with duplicate keys
