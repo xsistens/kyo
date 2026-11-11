@@ -80,7 +80,7 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
         Signal.initRef[Maybe[String]](Absent).map(ref =>
             Channel(
                 "aria-flag",
-                UI.div(UI.span("x").aria(AriaKey.disabled -> (ref: Signal[Maybe[String]]))),
+                UI.div(UI.span("x").aria(Aria.disabled -> (ref: Signal[Maybe[String]]))),
                 ref.set(Present("true")).unit,
                 ref.waiters
             )
@@ -182,7 +182,7 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
                 }
                 for
                     on   <- Signal.initRef[Maybe[String]](Present("true"))
-                    root <- ReactiveUI.normalize(UI.div(UI.span("x").aria(AriaKey.disabled -> (on: Signal[Maybe[String]]))), Seq.empty)
+                    root <- ReactiveUI.normalize(UI.div(UI.span("x").aria(Aria.disabled -> (on: Signal[Maybe[String]]))), Seq.empty)
                     _    <- ReactiveUI.subscribe(root, exchange)
                     _    <- on.set(Absent)
                     _    <- assertEventually(Sync.defer(ops.size == 1))

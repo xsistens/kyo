@@ -251,10 +251,10 @@ final class OrganizationChart[K] private[uic] (private[uic] val p: OrganizationC
                     .cssClass("p-organizationchart-node-toggle-button")
                     .role("button")
                     .tabIndex(0)
-                    .aria(AriaKey.expanded -> isExpanded)
+                    .aria(Aria.expanded -> isExpanded)
                 // A constant nobody hears is fixed: the toggle stays a tab stop and says it changes nothing.
                 val pressable =
-                    if expandedSlot.fixed then shell.aria(AriaKey.disabled -> "true")
+                    if expandedSlot.fixed then shell.aria(Aria.disabled -> "true")
                     else
                         shell
                             .onClick(toggleNode(node.id))

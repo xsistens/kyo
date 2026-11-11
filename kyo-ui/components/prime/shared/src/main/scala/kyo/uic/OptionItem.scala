@@ -102,8 +102,8 @@ object OptionItem:
       * the same text as its accessible name.
       */
     private def groupRow(label: String, headerClass: String, options: List[UI])(using Frame): UI =
-        val header: UI = li.cssClass(headerClass).role("presentation").aria(AriaKey.hidden -> "true")(label)
-        li.cssClass("p-uic-option-group").role("group").aria(AriaKey.label -> label)(
+        val header: UI = li.cssClass(headerClass).role("presentation").aria(Aria.hidden -> "true")(label)
+        li.cssClass("p-uic-option-group").role("group").aria(Aria.label -> label)(
             ul.cssClass("p-uic-option-group-list").role("none")(UI.children(header :: options)*)
         )
     end groupRow

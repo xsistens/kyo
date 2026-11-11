@@ -2,7 +2,7 @@ package kyo.internal
 
 import scala.quoted.*
 
-/** The `aria` and `data` string interpolators (see [[kyo.AriaKey]] and [[kyo.DataKey]]): the compile-time checks that make a key
+/** The `aria` and `data` string interpolators (see [[kyo.Aria]] and [[kyo.Data]]): the compile-time checks that make a key
   * compile, and the key they build.
   *
   * The literal includes the attribute prefix, `aria-` or `data-`, and the checks read the literal's static parts. Each static part must
@@ -26,12 +26,12 @@ private[kyo] object KeyMacro:
     // it keeps the expansion off the key's companion, which holds the constants that are themselves built by this interpolator.
 
     /** The `aria"..."` expansion: the static checks, then the key the literal and its arguments make. */
-    def aria(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[kyo.AriaKey] =
-        '{ kyo.internal.KeyMacro.nameOf(${ key(sc, args, "aria-", data = false) }, "aria-", data = false).asInstanceOf[kyo.AriaKey] }
+    def aria(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[kyo.Aria] =
+        '{ kyo.internal.KeyMacro.nameOf(${ key(sc, args, "aria-", data = false) }, "aria-", data = false).asInstanceOf[kyo.Aria] }
 
     /** The `data"..."` expansion: the static checks, then the key the literal and its arguments make. */
-    def data(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[kyo.DataKey] =
-        '{ kyo.internal.KeyMacro.nameOf(${ key(sc, args, "data-", data = true) }, "data-", data = true).asInstanceOf[kyo.DataKey] }
+    def data(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[kyo.Data] =
+        '{ kyo.internal.KeyMacro.nameOf(${ key(sc, args, "data-", data = true) }, "data-", data = true).asInstanceOf[kyo.Data] }
 
     private def key(sc: Expr[StringContext], args: Expr[Seq[Any]], prefix: String, data: Boolean)(using Quotes): Expr[String] =
         import quotes.reflect.*

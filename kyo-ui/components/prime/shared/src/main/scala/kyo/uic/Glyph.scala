@@ -26,13 +26,13 @@ private[uic] object GlyphSvg:
       * hands over a prop never says which it holds.
       */
     def apply(glyph: Prop[IconGlyph], classes: String*)(using Frame): UI =
-        Prop.render(glyph)(g => build(span.aria(AriaKey.hidden -> "true"), g, classes))
+        Prop.render(glyph)(g => build(span.aria(Aria.hidden -> "true"), g, classes))
 
     /** Variant with an inline style on the wrapping span (MeterGroup colors its
       * label icons with the meter color, as Prime does via an inline style).
       */
     def styled(glyph: IconGlyph, styleF: Style.type => Style, classes: String*)(using Frame): UI =
-        build(span.aria(AriaKey.hidden -> "true").style(styleF), glyph, classes)
+        build(span.aria(Aria.hidden -> "true").style(styleF), glyph, classes)
 
     private def build(base: UI.Ast.SpanElement, glyph: IconGlyph, classes: Seq[String])(using Frame): UI =
         val svg = Svg.svg

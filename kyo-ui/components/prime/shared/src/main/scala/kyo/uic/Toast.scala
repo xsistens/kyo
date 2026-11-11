@@ -113,8 +113,8 @@ final class Toast private[uic] (private[uic] val p: Toast.Props) extends Node, H
                 val closeBtn: List[UI] =
                     if !closableFlag then Nil
                     else
-                        val shell     = button.cssClass("p-toast-close-button").jsProp("type", "button").aria(AriaKey.label -> "Close")
-                        val pressable = if fixed then shell.aria(AriaKey.disabled -> "true") else shell.onClick(close)
+                        val shell     = button.cssClass("p-toast-close-button").jsProp("type", "button").aria(Aria.label -> "Close")
+                        val pressable = if fixed then shell.aria(Aria.disabled -> "true") else shell.onClick(close)
                         List(pressable(GlyphSvg(Icons.times, "p-toast-close-icon")))
 
                 shown(
@@ -124,7 +124,7 @@ final class Toast private[uic] (private[uic] val p: Toast.Props) extends Node, H
                         .cssClass(s"p-toast-${positionV.token}")
                         .data(data"data-uic-duration" -> durationMs)
                         .role("alert")
-                        .aria(AriaKey.live -> "polite")(
+                        .aria(Aria.live -> "polite")(
                             div
                                 .cssClass("p-toast-message")
                                 .cssClass(s"p-toast-message-$token")

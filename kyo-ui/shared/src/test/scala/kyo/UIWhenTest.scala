@@ -18,14 +18,14 @@ class UIWhenTest extends kyo.test.Test[Any]:
 
     "when(Present) hands the setter the value" in {
         val name: Maybe[String] = Present("Save")
-        val b                   = UI.button("x").when(name)((e, n) => e.aria(AriaKey.label -> n))
+        val b                   = UI.button("x").when(name)((e, n) => e.aria(Aria.label -> n))
         assert(b.attrs.ariaAttrs.get("label").contains("Save"), s"${b.attrs}")
     }
 
     "when(Absent) leaves the element as it is" in {
         val el                  = UI.button("x")
         val name: Maybe[String] = Absent
-        assert(el.when(name)((e, n) => e.aria(AriaKey.label -> n)) eq el)
+        assert(el.when(name)((e, n) => e.aria(Aria.label -> n)) eq el)
     }
 
     "when chains: each condition decides its own setter" in {
@@ -82,9 +82,9 @@ class UIWhenTest extends kyo.test.Test[Any]:
 
     "over a constant prop the toggle is the element's own setters: true the bytes of when(true), false the element as it is" in {
         val f = (t: Toggle[Button]) =>
-            t.cssClass("x", "y").aria(AriaKey.pressed -> "true").data(data"data-k" -> "v").role("switch").disabled(true)
+            t.cssClass("x", "y").aria(Aria.pressed -> "true").data(data"data-k" -> "v").role("switch").disabled(true)
         val g = (b: Button) =>
-            b.cssClass("x", "y").aria(AriaKey.pressed -> "true").data(data"data-k" -> "v").role("switch").disabled(true)
+            b.cssClass("x", "y").aria(Aria.pressed -> "true").data(data"data-k" -> "v").role("switch").disabled(true)
         val on  = true: Prop[Boolean]
         val off = false: Prop[Boolean]
         val el  = UI.button("Go")
@@ -131,9 +131,9 @@ class UIWhenTest extends kyo.test.Test[Any]:
     }
 
     "aria, data, role and disabled over a signal: the attributes of the constant in each state, one of each name" in {
-        val f    = (t: Toggle[Button]) => t.aria(AriaKey.pressed -> "true").data(data"data-k" -> "on").role("switch").disabled(true)
-        val g    = (b: Button) => b.aria(AriaKey.pressed -> "true").data(data"data-k" -> "on").role("switch").disabled(true)
-        val base = UI.button("Go").aria(AriaKey.pressed -> "false").data(data"data-k" -> "off")
+        val f    = (t: Toggle[Button]) => t.aria(Aria.pressed -> "true").data(data"data-k" -> "on").role("switch").disabled(true)
+        val g    = (b: Button) => b.aria(Aria.pressed -> "true").data(data"data-k" -> "on").role("switch").disabled(true)
+        val base = UI.button("Go").aria(Aria.pressed -> "false").data(data"data-k" -> "off")
         for
             on   <- Signal.initRef(true)
             off  <- Signal.initRef(false)
@@ -164,7 +164,7 @@ class UIWhenTest extends kyo.test.Test[Any]:
                 val exchange = new RecordingExchange(synchronous = fast)
                 for
                     s <- Signal.initRef(false)
-                    ui = UI.button("Go").when(s: Signal[Boolean])(_.cssClass("x").aria(AriaKey.pressed -> "true").disabled(true))
+                    ui = UI.button("Go").when(s: Signal[Boolean])(_.cssClass("x").aria(Aria.pressed -> "true").disabled(true))
                     root <- ReactiveUI.normalize(UI.div(ui), Seq.empty)
                     _    <- ReactiveUI.subscribe(root, exchange)
                     _    <- s.set(true)
@@ -189,10 +189,10 @@ class UIWhenTest extends kyo.test.Test[Any]:
             chan <- Signal.initRef(false)
             name <- Signal.initRef("bound")
             s    <- Signal.initRef(true)
-            base    = UI.button("Go").disabled(chan: Signal[Boolean]).aria(AriaKey.label -> (name: Signal[String]))
-            toggled = base.when(s: Signal[Boolean])(_.disabled(true).aria(AriaKey.label -> "fixed"))
+            base    = UI.button("Go").disabled(chan: Signal[Boolean]).aria(Aria.label -> (name: Signal[String]))
+            toggled = base.when(s: Signal[Boolean])(_.disabled(true).aria(Aria.label -> "fixed"))
             sOn   <- html(toggled)
-            cOn   <- html(base.when(true)(_.disabled(true).aria(AriaKey.label -> "fixed")))
+            cOn   <- html(base.when(true)(_.disabled(true).aria(Aria.label -> "fixed")))
             plain <- html(base)
         yield
             assert(toggled.attrs.toggled.isEmpty, s"${toggled.attrs}")
@@ -210,7 +210,7 @@ class UIWhenTest extends kyo.test.Test[Any]:
             ui =
                 UI.button(
                     "Go"
-                ).when(a: Signal[Boolean])(_.aria(AriaKey.pressed -> "true")).when(b: Signal[Boolean])(_.aria(AriaKey.pressed -> "mixed"))
+                ).when(a: Signal[Boolean])(_.aria(Aria.pressed -> "true")).when(b: Signal[Boolean])(_.aria(Aria.pressed -> "mixed"))
             none   <- html(ui)
             _      <- a.set(true)
             first  <- html(ui)
@@ -270,7 +270,7 @@ class UIWhenTest extends kyo.test.Test[Any]:
         for
             s     <- Signal.initRef(false)
             label <- Signal.initRef("a")
-            ui = UI.button("Go").aria(AriaKey.label -> "base").when(s: Signal[Boolean])(_.aria(AriaKey.label -> (label: Signal[String])))
+            ui = UI.button("Go").aria(Aria.label -> "base").when(s: Signal[Boolean])(_.aria(Aria.label -> (label: Signal[String])))
             off   <- html(ui)
             _     <- s.set(true)
             on    <- html(ui)
@@ -293,7 +293,7 @@ class UIWhenTest extends kyo.test.Test[Any]:
         for
             s     <- Signal.initRef(true)
             label <- Signal.initRef[Maybe[String]](Absent)
-            ui = UI.button("Go").aria(AriaKey.label -> "base").when(s: Signal[Boolean])(_.aria(AriaKey.label ->
+            ui = UI.button("Go").aria(Aria.label -> "base").when(s: Signal[Boolean])(_.aria(Aria.label ->
                 (label: Signal[Maybe[String]])))
             absent <- html(ui)
             _      <- label.set(Present("x"))
@@ -311,8 +311,8 @@ class UIWhenTest extends kyo.test.Test[Any]:
             a     <- Signal.initRef(true)
             b     <- Signal.initRef(false)
             mixed <- Signal.initRef("mixed")
-            ui = UI.button("Go").when(a: Signal[Boolean])(_.aria(AriaKey.pressed -> true)).when(b: Signal[Boolean])(
-                _.aria(AriaKey.pressed -> (mixed: Signal[String]))
+            ui = UI.button("Go").when(a: Signal[Boolean])(_.aria(Aria.pressed -> true)).when(b: Signal[Boolean])(
+                _.aria(Aria.pressed -> (mixed: Signal[String]))
             )
             first <- html(ui)
             _     <- b.set(true)
@@ -335,17 +335,17 @@ class UIWhenTest extends kyo.test.Test[Any]:
             el  = UI.button("Go")
         yield
             val bound =
-                el.when(on)(_.aria(AriaKey.label -> (label: Signal[String]), AriaKey.describedby -> none).data(data"data-n" -> 3))
+                el.when(on)(_.aria(Aria.label -> (label: Signal[String]), Aria.describedby -> none).data(data"data-n" -> 3))
             assert(bound.attrs.reactiveAttrs.get("aria-label").exists(_ eq label) && bound.attrs.toggled.isEmpty, s"${bound.attrs}")
             assert(bound.attrs.ariaAttrs.isEmpty && bound.attrs.dataAttrs == Map("n" -> "3"), s"${bound.attrs}")
-            assert(el.when(off)(_.aria(AriaKey.label -> (label: Signal[String]))) eq el)
+            assert(el.when(off)(_.aria(Aria.label -> (label: Signal[String]))) eq el)
         end for
     }
 
     "Boolean, number and Absent entries over a signal: the constant's attributes in each state" in {
         val none: Maybe[String] = Absent
-        val f                   = (t: Toggle[Button]) => t.aria(AriaKey.busy -> true, AriaKey.label -> none).data(data"data-n" -> 3)
-        val g                   = (b: Button) => b.aria(AriaKey.busy -> true, AriaKey.label -> none).data(data"data-n" -> 3)
+        val f                   = (t: Toggle[Button]) => t.aria(Aria.busy -> true, Aria.label -> none).data(data"data-n" -> 3)
+        val g                   = (b: Button) => b.aria(Aria.busy -> true, Aria.label -> none).data(data"data-n" -> 3)
         val base                = UI.button("Go")
         for
             on   <- Signal.initRef(true)

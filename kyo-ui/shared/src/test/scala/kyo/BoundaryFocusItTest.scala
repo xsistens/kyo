@@ -69,7 +69,7 @@ class BoundaryFocusItTest extends UITest:
                         UI.input.id("search"),
                         UI.button("go").id("go").onClick(route.set("2")),
                         // The app sets its own aria-busy, which the wait overrides and must not destroy.
-                        route.render(id => UI.div(detail(id)).id("page").aria(AriaKey.busy -> "false"))
+                        route.render(id => UI.div(detail(id)).id("page").aria(Aria.busy -> "false"))
                     ))
             active = "document.activeElement.id || document.activeElement.tagName"
             value  = (id: String) => s"document.getElementById('$id').value"

@@ -10,7 +10,7 @@ class AriaTest extends kyo.test.Test[Any]:
         HtmlRenderer.render(ui, Seq.empty)
 
     "an aria entry renders the aria-label attribute on div" in {
-        val html = renderHtml(UI.div.aria(AriaKey.label -> "Save"))
+        val html = renderHtml(UI.div.aria(Aria.label -> "Save"))
         html.map { s =>
             assert(s.contains("""aria-label="Save""""))
         }
@@ -20,26 +20,26 @@ class AriaTest extends kyo.test.Test[Any]:
         val named: Maybe[Prop[String]]   = Present("Save")
         val unnamed: Maybe[Prop[String]] = Absent
         val el                           = UI.div
-        for html <- renderHtml(el.aria(AriaKey.label -> named))
+        for html <- renderHtml(el.aria(Aria.label -> named))
         yield
             assert(html.contains("aria-label=\"Save\""), html)
-            assert(el.aria(AriaKey.label -> unnamed) eq el)
+            assert(el.aria(Aria.label -> unnamed) eq el)
         end for
     }
 
     "a Maybe aria entry that holds a signal is the attribute channel" in {
         for
             ref <- Signal.initRef("Save")
-            el = UI.div.aria(AriaKey.label -> (Present(ref): Maybe[Prop[String]]))
+            el = UI.div.aria(Aria.label -> (Present(ref): Maybe[Prop[String]]))
         yield assert(el.attrs.reactiveAttrs.get("aria-label").exists(_ eq ref), s"${el.attrs}")
     }
 
     "aria with three entries renders all aria-* attributes sorted alphabetically" in {
         val html = renderHtml(
             UI.div.aria(
-                AriaKey.label -> "Main",
-                AriaKey.live  -> "polite",
-                AriaKey.busy  -> "false"
+                Aria.label -> "Main",
+                Aria.live  -> "polite",
+                Aria.busy  -> "false"
             )
         )
         html.map { s =>
@@ -55,7 +55,7 @@ class AriaTest extends kyo.test.Test[Any]:
 
     "setting the same aria name twice keeps only the last value" in {
         val html = renderHtml(
-            UI.div.aria(AriaKey.label -> "First").aria(AriaKey.label -> "Second")
+            UI.div.aria(Aria.label -> "First").aria(Aria.label -> "Second")
         )
         html.map { s =>
             assert(s.contains("""aria-label="Second""""))
@@ -66,7 +66,7 @@ class AriaTest extends kyo.test.Test[Any]:
     "element with ariaAttrs emits aria-* before data-* before data-kyo-prop-* in deterministic order" in {
         val element = UI.checkbox
             .aria(aria"aria-role" -> "button")
-            .aria(AriaKey.label -> "Go")
+            .aria(Aria.label -> "Go")
             .data(data"data-track-id" -> "99")
             .data(data"data-env" -> "prod")
             .indeterminate(true)
@@ -120,12 +120,12 @@ class AriaTest extends kyo.test.Test[Any]:
     "aria entries write each value as what it is: a string itself, a Boolean and a number as their text" in {
         val html = renderHtml(
             UI.div.aria(
-                AriaKey.label    -> "Save",
-                AriaKey.pressed  -> true,
-                AriaKey.busy     -> false,
-                AriaKey.valuenow -> 3,
-                AriaKey.valuemax -> 40L,
-                AriaKey.valuemin -> 0.5
+                Aria.label    -> "Save",
+                Aria.pressed  -> true,
+                Aria.busy     -> false,
+                Aria.valuenow -> 3,
+                Aria.valuemax -> 40L,
+                Aria.valuemin -> 0.5
             )
         )
         html.map { s =>
@@ -141,14 +141,14 @@ class AriaTest extends kyo.test.Test[Any]:
         val named: Maybe[String]   = Present("Save")
         val unnamed: Maybe[String] = Absent
         val count: Maybe[Int]      = Present(2)
-        val el                     = UI.div.aria(AriaKey.label -> "First")
+        val el                     = UI.div.aria(Aria.label -> "First")
         for
-            set  <- renderHtml(UI.div.aria(AriaKey.label -> named, aria"aria-setsize" -> count))
-            kept <- renderHtml(el.aria(AriaKey.label -> unnamed))
+            set  <- renderHtml(UI.div.aria(Aria.label -> named, aria"aria-setsize" -> count))
+            kept <- renderHtml(el.aria(Aria.label -> unnamed))
         yield
             assert(set.contains("""aria-label="Save"""") && set.contains("""aria-setsize="2""""), set)
             assert(kept.contains("""aria-label="First""""), kept)
-            val again = el.aria(AriaKey.label -> unnamed).attrs
+            val again = el.aria(Aria.label -> unnamed).attrs
             assert(again.ariaAttrs == Map("label" -> "First") && again.reactiveAttrs.isEmpty && again.reactiveMaybeAttrs.isEmpty, s"$again")
         end for
     }
@@ -156,7 +156,7 @@ class AriaTest extends kyo.test.Test[Any]:
     "a signal of a string entry is the attribute channel itself, with no mapped signal between" in {
         for
             ref <- Signal.initRef("Save")
-            el = UI.div.aria(AriaKey.label -> (ref: Signal[String]))
+            el = UI.div.aria(Aria.label -> (ref: Signal[String]))
         yield assert(el.attrs.reactiveAttrs.get("aria-label").exists(_ eq ref) && el.attrs.ariaAttrs.isEmpty, s"${el.attrs}")
     }
 
@@ -168,7 +168,7 @@ class AriaTest extends kyo.test.Test[Any]:
                 for
                     pressed <- Signal.initRef(true)
                     now     <- Signal.initRef(1)
-                    ui = UI.span("x").aria(AriaKey.pressed -> (pressed: Signal[Boolean]), AriaKey.valuenow -> (now: Signal[Int]))
+                    ui = UI.span("x").aria(Aria.pressed -> (pressed: Signal[Boolean]), Aria.valuenow -> (now: Signal[Int]))
                     first <- renderHtml(UI.div(ui))
                     root  <- ReactiveUI.normalize(UI.div(ui), Seq.empty)
                     _     <- ReactiveUI.subscribe(root, exchange)
@@ -191,7 +191,7 @@ class AriaTest extends kyo.test.Test[Any]:
                 val exchange = new kyo.internal.RecordingExchange(synchronous = fast)
                 for
                     said <- Signal.initRef[Maybe[Boolean]](Absent)
-                    ui = UI.span("x").aria(AriaKey.expanded -> (said: Signal[Maybe[Boolean]]))
+                    ui = UI.span("x").aria(Aria.expanded -> (said: Signal[Maybe[Boolean]]))
                     first <- renderHtml(UI.div(ui))
                     root  <- ReactiveUI.normalize(UI.div(ui), Seq.empty)
                     _     <- ReactiveUI.subscribe(root, exchange)
@@ -212,7 +212,7 @@ class AriaTest extends kyo.test.Test[Any]:
             val held: Maybe[Signal[Boolean]] = Present(ref)
             val sig: Prop[Boolean]           = ref
             val con: Prop[Boolean]           = false
-            UI.div.aria(AriaKey.checked -> held, AriaKey.pressed -> sig, AriaKey.disabled -> con)
+            UI.div.aria(Aria.checked -> held, Aria.pressed -> sig, Aria.disabled -> con)
         end bound
         for
             ref <- Signal.initRef(true)
@@ -226,11 +226,11 @@ class AriaTest extends kyo.test.Test[Any]:
     }
 
     "a pair held in a value converts too, and Entry.of keeps a group to spread" in {
-        val pair: (AriaKey, Prop[String]) = (AriaKey.label, "Save")
-        val range                         = Entry.of(AriaKey.valuemin -> 0, AriaKey.valuemax -> 10)
+        val pair: (Aria, Prop[String]) = (Aria.label, "Save")
+        val range                      = Entry.of(Aria.valuemin -> 0, Aria.valuemax -> 10)
         for
             one <- renderHtml(UI.div.aria(pair))
-            two <- renderHtml(UI.div.aria(range*).aria(AriaKey.valuenow -> 5))
+            two <- renderHtml(UI.div.aria(range*).aria(Aria.valuenow -> 5))
         yield
             assert(one.contains("""aria-label="Save""""), one)
             assert(
@@ -244,17 +244,17 @@ class AriaTest extends kyo.test.Test[Any]:
         typeCheckFailure("""
             import kyo.*
             UI.div.aria(aria"aria-x" -> 1.5f)
-        """)("(kyo.AriaKey, Float)")
+        """)("(kyo.Aria, Float)")
         typeCheckFailure("""
             import kyo.*
             val nested: Maybe[Maybe[String]] = Absent
             UI.div.aria(aria"aria-x" -> nested)
-        """)("(kyo.AriaKey, kyo.Maybe[kyo.Maybe[String]])")
+        """)("(kyo.Aria, kyo.Maybe[kyo.Maybe[String]])")
         typeCheckFailure("""
             import kyo.*
             def nested: Signal[Signal[String]] = ???
             UI.div.data(data"data-x" -> nested)
-        """)("(kyo.DataKey, kyo.Signal[kyo.Signal[String]])")
+        """)("(kyo.Data, kyo.Signal[kyo.Signal[String]])")
     }
 
     // ---- role: the bare `role` HTML attribute, distinct from aria-role ----

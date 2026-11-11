@@ -197,7 +197,7 @@ class AnchorTest extends UITest:
         val app: UI < Async =
             for clicks <- Signal.initRef(0)
             yield UI.div(
-                UI.a.href(Href.Path("/elsewhere")).id("a").aria(AriaKey.disabled -> "true").blocked(true)
+                UI.a.href(Href.Path("/elsewhere")).id("a").aria(Aria.disabled -> "true").blocked(true)
                     .onClick(clicks.getAndUpdate(_ + 1).unit)("Link"),
                 clicks.map(n => UI.span(n.toString).id("n"))
             )
@@ -247,7 +247,7 @@ class AnchorTest extends UITest:
     "an anchor that only says aria-disabled keeps the browser's default for a plain click" in {
         // aria-disabled is a hint for assistive technology. Only the marker Button draws on a blocked link declines the click, so an
         // anchor a caller marks aria-disabled still navigates.
-        withUI(UI.div(UI.a.href(Href.Path("/elsewhere")).id("a").aria(AriaKey.disabled -> "true")("Link"))) {
+        withUI(UI.div(UI.a.href(Href.Path("/elsewhere")).id("a").aria(Aria.disabled -> "true")("Link"))) {
             val plainClick =
                 """(function(){var seen=null;function f(e){seen=e.defaultPrevented;e.preventDefault();}
                   |window.addEventListener('click',f);

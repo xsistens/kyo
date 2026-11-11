@@ -66,7 +66,7 @@ final class Chip private[uic] (private[uic] val p: Chip.Props) extends Node, Has
         // A reactive label carries no static aria string (the visible p-chip-label
         // conveys it); only a constant label mirrors onto aria-label.
         labelV.foreach {
-            case TextValue.Const(l) => el = el.aria(AriaKey.label -> l)
+            case TextValue.Const(l) => el = el.aria(Aria.label -> l)
             case TextValue.Dyn(_)   => ()
         }
 
@@ -85,7 +85,7 @@ final class Chip private[uic] (private[uic] val p: Chip.Props) extends Node, Has
                 var btn = button
                     .cssClass("p-chip-remove-icon")
                     .jsProp("type", "button")
-                    .aria(AriaKey.label -> "Remove")
+                    .aria(Aria.label -> "Remove")
                 onRemoveEff.foreach { e =>
                     btn = btn.onClick(e).onKeyDown { evt =>
                         evt.key match

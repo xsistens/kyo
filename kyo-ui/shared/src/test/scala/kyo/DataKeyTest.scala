@@ -39,7 +39,7 @@ class DataKeyTest extends kyo.test.Test[Any]:
     "a literal that starts with kyo- fails to compile, and the message names the reserved prefix" in {
         val errors = compileErrors("""
             import kyo.*
-            val key: DataKey = data"data-kyo-x"
+            val key: Data = data"data-kyo-x"
             """)
         assert(errors.exists(_.contains("must not start with 'kyo-'")), s"errors: $errors")
     }
@@ -47,7 +47,7 @@ class DataKeyTest extends kyo.test.Test[Any]:
     "an uppercase letter in a data literal fails to compile" in {
         val errors = compileErrors("""
             import kyo.*
-            val key: DataKey = data"data-Item"
+            val key: Data = data"data-Item"
             """)
         assert(errors.exists(_.contains("lowercase letters, digits and hyphens only")), s"errors: $errors")
     }
@@ -55,7 +55,7 @@ class DataKeyTest extends kyo.test.Test[Any]:
     "a data literal without the data- prefix fails to compile, and the message names the prefix" in {
         val errors = compileErrors("""
             import kyo.*
-            val key: DataKey = data"vs-first"
+            val key: Data = data"vs-first"
             """)
         assert(errors.exists(_.contains("must start with 'data-'")), s"errors: $errors")
     }
@@ -63,13 +63,13 @@ class DataKeyTest extends kyo.test.Test[Any]:
     "a valid data literal compiles without an error" in {
         val errors = compileErrors("""
             import kyo.*
-            val key: DataKey = data"data-vs-first"
+            val key: Data = data"data-vs-first"
             """)
         assert(errors.isEmpty, s"errors: $errors")
     }
 
     "an aria key given to data(...) is refused, not written under data-" in {
-        val refused = scala.util.Try(UI.span.data(AriaKey.label -> true)).failed.toOption
+        val refused = scala.util.Try(UI.span.data(Aria.label -> true)).failed.toOption
         assert(refused.exists(e => e.isInstanceOf[IllegalArgumentException] && e.getMessage.contains("aria key")), s"refused: $refused")
     }
 end DataKeyTest

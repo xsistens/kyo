@@ -477,7 +477,7 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
             fiber   <- Fiber.initUnscoped(Scope.run(DomBackend.mount(
                 UI.div(UI.a.href(
                     UI.Href.Path("/target")
-                ).id("blocked-click").aria(AriaKey.disabled -> "true").blocked(true).onClick(clicked.release)("Link")),
+                ).id("blocked-click").aria(Aria.disabled -> "true").blocked(true).onClick(clicked.release)("Link")),
                 ready
             )))
             _ <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("blocked-click") != null), installBudget)

@@ -10,11 +10,11 @@ package kyo
   *
   * The type is a `String` underneath, so a key costs nothing beyond the string.
   */
-opaque type DataKey = String
+opaque type Data = String
 
-object DataKey:
+object Data:
 
     /** The attribute name a key stands for, the part after `data-`. */
-    private[kyo] def name(key: DataKey): String = key
+    private[kyo] def name(key: Data): String = key
 
-end DataKey
+end Data

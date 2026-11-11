@@ -221,9 +221,9 @@ final class Dialog private[uic] (private[uic] val p: Dialog.Props) extends Node,
                             .cssClass("p-button-rounded")
                             .cssClass("p-button-text")
                             .jsProp("type", "button")
-                            .aria(AriaKey.label -> "Close")
+                            .aria(Aria.label -> "Close")
                         val closeBtn: UI =
-                            (if fixed then closeShell.aria(AriaKey.disabled -> "true") else closeShell.onClick(close)) (
+                            (if fixed then closeShell.aria(Aria.disabled -> "true") else closeShell.onClick(close)) (
                                 GlyphSvg(Icons.times, "p-icon")
                             )
                         val actions: UI = div.cssClass("p-dialog-header-actions")(closeBtn)
@@ -247,7 +247,7 @@ final class Dialog private[uic] (private[uic] val p: Dialog.Props) extends Node,
                     size: Maybe[(Double, Double)],
                     inner: List[UI]
                 ): UI =
-                    var box = div.cssClass("p-dialog").cssClass("p-component").aria(AriaKey.modal -> "true").focusTrap(true).tabIndex(-1)
+                    var box = div.cssClass("p-dialog").cssClass("p-component").aria(Aria.modal -> "true").focusTrap(true).tabIndex(-1)
                     // The reactive (movable) box carries an id + a no-transition class so the
                     // `.p-dialog` transform transition never smears the live drag translate.
                     idMaybe.foreach(id => box = box.id(id).cssClass("p-uic-dialog-movable"))
@@ -260,10 +260,10 @@ final class Dialog private[uic] (private[uic] val p: Dialog.Props) extends Node,
                     }
                     if !preventInitialFocusFlag then box = box.focusAuto(true)
                     if !preventFocusRestoreFlag then box = box.focusRestore(true)
-                    access.name.orElse(headerName).foreach(n => box = box.aria(AriaKey.label -> n))
-                    access.nameRef.foreach(n => box = box.aria(AriaKey.labelledby -> n))
-                    box = box.aria(AriaKey.description -> accessibleDescriptionV)
-                    accessibleDescriptionRefV.foreach(n => box = box.aria(AriaKey.describedby -> n))
+                    access.name.orElse(headerName).foreach(n => box = box.aria(Aria.label -> n))
+                    access.nameRef.foreach(n => box = box.aria(Aria.labelledby -> n))
+                    box = box.aria(Aria.description -> accessibleDescriptionV)
+                    accessibleDescriptionRefV.foreach(n => box = box.aria(Aria.describedby -> n))
                     if !fixed then
                         box = box.onKeyDown { e =>
                             e.key match
@@ -326,7 +326,7 @@ final class Dialog private[uic] (private[uic] val p: Dialog.Props) extends Node,
                                         List(
                                             div
                                                 .cssClass("p-uic-dialog-resize-handle")
-                                                .aria(AriaKey.hidden -> "true")
+                                                .aria(Aria.hidden -> "true")
                                                 // Seed the resize origin (box top-left) + current size from a
                                                 // one-shot self-measure on grab; then follow the cursor.
                                                 .onPointerDown((_: PointerEvent) =>
