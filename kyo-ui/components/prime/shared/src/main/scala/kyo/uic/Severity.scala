@@ -11,24 +11,25 @@ import kyo.*
   * enum case; form-field validation is the separate boolean `invalid(...)`
   * plus `invalidMessage(...)`, exactly like Prime's `.p-invalid` model.
   */
-enum Severity derives CanEqual:
-    case Primary, Secondary, Success, Info, Warn, Danger, Help, Contrast
-
-    /** The `.p-<component>-<token>` suffix shared by most components. */
-    private[uic] def token: String = this match
-        case Severity.Primary   => "primary"
-        case Severity.Secondary => "secondary"
-        case Severity.Success   => "success"
-        case Severity.Info      => "info"
-        case Severity.Warn      => "warn"
-        case Severity.Danger    => "danger"
-        case Severity.Help      => "help"
-        case Severity.Contrast  => "contrast"
+/** `token` is the `.p-<component>-<token>` suffix shared by most components, stored once per case. */
+enum Severity(private[uic] val token: String) derives CanEqual:
+    case Primary   extends Severity("primary")
+    case Secondary extends Severity("secondary")
+    case Success   extends Severity("success")
+    case Info      extends Severity("info")
+    case Warn      extends Severity("warn")
+    case Danger    extends Severity("danger")
+    case Help      extends Severity("help")
+    case Contrast  extends Severity("contrast")
 end Severity
 
-/** Button rendering variant (`.p-button-outlined` / `-text` / `-link`). */
-enum ButtonVariant derives CanEqual:
-    case Filled, Outlined, Text, Link
+/** Button rendering variant (`.p-button-outlined` / `-text` / `-link`); `token` is the suffix. */
+enum ButtonVariant(private[uic] val token: String) derives CanEqual:
+    case Filled   extends ButtonVariant("filled")
+    case Outlined extends ButtonVariant("outlined")
+    case Text     extends ButtonVariant("text")
+    case Link     extends ButtonVariant("link")
+end ButtonVariant
 
 /** Form-field fill variant (`.p-variant-filled`). */
 enum FieldVariant derives CanEqual:
