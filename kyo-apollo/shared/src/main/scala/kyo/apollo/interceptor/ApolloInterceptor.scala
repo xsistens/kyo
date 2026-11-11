@@ -10,7 +10,7 @@ import kyo.apollo.runtime.ResponseStream
   * request retries, APQ negotiation, and subscription plumbing live.
   *
   * Unlike an [[HttpInterceptor]] (which sees exactly one request/response), an
-  * `ApolloInterceptor` returns a [[ResponseStream]] so a single operation can
+  * `ApolloInterceptor` returns a `ResponseStream` so a single operation can
   * yield **multiple emissions** — the cache-then-network pattern, or a stream of
   * subscription events. A single HTTP query is just the one-emission case of the
   * same type. Interceptors run in registration order, each wrapping the rest of

@@ -26,7 +26,7 @@ import scala.collection.immutable.VectorMap
   * the socket until it is collected, and cancelling a subscriber sends the
   * protocol `stop`/`complete` for its id.
   *
-  * '''Concurrency model.''' All connection and routing state is one [[State]]
+  * '''Concurrency model.''' All connection and routing state is one `State`
   * whose [[Phase]] is `Idle`, `Connecting`, `Open`, `Reconnecting` or `Closed`;
   * each phase carries exactly the socket, fibers and timers that exist in it, so
   * an open socket without a connection, a reconnect without a timer, or an

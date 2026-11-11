@@ -18,14 +18,14 @@ import scala.collection.immutable.VectorMap
   * throwing, keeping the parse total (a stray or future message type never
   * breaks an active socket).
   *
-  * Operation-scoped frames ([[Data]], [[Error]], [[Complete]]) carry the string
+  * Operation-scoped frames (`Data`, [[Error]], [[Complete]]) carry the string
   * operation `id` the transport assigned in [[WsProtocol.startOperation]], so it
   * can dispatch each to the right subscriber `Flow`. Connection-scoped frames
   * ([[ConnectionAck]], [[ConnectionError]], [[Ping]], [[Pong]], [[KeepAlive]])
   * carry no id.
   *
   * Payloads stay as raw [[Json]] here — this layer does not know an operation's
-  * `data` type. The transport decodes a [[Data]] payload into a
+  * `data` type. The transport decodes a `Data` payload into a
   * [[kyo.apollo.api.GraphQLResponse]] once it has matched the id back to its
   * operation and adapter.
   */
@@ -55,7 +55,7 @@ enum WsMessage derives CanEqual:
       */
     case Error(id: String, payload: Json)
 
-    /** Operation `id` completed normally; no further [[Data]] will arrive for it. */
+    /** Operation `id` completed normally; no further `Data` will arrive for it. */
     case Complete(id: String)
 
     /** A server-initiated `ping` (modern protocol only). The transport should

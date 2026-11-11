@@ -13,7 +13,7 @@ import scala.collection.mutable
   * [[Record]]s, keyed by `CacheKey`.
   *
   * The normalizer walks the operation's `Operation.rootField` selection tree
-  * alongside the response data map — the *same* [[CompiledField]] tree the typed
+  * alongside the response data map — the *same* `CompiledField` tree the typed
   * decoder uses — flattening the nested response into deduplicated records:
   *
   *   - a scalar leaf stays inline as a [[RecordValue.Scalar]];
@@ -79,7 +79,7 @@ final class Normalizer(
       * @param data      the response `data` object (as encoded by
       *                  `Operation.dataCodec`)
       * @param rootField the operation's `Operation.rootField`; its
-      *                  [[CompiledField.selections]] are the top-level fields and
+      *                  `CompiledField.selections` are the top-level fields and
       *                  its leaf type names the root object's GraphQL type
       * @return every record produced, keyed by cache key, with duplicate keys
       *         within this response already merged

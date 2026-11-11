@@ -19,7 +19,7 @@ import kyo.apollo.runtime.ResponseStream
   * Installed first in the chain, so it observes the final (post-cache) responses.
   * Subscriptions pass through untouched — the devtools Queries/Mutations tabs
   * don't surface them. A query's data is recorded in its response shape, which
-  * takes an [[Operation.Normalizable]] codec; the data of a query built from a
+  * takes an `Operation.Normalizable` codec; the data of a query built from a
   * `.map` projection only decodes and is recorded as absent. Recording is part of the execution: an operation is
   * recorded when its stream runs, under the request id minted for that run, and
   * an intercepted stream that never runs records nothing.

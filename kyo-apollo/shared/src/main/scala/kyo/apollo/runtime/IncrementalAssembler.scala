@@ -19,7 +19,7 @@ import kyo.apollo.network.http.MultipartPart
   * the data last emitted, now complete.
   *
   * The initial part seeds `data`; each `@defer` patch is spliced into the retained
-  * JSON tree, which is then re-decoded through [[GraphQLResponse.parse]]: deferred
+  * JSON tree, which is then re-decoded through `GraphQLResponse.parse`: deferred
   * fields being `Maybe`, the partial tree decodes at every stage. Three wire shapes
   * are read, told apart per payload:
   *

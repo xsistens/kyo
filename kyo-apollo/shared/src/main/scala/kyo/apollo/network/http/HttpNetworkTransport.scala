@@ -24,7 +24,7 @@ import kyo.apollo.runtime.ResponseStream
   *   - no response received (engine `Abort[HttpEngineFailure]`) → that failure,
   *     e.g. [[kyo.apollo.exception.ApolloNetworkException]]
   *   - HTTP status outside 2xx           → `ApolloHttpException`
-  *   - body not a valid GraphQL envelope → [[ApolloParseException]]
+  *   - body not a valid GraphQL envelope → `ApolloParseException`
   *
   * Only the engine's row is folded. A defect — a codec that throws, a panicking
   * engine — and an interrupt stay panics: they are bugs or cancellations, not
@@ -72,7 +72,7 @@ final class HttpNetworkTransport(
       * `ResponseStream` of progressively-fuller [[ApolloResponse]]s. The engine
       * reads a `multipart/mixed` body (streamed off the `fetch` reader when the
       * production engine, buffered otherwise); the parts are split
-      * ([[MultipartParser]]) and folded ([[IncrementalAssembler]]) into one response
+      * ([[MultipartParser]]) and folded (`IncrementalAssembler`) into one response
       * per patch. A server that ignores `@defer` (non-multipart Content-Type) or a
       * non-2xx / engine failure collapses to a single response, keeping the
       * "failures are values" contract.
@@ -183,7 +183,7 @@ final class HttpNetworkTransport(
         contentType.toLowerCase.contains("application/graphql-response+json")
 
     /** Decode `body` as a GraphQL envelope, or [[Absent]] if it is not one. Unlike
-      * [[decodeSingle]] a parse failure is not an [[ApolloParseException]] here: on a
+      * [[decodeSingle]] a parse failure is not an `ApolloParseException` here: on a
       * non-2xx it just means the body was never a GraphQL response, and the caller
       * falls back to the HTTP status. A decoder defect still panics.
       */
@@ -198,7 +198,7 @@ final class HttpNetworkTransport(
             case Result.Panic(cause) => Abort.panic(cause)
 
     /** Parse a single GraphQL response envelope: a parse failure becomes an
-      * [[ApolloParseException]] value, a decoder defect panics.
+      * `ApolloParseException` value, a decoder defect panics.
       */
     private def decodeSingle[D](
         request: ApolloRequest[D],

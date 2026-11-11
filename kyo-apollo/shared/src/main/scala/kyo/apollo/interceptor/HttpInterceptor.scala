@@ -25,7 +25,7 @@ trait HttpInterceptor:
     /** Handle `request`, delegating to `chain.proceed` to continue toward the
       * network, and complete with the (observed or produced) `HttpEngine.Response`.
       * The row is the engine's: an interceptor may pass on, recover or raise an
-      * [[HttpEngineFailure]].
+      * `HttpEngineFailure`.
       */
     def intercept(
         request: HttpEngine.Request,

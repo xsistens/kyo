@@ -28,7 +28,7 @@ import kyo.apollo.runtime.ResponseStream
   * call and the plain document is sent (`sendApqExtensions = false`,
   * `sendDocument = true`). Transport failures and ordinary GraphQL errors are not
   * APQ signals, so they pass straight through the first response. A
-  * [[Subscription]] is never persisted — it flows through untouched.
+  * `Subscription` is never persisted — it flows through untouched.
   *
   * The negotiation errors ride the response's GraphQL `errors` (an HTTP 200 whose
   * body carries an error, per the APQ protocol), matched by message or by the
