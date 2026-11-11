@@ -1615,7 +1615,7 @@ object UI:
         case Allowed(chars: String) // "chars:" ++ chars, explicit escape for an arbitrary set
     end InputFilter
 
-    /** The `type` a free-text field shows, for the field whose type follows a signal ([[kyo.UI.ConstrainedInput.textType]]).
+    /** The `type` a free-text field shows, for the field whose type follows a signal (the `textType` setter).
       *
       * A field with one fixed type is built by its own factory (`UI.input`, `UI.passwordInput`, `UI.emailInput`, ...), which
       * writes that type. This enum is for a field that changes type while it stays on the page, the way a password field
@@ -1626,7 +1626,7 @@ object UI:
       * change what the field holds; it keeps its own factory.
       *
       * @see
-      *   `kyo.UI.ConstrainedInput.textType` for the setter
+      *   `textType` for the setter
       */
     enum TextType(val attr: String) derives CanEqual:
         case Text     extends TextType("text")
@@ -3071,7 +3071,7 @@ object UI:
               * `SignalRef` holds) is not empty, so a page shown before the client attaches is right. Emits
               * `data-kyo-filled`, which both clients read through `kyo.internal.FilledClass`.
               *
-              * Declarative for the reason [[preventScrollKeys]] is: a handler would learn of the text only after a round
+              * Declarative for the reason `preventScrollKeys` is: a handler would learn of the text only after a round
               * trip, and of an unbound field's text not at all.
               */
             def filledClass(name: String): Self =
