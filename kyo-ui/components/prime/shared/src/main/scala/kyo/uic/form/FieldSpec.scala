@@ -82,7 +82,7 @@ sealed abstract class FieldSpec[A] private[form] (
       */
     def on(ts: Activation.Field*): FieldSpec[A] { type Valid = FieldSpec.this.Valid } = rebuild(rulesV, on = Present(ts.toSet))
 
-    /** The control's DOM id (default: minted, `kyo-uic-N`).
+    /** The control's DOM id (default: minted, `kyo-id-N`).
       *
       * A minted id is unique and stable within a render, and unreferenceable from anything
       * authored outside the form: a hand-written `<label for>`, an `aria-describedby` on a
