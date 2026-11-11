@@ -13,7 +13,7 @@ import kyo.apollo.json.Json
   * carries no id (apollo-kotlin computes that fallback inside the normalizer;
   * here it is handed to the generator so key policy lives in one place).
   *
-  * @param field     the [[CompiledField]] whose selection produced this object
+  * @param field     the `CompiledField` whose selection produced this object
   * @param variables the operation's variables (name → already-encoded JSON), as
   *                  produced by `Operation.variables`
   * @param path      the path to this object from its NEAREST KEYED ANCESTOR,

@@ -23,7 +23,7 @@ import kyo.apollo.runtime.ResponseStream
   *
   *   - no response received (engine `Abort[HttpEngineFailure]`) → that failure,
   *     e.g. [[kyo.apollo.exception.ApolloNetworkException]]
-  *   - HTTP status outside 2xx           → [[ApolloHttpException]]
+  *   - HTTP status outside 2xx           → `ApolloHttpException`
   *   - body not a valid GraphQL envelope → [[ApolloParseException]]
   *
   * Only the engine's row is folded. A defect — a codec that throws, a panicking
@@ -69,7 +69,7 @@ final class HttpNetworkTransport(
             .mapFailure(e => ApolloNetworkException("The GraphQL server URL could not be parsed", e))
 
     /** Execute `request` as an incremental-delivery (`@defer`) operation, yielding a
-      * [[ResponseStream]] of progressively-fuller [[ApolloResponse]]s. The engine
+      * `ResponseStream` of progressively-fuller [[ApolloResponse]]s. The engine
       * reads a `multipart/mixed` body (streamed off the `fetch` reader when the
       * production engine, buffered otherwise); the parts are split
       * ([[MultipartParser]]) and folded ([[IncrementalAssembler]]) into one response

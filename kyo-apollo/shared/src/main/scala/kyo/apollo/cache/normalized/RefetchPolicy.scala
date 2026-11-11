@@ -6,7 +6,7 @@ import kyo.apollo.network.ExecutionContext
   * changes — the re-read / re-fetch strategy that mirrors [[FetchPolicy]] but
   * governs the *update* leg of a `watch()` rather than the initial fetch.
   *
-  * Like [[FetchPolicy]], a `RefetchPolicy` is an [[ExecutionContext.Element]]
+  * Like [[FetchPolicy]], a `RefetchPolicy` is an `ExecutionContext.Element`
   * keyed by its own companion, so it rides the existing per-request context bag
   * rather than widening [[kyo.apollo.network.ApolloRequest]]:
   * `ApolloCall.refetchPolicy(p)` attaches it and the watcher reads it back with

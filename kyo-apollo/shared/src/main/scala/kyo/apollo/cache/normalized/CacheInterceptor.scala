@@ -14,7 +14,7 @@ import kyo.apollo.network.CacheInfo
 import kyo.apollo.network.Uuid
 import kyo.apollo.runtime.ResponseStream
 
-/** The [[ApolloInterceptor]] that plugs the normalized cache into the operation
+/** The `ApolloInterceptor` that plugs the normalized cache into the operation
   * layer. Inserted before the terminal `NetworkInterceptor`, it reads from and
   * writes back to an [[ApolloStore]] according to the request's [[FetchPolicy]],
   * and emits the response sequence that policy prescribes — each stamped with

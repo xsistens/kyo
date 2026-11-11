@@ -22,7 +22,7 @@ import scala.collection.immutable.VectorMap
   * opens a socket lazily on the first subscription, performs the
   * `connection_init` / `connection_ack` handshake once, then routes every server
   * frame to the right subscriber by the operation id it assigned. Each
-  * [[subscribe]] returns a cold, long-lived [[ResponseStream]]; nothing touches
+  * [[subscribe]] returns a cold, long-lived `ResponseStream`; nothing touches
   * the socket until it is collected, and cancelling a subscriber sends the
   * protocol `stop`/`complete` for its id.
   *
@@ -50,7 +50,7 @@ import scala.collection.immutable.VectorMap
   * subscriptions finish for the grace period, then waits until the socket is
   * closed, the connection fiber has released its `Scope` and the owner has
   * exited. A closed transport answers every later [[subscribe]] with an
-  * [[ApolloWebSocketClosedException]] value.
+  * `ApolloWebSocketClosedException` value.
   *
   * '''Generation fencing.''' Each opened socket gets a monotonic `generation`.
   * Connection-scoped commands carry the generation they were produced under and
@@ -70,7 +70,7 @@ import scala.collection.immutable.VectorMap
   * begun, a delivery into a full channel is dropped instead of waited for.
   *
   * '''Failures are values''': a socket drop or terminal server close surfaces as
-  * `ApolloResponse.error` (an [[ApolloWebSocketClosedException]]) pushed to
+  * `ApolloResponse.error` (an `ApolloWebSocketClosedException`) pushed to
   * every active subscriber; the stream itself does not fail. '''Reconnection''' is
   * opt-in via [[reconnectWhen]]: an established socket's abnormal drop surfaces to
   * every subscriber as the resubscription-signal value, then the transport
@@ -135,14 +135,14 @@ final class WebSocketNetworkTransport private[apollo] (
 
     // ---- public API -----------------------------------------------------------
 
-    /** A cold [[ResponseStream]] for `request`'s subscription. Consuming it (within
+    /** A cold `ResponseStream` for `request`'s subscription. Consuming it (within
       * an `Async & Scope` context) registers the operation on the shared socket:
       * server frames are decoded and delivered into a per-subscription channel of
       * [[subscriptionBufferSize]] responses (rounded up to the next power of two)
       * that drives the stream, and the
       * enclosing `Scope`'s teardown sends the protocol stop for this operation and
       * closes the channel. On a closed transport the stream is one response whose
-      * error is an [[ApolloWebSocketClosedException]].
+      * error is an `ApolloWebSocketClosedException`.
       */
     def subscribe[D](request: ApolloRequest[D])(using
         Frame,
@@ -166,7 +166,7 @@ final class WebSocketNetworkTransport private[apollo] (
     /** Close the transport: let the subscriptions active at the call finish for up
       * to `gracePeriod`, then close the socket and cancel any pending reconnect.
       * Subscriptions still active then receive a terminal
-      * [[ApolloWebSocketClosedException]] value. Returns once the socket's `close`
+      * `ApolloWebSocketClosedException` value. Returns once the socket's `close`
       * has completed, the connection fiber has released its `Scope` and the owner
       * fiber has exited. Every later [[subscribe]] yields the closed value.
       */
@@ -698,7 +698,7 @@ end WebSocketNetworkTransport
 object WebSocketNetworkTransport:
 
     /** Never reopen a dropped socket: the drop terminates its subscriptions with
-      * the [[ApolloWebSocketClosedException]] value. The default, matching
+      * the `ApolloWebSocketClosedException` value. The default, matching
       * apollo-kotlin's opt-in `reopenWhen`.
       */
     val reconnectNever: (ApolloException, Long) => Boolean = (_, _) => false

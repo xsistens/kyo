@@ -51,7 +51,7 @@ object CacheIdentity:
       * `CacheIdentity.by(Country)(_.code)`; a composite key lists them (`by(Book)(_.isbn, _.edition)`).
       *
       * The argument is the generated selector object, which each key lambda receives. The captured
-      * [[CompiledField]]s carry the schema field type, so a spread can force the key fields into any document it
+      * `CompiledField`s carry the schema field type, so a spread can force the key fields into any document it
       * is spliced into without re-declaring them. The type name is resolved where the selection is applied (the
       * result is a context function), so the entry point takes no `using` clause; see [[Fragment.of]] for why
       * that matters to an IDE.

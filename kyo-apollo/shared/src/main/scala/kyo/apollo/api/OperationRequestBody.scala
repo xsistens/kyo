@@ -8,7 +8,7 @@ import scala.collection.immutable.VectorMap
   * Mirrors apollo-kotlin's `composeJsonRequest`: emits the standard GraphQL POST
   * body `{ "query", "operationName", "variables", "extensions" }`. The
   * `variables` object is the operation's own [[Operation.variables]] (a
-  * [[Json.JObj]] built per-variable through each value's `Schema`), so this type
+  * `Json.JObj` built per-variable through each value's `Schema`), so this type
   * needs no custom-scalar registry.
   *
   * Field order is fixed (`query`, `operationName`, `variables`, then an optional

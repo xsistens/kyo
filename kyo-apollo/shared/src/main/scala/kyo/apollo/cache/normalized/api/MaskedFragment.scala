@@ -213,7 +213,7 @@ final class EmbeddedFragment[Origin, D <: AnyNamedTuple] private[apollo] (
           *
           * The slice is decoded on each call. A slice missing or mistyping one of the
           * fragment's fields (a ref built from a response that does not match the
-          * fragment's selection) aborts with an [[ApolloParseException]], the error
+          * fragment's selection) aborts with an `ApolloParseException`, the error
           * `ApolloStore.readFragment` reports for an entity ref.
           *
           * {{{

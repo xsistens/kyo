@@ -36,7 +36,7 @@ final class ExecutionContext private (
     /** True if `key` has an element in this context. */
     def contains(key: ExecutionContext.Key[?]): Boolean = elements.contains(key)
 
-    /** Add (or replace) a single element, keyed by its own [[Element.key]]. */
+    /** Add (or replace) a single element, keyed by its own `Element.key`. */
     def +(element: ExecutionContext.Element): ExecutionContext =
         new ExecutionContext(elements.updated(element.key, element))
 

@@ -13,7 +13,7 @@ import kyo.apollo.json.Json
 
 /** The transport-level result of executing an [[ApolloRequest]].
   *
-  * Wraps [[GraphQLResponse]]'s `data` and `extensions` **under the same names**
+  * Wraps `GraphQLResponse`'s `data` and `extensions` **under the same names**
   * so there is no parallel response model, and adds transport metadata: the
   * correlating [[requestUuid]], the [[executionContext]], and — crucially — a
   * single [[error]] channel.
@@ -93,7 +93,7 @@ end ApolloResponse
 
 object ApolloResponse:
 
-    /** Lift a decoded [[GraphQLResponse]] into an [[ApolloResponse]], copying
+    /** Lift a decoded `GraphQLResponse` into an [[ApolloResponse]], copying
       * `data` and `extensions` verbatim and attaching transport metadata.
       *
       * A non-empty `errors` list becomes an [[ApolloGraphQLException]] on
@@ -116,7 +116,7 @@ object ApolloResponse:
         )
 
     /** Build a failure response carrying `error` and no data. Used by the terminal
-      * transport to fold a caught [[ApolloException]] into a value.
+      * transport to fold a caught `ApolloException` into a value.
       */
     def fromException[D](
         requestUuid: Uuid,

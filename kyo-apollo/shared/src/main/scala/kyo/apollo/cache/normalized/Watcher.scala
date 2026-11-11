@@ -20,7 +20,7 @@ import scala.annotation.tailrec
   * `ApolloClient` types) so `runtime` stays cache-unaware; the dependency runs
   * cache → client, mirroring apollo-kotlin's `apolloClient.query(q).watch()`
   * shipping in the normalized-cache artifact. Everything is a composition of
-  * pieces that already exist — the [[ResponseStream]] output type, the
+  * pieces that already exist — the `ResponseStream` output type, the
   * [[ApolloStore.changedKeys]] bus, the [[kyo.apollo.cache.normalized.internal.CacheBatchReader]]
   * re-read, and the [[FetchPolicy]]/[[RefetchPolicy]] context elements.
   */
@@ -63,14 +63,14 @@ extension [D](call: ApolloCall[D])
 
     /** Pin the [[RefetchPolicy]] for this watch — how it re-produces its result
       * when a dependent record changes (default [[RefetchPolicy.Default]], a
-      * network-free cache re-read). Rides the request's [[ExecutionContext]] exactly
+      * network-free cache re-read). Rides the request's `ExecutionContext` exactly
       * like `fetchPolicy`, so no new request field is introduced; ignored by a plain
       * `execute()`/`toFlow` (only `watch()` reads it back).
       */
     def refetchPolicy(policy: RefetchPolicy): ApolloCall[D] =
         call.withRequest(_.addExecutionContext(ExecutionContext.Empty + policy))
 
-    /** Observe this operation as a live [[ResponseStream]]: it emits the initial
+    /** Observe this operation as a live `ResponseStream`: it emits the initial
       * result (honoring the call's [[FetchPolicy]]) and then re-emits automatically
       * whenever any record the last read depended on changes — from another query,
       * a mutation, or a direct `apolloStore` write.
