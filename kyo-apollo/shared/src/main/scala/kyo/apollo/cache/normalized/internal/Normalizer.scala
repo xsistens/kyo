@@ -20,7 +20,7 @@ import scala.collection.mutable
   *   - a nested object is lifted into its own [[Record]] and replaced by a
   *     `RecordValue.Reference` in its parent, so the same entity referenced
   *     from several places is stored once;
-  *   - a list becomes a [[RecordValue.RList]] of element values (references for
+  *   - a list becomes a `RecordValue.RList` of element values (references for
   *     object lists, scalars for scalar lists);
   *   - `null` becomes [[RecordValue.Null]].
   *

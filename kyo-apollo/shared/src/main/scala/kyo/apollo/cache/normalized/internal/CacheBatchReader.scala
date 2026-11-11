@@ -44,7 +44,7 @@ import scala.collection.immutable.VectorMap
   * @param loader           loads the records present among a batch of keys
   * @param variables        the operation's variables (name → encoded JSON), for
   *                         argument-aware `FieldKey`s and redirect resolution
-  * @param rootKey          the record key the read starts from (see [[CacheKey.rootKey]])
+  * @param rootKey          the record key the read starts from (see `CacheKey.rootKey`)
   * @param cacheKeyResolver read-side redirects (e.g. `book(id:)` → `Book:id`);
   *                         defaults to never redirecting
   * @param fieldPolicies    per-field policies consulted for read-side storage
