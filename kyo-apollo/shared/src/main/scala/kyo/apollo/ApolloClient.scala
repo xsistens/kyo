@@ -44,7 +44,7 @@ import kyo.apollo.runtime.ResponseStream
   *      single [[kyo.apollo.network.http.HttpEngine]] via
   *      `HttpInterceptorChain.asEngine`, wrapping the real
   *      `kyo.apollo.network.http.FetchHttpEngine` (or an injected one for tests);
-  *   1. the **transports** — an [[HttpNetworkTransport]] bound to `serverUrl` for
+  *   1. the **transports** — an `HttpNetworkTransport` bound to `serverUrl` for
   *      queries/mutations, and a
   *      [[kyo.apollo.network.ws.WebSocketNetworkTransport]] bound to
   *      `webSocketServerUrl` for subscriptions; both are the single place

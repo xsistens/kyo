@@ -21,7 +21,7 @@ import scala.collection.immutable.VectorMap
   * Operation-scoped frames (`Data`, [[Error]], `Complete`) carry the string
   * operation `id` the transport assigned in [[WsProtocol.startOperation]], so it
   * can dispatch each to the right subscriber `Flow`. Connection-scoped frames
-  * ([[ConnectionAck]], [[ConnectionError]], [[Ping]], [[Pong]], [[KeepAlive]])
+  * (`ConnectionAck`, [[ConnectionError]], [[Ping]], [[Pong]], [[KeepAlive]])
   * carry no id.
   *
   * Payloads stay as raw [[Json]] here — this layer does not know an operation's
