@@ -51,7 +51,7 @@ import scala.collection.mutable
   * @param variables         the operation's variables (name → encoded JSON), used
   *                          to compute argument-aware FieldKeys
   * @param rootKey           the record key the root object is stored under
-  *                          (see [[CacheKey.rootKey]])
+  *                          (see `CacheKey.rootKey`)
   * @param cacheKeyGenerator the policy that assigns a `CacheKey` to each object
   * @param fieldPolicies     per-field policies consulted for the storage
   *                          FieldKey (e.g. a connection field dropping its
