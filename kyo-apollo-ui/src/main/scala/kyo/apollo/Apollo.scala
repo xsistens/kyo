@@ -77,7 +77,7 @@ object Apollo:
             // and hand the typed data back (re-raising any Abort/Panic after recording
             // a `Failure`, so a failed load both surfaces the error AND shows in the UI).
             load = loaded.set(true).andThen(ref.set(QueryState.Loading)).andThen {
-                Abort.run[ApolloException](call.fetchPolicy(FetchPolicy.NetworkOnly).data).map {
+                Abort.run[ApolloException](CallData.of(call.fetchPolicy(FetchPolicy.NetworkOnly))).map {
                     case Result.Success(data) =>
                         ref.set(QueryState.Success(data, fromCache = false)).andThen(data)
                     case failed =>
@@ -459,7 +459,7 @@ object Apollo:
     ): PaginatedQuery[D, C] < Sync =
         Signal.initRef[C](initial).map { cursors =>
             val refetch: C => Unit < (Async & Abort[ApolloException]) =
-                c => page(c).fetchPolicy(FetchPolicy.NetworkOnly).data.unit
+                c => CallData.of(page(c).fetchPolicy(FetchPolicy.NetworkOnly)).unit
             val advance: ((C, D) => Maybe[C]) => (Unit < (Async & Abort[ApolloException])) =
                 reduce =>
                     cursors.current.map { c =>
@@ -532,7 +532,7 @@ object Apollo:
                                     next match
                                         case Present(c2) =>
                                             cursors.set(c2).andThen(
-                                                page(v, c2).fetchPolicy(FetchPolicy.NetworkOnly).data.unit
+                                                CallData.of(page(v, c2).fetchPolicy(FetchPolicy.NetworkOnly)).unit
                                             )
                                         case Absent => ()
                                     end match
@@ -664,7 +664,7 @@ object Apollo:
             // The pair, not `skip` alone: a pause and a resume between two reads of `skip` look like no change.
             _ <- UI.fork(skip.combineLatest(missed).observe {
                 case (false, true) =>
-                    missed.set(false).andThen(ApolloSignal.pollTick(call.fetchPolicy(FetchPolicy.NetworkOnly).data))
+                    missed.set(false).andThen(ApolloSignal.pollTick(CallData.of(call.fetchPolicy(FetchPolicy.NetworkOnly))))
                 case _ => Kyo.unit
             })
         yield ref
@@ -714,7 +714,9 @@ object Apollo:
     ): Signal[QueryState[D]] < (Async & Scope) =
         watchSignal(call).map { signal =>
             def pollLoop: Unit < Async =
-                Async.sleep(interval).andThen(ApolloSignal.pollTick(call.fetchPolicy(FetchPolicy.NetworkOnly).data)).andThen(pollLoop)
+                Async.sleep(
+                    interval
+                ).andThen(ApolloSignal.pollTick(CallData.of(call.fetchPolicy(FetchPolicy.NetworkOnly)))).andThen(pollLoop)
             UI.fork(pollLoop).andThen(signal)
         }
 
@@ -736,7 +738,7 @@ object Apollo:
                 Async.sleep(interval).andThen {
                     skip.current.map {
                         case true  => pollLoop // paused: skip the network poll, keep the timer loop alive
-                        case false => ApolloSignal.pollTick(call.fetchPolicy(FetchPolicy.NetworkOnly).data).andThen(pollLoop)
+                        case false => ApolloSignal.pollTick(CallData.of(call.fetchPolicy(FetchPolicy.NetworkOnly))).andThen(pollLoop)
                     }
                 }
             UI.fork(pollLoop).andThen(signal)

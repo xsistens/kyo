@@ -258,7 +258,7 @@ final class RawQueryHandle[D] private[apollo] (
     private val call: ApolloCall[D],
     activity: Signal.SignalRef[Maybe[NetworkStatus]]
 )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]], CanEqual[D, D])
-    extends QueryHandle[D](state, activity, call.fetchPolicy(FetchPolicy.NetworkOnly).data):
+    extends QueryHandle[D](state, activity, CallData.of(call.fetchPolicy(FetchPolicy.NetworkOnly))):
 
     /** Feed a subscription's events into this query's cached data — react's
       * `subscribeToMore`. Consumes `sub` as a live stream; for each event, reads the

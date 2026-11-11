@@ -37,7 +37,7 @@ class ApolloEffectExecSpec extends kyo.test.Test[Any]:
         ".data yields the typed data on a clean success" in {
             for
                 client <- cacheless(StaticEngine(body("Alice")))
-                result <- Abort.run(client.query(CurrentUserQuery()).data)
+                result <- Abort.run(CallData.of(client.query(CurrentUserQuery())))
             yield result match
                 case Result.Success(data) => assert(data == userData("Alice"))
                 case other                => fail(s"expected Success(Alice), got $other")
@@ -46,7 +46,7 @@ class ApolloEffectExecSpec extends kyo.test.Test[Any]:
         ".data folds GraphQL errors onto the Abort channel" in {
             for
                 client <- cacheless(StaticEngine(partialBody("Alice", "boom")))
-                result <- Abort.run(client.query(CurrentUserQuery()).data)
+                result <- Abort.run(CallData.of(client.query(CurrentUserQuery())))
             yield result match
                 case Result.Failure(ex: ApolloGraphQLException) =>
                     // Apollo JS parity: the bare error message, no prefix.
@@ -57,7 +57,7 @@ class ApolloEffectExecSpec extends kyo.test.Test[Any]:
         ".data folds a transport (HTTP) exception onto the Abort channel" in {
             for
                 client <- cacheless(StaticEngine("""{"errors":[]}""", status = 500))
-                result <- Abort.run(client.query(CurrentUserQuery()).data)
+                result <- Abort.run(CallData.of(client.query(CurrentUserQuery())))
             yield result match
                 case Result.Failure(_: ApolloHttpException) => assert(true)
                 case other                                  => fail(s"expected Abort(ApolloHttpException), got $other")
