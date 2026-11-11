@@ -78,7 +78,7 @@ object DocsMarkdownRender:
             // panel's <pre> text and flips data-copied, which the CSS reads to swap the copy glyph for a
             // check. The CSS floats it absolutely in the panel's top-right corner; the pre's top padding
             // clears it so it never sits over the first line of code. The aria-label names the icon button.
-            UI.button.cssClass("code-copy").aria("label" -> "Copy code to clipboard")(
+            UI.button.cssClass("code-copy").aria(aria"aria-label" -> "Copy code to clipboard")(
                 UI.div.cssClass("code-copy-idle")(copyIcon),
                 UI.div.cssClass("code-copy-done")(checkIcon)
             ),

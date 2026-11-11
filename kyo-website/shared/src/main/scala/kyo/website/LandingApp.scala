@@ -43,7 +43,7 @@ object LandingApp:
             val prefix       = docsHome.split('/').iterator.filter(_.nonEmpty).nextOption().getOrElse("latest")
             val mod          = (slug: String) => s"/$prefix/$slug/"
             val overviewHome = s"/$prefix/"
-            UI.div.cssClass("wrap").data("section" -> "page")(
+            UI.div.cssClass("wrap").data(data"data-section" -> "page")(
                 hero(overviewHome),
                 gap,
                 platforms,
@@ -69,7 +69,7 @@ object LandingApp:
     private def heroBackdrop(using Frame): UI =
         val accent = Svg.Paint.Color(Style.Color.variable("accent"))
         val rings  = Chunk(150.0, 232.0, 314.0, 396.0, 478.0, 560.0)
-        UI.div.cssClass("hero-bg").aria("hidden" -> "true")(
+        UI.div.cssClass("hero-bg").aria(aria"aria-hidden" -> "true")(
             Svg.svg.viewBox(Svg.ViewBox(0, 0, 620, 540)).width(620).height(540)(
                 Svg.g(
                     rings.map(r =>
@@ -81,7 +81,7 @@ object LandingApp:
     end heroBackdrop
 
     private def hero(home: String)(using Frame): UI =
-        UI.section.cssClass("hero").id("top").data("section" -> "hero")(
+        UI.section.cssClass("hero").id("top").data(data"data-section" -> "hero")(
             heroBackdrop,
             UI.div.cssClass("wrap")(
                 UI.div.cssClass("hero-grid")(
@@ -124,7 +124,7 @@ object LandingApp:
     // effect and failure lives in the type). It is the visual anchor of the right column, balanced against
     // the left text by the `.hero-grid` center alignment.
     private def heroSignature(using Frame): UI =
-        UI.div.cssClass("hero-sig").data("section" -> "signature")(
+        UI.div.cssClass("hero-sig").data(data"data-section" -> "signature")(
             signatureCard
         )
     end heroSignature
@@ -183,7 +183,7 @@ object LandingApp:
     // receipt render through this, so the two panels stay visually identical. `sectionData` is the element's
     // `data-section` hook; `body` is the `<pre><code>` of hand-tokenized `tok-*` spans.
     private def editorCard(sectionData: String)(body: UI)(using Frame): UI =
-        UI.div.cssClass("code-card").data("section" -> sectionData)(
+        UI.div.cssClass("code-card").data(data"data-section" -> sectionData)(
             UI.div.cssClass("code-bar")(
                 UI.div.cssClass("code-dots")(
                     UI.span.cssClass("code-dot"),
@@ -199,7 +199,7 @@ object LandingApp:
     // ---- 2. The gap ----
 
     private def gap(using Frame): UI =
-        UI.section.cssClass("band").cssClass("problem").id("gap").data("section" -> "gap")(
+        UI.section.cssClass("band").cssClass("problem").id("gap").data(data"data-section" -> "gap")(
             UI.div.cssClass("wrap")(
                 UI.div.cssClass("gap-grid")(
                     UI.div.cssClass("gap-text")(
@@ -300,7 +300,7 @@ object LandingApp:
     // ---- 3. The ladder ----
 
     private def ladder(mod: String => String)(using Frame): UI =
-        UI.section.cssClass("band").cssClass("dark").cssClass("ladder").id("ladder").data("section" -> "ladder")(
+        UI.section.cssClass("band").cssClass("dark").cssClass("ladder").id("ladder").data(data"data-section" -> "ladder")(
             UI.div.cssClass("wrap")(
                 UI.div.cssClass("sec-head").cssClass("center")(
                     UI.div.cssClass("eyebrow")("Layered safety"),
@@ -460,7 +460,7 @@ object LandingApp:
     // ---- 4. One foundation ----
 
     private def oneFoundation(mod: String => String)(using Frame): UI =
-        UI.section.cssClass("band").cssClass("build").id("build").data("section" -> "one-foundation")(
+        UI.section.cssClass("band").cssClass("build").id("build").data(data"data-section" -> "one-foundation")(
             UI.div.cssClass("wrap")(
                 UI.div.cssClass("sec-head").cssClass("center")(
                     UI.div.cssClass("eyebrow")("One foundation"),
@@ -544,7 +544,7 @@ object LandingApp:
     // single `import kyo.*` for a fresh start. The code receipt shows ZIO and Kyo composing both ways:
     // ZIOs.get lifts a ZIO value into a Kyo row, and ZIOs.run turns a Kyo computation back into a ZIO.
     private def adopt(mod: String => String)(using Frame): UI =
-        UI.section.cssClass("band").cssClass("build").id("adopt").data("section" -> "adopt")(
+        UI.section.cssClass("band").cssClass("build").id("adopt").data(data"data-section" -> "adopt")(
             UI.div.cssClass("wrap")(
                 UI.div.cssClass("sec-head").cssClass("center")(
                     UI.div.cssClass("eyebrow")("Start where you are"),
@@ -716,7 +716,7 @@ object LandingApp:
     // ---- 5. Platforms and the engine ----
 
     private def platforms(using Frame): UI =
-        UI.section.cssClass("band").cssClass("dark").id("platforms").data("section" -> "platforms")(
+        UI.section.cssClass("band").cssClass("dark").id("platforms").data(data"data-section" -> "platforms")(
             UI.div.cssClass("wrap")(
                 UI.div.cssClass("sec-head").cssClass("center")(
                     UI.div.cssClass("eyebrow")("Platforms and the engine"),
@@ -828,7 +828,7 @@ object LandingApp:
     // ---- 6. Why this exists ----
 
     private def whyExists(manifestoHref: String)(using Frame): UI =
-        UI.section.cssClass("band").cssClass("whyx").data("section" -> "why-exists")(
+        UI.section.cssClass("band").cssClass("whyx").data(data"data-section" -> "why-exists")(
             UI.div.cssClass("wrap")(
                 UI.p.cssClass("whyx-line")(
                     "This project exists because of a specific belief about what software is for and who gets to build it. ",
@@ -842,7 +842,7 @@ object LandingApp:
     // ---- 8. Call to action + footer ----
 
     private def finalCta(home: String)(using Frame): UI =
-        UI.section.cssClass("band").cssClass("dark").cssClass("cta-band").data("section" -> "final-cta")(
+        UI.section.cssClass("band").cssClass("dark").cssClass("cta-band").data(data"data-section" -> "final-cta")(
             UI.div.cssClass("wrap")(
                 UI.div.cssClass("cta-final").cssClass("on-dark")(
                     UI.h2("Build something that holds."),
@@ -873,7 +873,7 @@ object LandingApp:
         )
 
     private def pageFooter(home: String, manifestoHref: String)(using Frame): UI =
-        UI.footer.data("section" -> "footer")(
+        UI.footer.data(data"data-section" -> "footer")(
             UI.div.cssClass("wrap")(
                 UI.div.cssClass("foot")(
                     UI.div(
