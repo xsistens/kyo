@@ -12,7 +12,7 @@ import kyo.apollo.network.http.HttpEngine
 trait HttpInterceptorChain:
 
     /** Continue processing `request` at the next link, completing with its
-      * [[HttpEngine.Response]] or aborting with the engine's [[HttpEngineFailure]].
+      * `HttpEngine.Response` or aborting with the engine's [[HttpEngineFailure]].
       */
     def proceed(request: HttpEngine.Request)(using Frame): HttpEngine.Response < (Async & Abort[HttpEngineFailure])
 end HttpInterceptorChain
@@ -48,7 +48,7 @@ end DefaultHttpInterceptorChain
 object HttpInterceptorChain:
 
     /** Present `interceptors` wrapped around a terminal `engine` as a single
-      * [[HttpEngine]]. Because an interceptor chain is itself just a request →
+      * `HttpEngine`. Because an interceptor chain is itself just a request →
       * response round-trip, this lets the existing
       * [[kyo.apollo.network.http.HttpNetworkTransport]] run through the full HTTP
       * interceptor stack unchanged — the client builds the engine here and hands it

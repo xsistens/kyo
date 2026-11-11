@@ -68,7 +68,7 @@ trait NormalizedCache:
       * on the newer state. That is what makes a change decided by the whole store
       * (garbage collection, a cascading evict) safe against a concurrent write: the
       * set is computed and removed on one state. `cacheHeaders` carries write hints
-      * such as [[CacheHeaders.Date]] (expiry stamp) or [[CacheHeaders.DoNotStore]]
+      * such as `CacheHeaders.Date` (expiry stamp) or [[CacheHeaders.DoNotStore]]
       * (commit nothing).
       */
     def transact[A](
@@ -80,7 +80,7 @@ trait NormalizedCache:
     /** Drop every record from the store. */
     def clearAll(using Frame): Unit < Sync
 
-    /** Every record currently held, keyed by [[Record.key]] — the whole-store
+    /** Every record currently held, keyed by `Record.key` — the whole-store
       * snapshot garbage collection and the devtools dump sweep over, taken without
       * perturbing per-record bookkeeping (an LRU backend's recency, a time-based
       * backend's expiry).
@@ -152,7 +152,7 @@ end RecordLoader
   * whole store — which records no root reaches, which records hang below a key.
   */
 trait RecordState extends RecordLoader:
-    /** Every record held in this state, keyed by [[Record.key]] — as stored, like
+    /** Every record held in this state, keyed by `Record.key` — as stored, like
       * [[NormalizedCache.allRecords]]: a record a read would find expired is included.
       */
     def allRecords: Map[CacheKey, Record]

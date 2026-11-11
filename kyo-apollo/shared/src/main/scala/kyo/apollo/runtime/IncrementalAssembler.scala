@@ -12,7 +12,7 @@ import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.http.MultipartPart
 
 /** Folds a stream of `multipart/mixed` incremental-delivery parts into a stream of
-  * [[ApolloResponse]] — one per part that changes the data, each carrying the
+  * `ApolloResponse` — one per part that changes the data, each carrying the
   * *accumulated* (progressively-fuller) response. The part that ends the delivery
   * (`hasNext: false` after `hasNext: true`) always yields exactly one response with
   * `complete = true`: the one its change produces, or — when it changes nothing —

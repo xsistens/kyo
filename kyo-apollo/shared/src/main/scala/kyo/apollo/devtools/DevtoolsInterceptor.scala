@@ -12,7 +12,7 @@ import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.runtime.ResponseStream
 
-/** The head [[ApolloInterceptor]] that feeds a [[DevtoolsOperationStore]]: it
+/** The head `ApolloInterceptor` that feeds a [[DevtoolsOperationStore]]: it
   * records each query/mutation as it flows through the chain and refreshes its
   * status/error from every response emission, without altering the stream.
   *

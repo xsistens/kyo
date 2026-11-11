@@ -5,7 +5,7 @@ import kyo.apollo.network.ExecutionContext
 /** Where an operation may draw its data from, and in what order — the cache /
   * network strategy the [[CacheInterceptor]] executes.
   *
-  * A `FetchPolicy` is itself an [[ExecutionContext.Element]] keyed by its own
+  * A `FetchPolicy` is itself an `ExecutionContext.Element` keyed by its own
   * companion, so it rides the existing per-request context bag rather than
   * widening [[kyo.apollo.network.ApolloRequest]]: `ApolloCall.fetchPolicy(p)` attaches
   * it, and the interceptor reads it back with `context.get(FetchPolicy)`. When no

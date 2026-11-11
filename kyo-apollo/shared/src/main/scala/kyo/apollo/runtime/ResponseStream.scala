@@ -6,7 +6,7 @@ import kyo.apollo.network.ApolloResponse
 /** The uniform effect-stream every operation produces.
   *
   * A single network reply, a cache-then-network pair, and a long-lived
-  * subscription all share this one type — a Kyo [[Stream]] of [[ApolloResponse]]
+  * subscription all share this one type — a Kyo [[Stream]] of `ApolloResponse`
   * values carrying the `Async & Scope` effect row. `Async` is the asynchrony of
   * the transport; `Scope` is the teardown seam a live stream (a subscription or a
   * cache watcher) binds its socket/watcher unsubscription to. A finite

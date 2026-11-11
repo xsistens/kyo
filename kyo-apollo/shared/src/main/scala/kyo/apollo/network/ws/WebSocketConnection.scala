@@ -14,16 +14,16 @@ import kyo.apollo.network.MarkedChannel
   * on this four-method contract, exactly as the HTTP layer is built on
   * [[kyo.apollo.network.http.HttpEngine]]. Splitting the platform socket out this
   * way lets a platform [[WebSocketEngine]] open a real browser/Node socket
-  * ([[JsWebSocketEngine]]) or a kyo-http socket (JVM/Native) in production while
+  * (`JsWebSocketEngine`) or a kyo-http socket (JVM/Native) in production while
   * the transport tests drive a scripted in-memory fake.
   *
   * All four methods are kyo-effectful so the transport can drive the socket with
   * structured concurrency: [[incoming]] is a live `Stream` of text frames that
-  * ends when the socket closes; [[closed]] is the liveness signal —
+  * ends when the socket closes; `closed` is the liveness signal —
   *
   *   - it **succeeds** when the socket closes cleanly (a normal `1000` close),
   *     which the transport reads as an intentional shutdown, and
-  *   - it **aborts** with an [[ApolloWebSocketClosedException]] (carrying the
+  *   - it **aborts** with an `ApolloWebSocketClosedException` (carrying the
   *     close `code`/`reason`) on any abnormal close or socket error, which the
   *     transport reads as a drop worth reconnecting.
   */
@@ -40,7 +40,7 @@ trait WebSocketConnection:
     def incoming(using Frame): Stream[String, Async]
 
     /** The socket's liveness signal: succeeds on a clean `1000` close, aborts with
-      * an [[ApolloWebSocketClosedException]] on any abnormal close or socket error.
+      * an `ApolloWebSocketClosedException` on any abnormal close or socket error.
       * The transport reads this as its close/drop trigger.
       */
     def closed(using Frame): Unit < (Async & Abort[ApolloWebSocketClosedException])
@@ -58,7 +58,7 @@ end WebSocketConnection
 object WebSocketConnection:
 
     /** The WebSocket "normal closure" status code (RFC 6455 §7.4.1). A close with
-      * this code is an intentional shutdown, so [[closed]] *succeeds*; any other
+      * this code is an intentional shutdown, so `closed` *succeeds*; any other
       * code is treated as an abnormal drop and *aborts*.
       */
     val NormalClosure: Int = 1000

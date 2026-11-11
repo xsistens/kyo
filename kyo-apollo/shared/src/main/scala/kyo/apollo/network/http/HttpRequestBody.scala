@@ -30,7 +30,7 @@ enum HttpRequestBody derives CanEqual:
       */
     case Multipart(parts: Chunk[HttpRequest.Part])
 
-    /** The JSON document of a [[Text]] body; `Absent` for the other forms. */
+    /** The JSON document of a `Text` body; `Absent` for the other forms. */
     def text: Maybe[String] = this match
         case Text(json) => Present(json)
         case _          => Absent

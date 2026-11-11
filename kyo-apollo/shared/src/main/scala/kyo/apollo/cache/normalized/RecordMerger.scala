@@ -13,7 +13,7 @@ import kyo.apollo.json.Json
   * under its key, reporting which field keys changed. Mirrors apollo-kotlin's
   * `RecordMerger`.
   *
-  * The [[default]] is the field-wise union ("incoming wins") shared by every
+  * The `default` is the field-wise union ("incoming wins") shared by every
   * backend (see [[NormalizedCache.mergeRecords]]). [[fieldPolicies]] wraps that
   * with per-field overrides from a [[FieldPolicies]] registry, so a
   * [[kyo.apollo.cache.normalized.api.ConnectionFieldPolicy]] can union paginated
@@ -37,7 +37,7 @@ object RecordMerger:
         (existing, incoming) => NormalizedCache.mergeRecords(existing, incoming)
 
     /** A merger that applies `policies`' per-field merges, falling back to the
-      * default union for fields without one. Returns [[default]] unchanged when the
+      * default union for fields without one. Returns `default` unchanged when the
       * registry is empty, so the unpolicied path pays nothing.
       */
     def fieldPolicies(policies: FieldPolicies): RecordMerger =

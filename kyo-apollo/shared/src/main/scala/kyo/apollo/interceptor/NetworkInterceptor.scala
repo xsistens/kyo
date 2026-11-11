@@ -11,7 +11,7 @@ import kyo.apollo.network.ws.WebSocketNetworkTransport
 import kyo.apollo.runtime.ResponseStream
 
 /** The terminal [[ApolloInterceptor]]: it does not proceed down the chain but
-  * instead hands the request to a transport, lifting the result into a [[Flow]].
+  * instead hands the request to a transport, lifting the result into a `Flow`.
   *
   * It routes by operation kind, mirroring apollo-kotlin's `NetworkInterceptor`:
   *   - a [[Subscription]] is a long-lived stream, so it goes to the
@@ -19,7 +19,7 @@ import kyo.apollo.runtime.ResponseStream
   *     multi-emission `Flow` of subscription events directly; and
   *   - every other operation (query / mutation) is a single request/response, so
   *     it goes to the [[HttpNetworkTransport]] and its `Future[ApolloResponse]` is
-  *     lifted into a one-emission [[Flow]].
+  *     lifted into a one-emission `Flow`.
   *
   * Because both transports already fold every network/HTTP/parse failure into
   * `ApolloResponse.error` (failures are values), this

@@ -13,7 +13,7 @@ import kyo.apollo.runtime.ResponseStream
 trait ApolloInterceptorChain:
 
     /** Continue processing `request` at the next interceptor, returning its stream
-      * of [[ApolloResponse]] values.
+      * of `ApolloResponse` values.
       */
     def proceed[D](request: ApolloRequest[D])(using
         Frame,

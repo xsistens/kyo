@@ -36,7 +36,7 @@ import kyo.apollo.network.Uuid
   */
 trait ApolloCall[D]:
 
-    /** The stream-first primitive: the full sequence of [[ApolloResponse]] values
+    /** The stream-first primitive: the full sequence of `ApolloResponse` values
       * this operation produces, in emission order. One emission for a plain network
       * query today; the same type carries cache-then-network and subscription
       * streams. Cold — nothing runs until it is consumed within an `Async` (and, for
@@ -47,7 +47,7 @@ trait ApolloCall[D]:
         Tag[Emit[Chunk[ApolloResponse[D]]]]
     ): ResponseStream[D]
 
-    /** Execute the operation and yield its **single / first** [[ApolloResponse]] —
+    /** Execute the operation and yield its **single / first** `ApolloResponse` —
       * the convenience path for the common query/mutation. Derived from [[stream]]
       * so the two can never disagree: it takes the first emission.
       *

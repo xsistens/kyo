@@ -19,7 +19,7 @@ import kyo.apollo.network.MarkedChannel
   * status to the continuation (apollo's contract: a non-2xx status still
   * *completes*; the transport interprets it). A genuine transport failure
   * (`Abort[HttpException]`) becomes the engine's `Abort[HttpEngineFailure]`: an
-  * [[ApolloNetworkException]] whose `cause` is the kyo-http leaf, so a caller can
+  * `ApolloNetworkException` whose `cause` is the kyo-http leaf, so a caller can
   * still tell a refused connection from a DNS failure or a timeout. A panic from
   * kyo-http stays a panic. Interrupting the effect interrupts kyo-http's request.
   *
@@ -65,7 +65,7 @@ final class HttpClientEngine extends HttpEngine:
     end send
 
     /** Move a kyo-http call onto the engine row: its typed failure becomes an
-      * [[ApolloNetworkException]], a panic stays a panic.
+      * `ApolloNetworkException`, a panic stays a panic.
       */
     private def onEngineRow[A](call: A < (Async & Abort[HttpException]))(using Frame): A < (Async & Abort[HttpEngineFailure]) =
         Abort.run[HttpException](call).map {

@@ -18,10 +18,10 @@ import scala.collection.immutable.VectorMap
   * [[Normalizer]].
   *
   * Starting from the operation's root record, it follows the *same*
-  * [[CompiledField]] tree the [[Normalizer]] wrote against (via the shared
+  * `CompiledField` tree the [[Normalizer]] wrote against (via the shared
   * [[FieldCollector]]), resolving each [[RecordValue.Reference]] to its stored
   * [[Record]] and reassembling a nested [[Json.JObj]]. A required record or
-  * field that is absent ends the read as a [[CacheMissException]] failure (a
+  * field that is absent ends the read as a `CacheMissException` failure (a
   * `Result`, never a throw) rather than producing partial data — so
   * `CacheFirst`/`NetworkFirst` can fall through to the network and `CacheOnly`
   * can surface the miss as a response value.
@@ -81,7 +81,7 @@ final class CacheBatchReader(
 
     /** Resolve `key` to its loaded [[Record]], recording the key as a dependency on
       * a hit. A miss records nothing — the read is about to end in a
-      * [[CacheMissException]], so there is no successful graph to depend on. A key no
+      * `CacheMissException`, so there is no successful graph to depend on. A key no
       * level asked for (which the level walk never leaves out) is loaded on its own.
       */
     private def resolve(key: CacheKey): Maybe[Record] =
@@ -106,7 +106,7 @@ final class CacheBatchReader(
         Result.fail(CacheMissException(key))
 
     /** Assemble the response `data` object for `rootField`, resolving references
-      * from the store. A [[CacheMissException]] names the first required record or
+      * from the store. A `CacheMissException` names the first required record or
       * field that is missing; no partial data is produced.
       */
     def toData(rootField: CompiledField): Result[CacheMissException, Json.JObj] =
@@ -189,7 +189,7 @@ final class CacheBatchReader(
 
     /** Resolve a single selected field to JSON: a configured redirect reads a
       * different record, otherwise the field's own stored value is used. A field
-      * selected but absent from its record is a [[CacheMissException]] naming the
+      * selected but absent from its record is a `CacheMissException` naming the
       * record and the field's storage key; a referenced or redirected record that
       * is absent is a miss of that whole record. `parentType` is the resolved type
       * of `record` (its stored `__typename`, falling back to the schema's static
@@ -265,7 +265,7 @@ object CacheBatchReader:
       * operation's root key) and decodes it through `operation.dataCodec` — the
       * same typed-decode path the HTTP transport uses — so the result equals what
       * the network would have produced. A pure function of the loader's records:
-      * a [[CacheMissException]] failure if they cannot satisfy every selected field,
+      * a `CacheMissException` failure if they cannot satisfy every selected field,
       * a panic if decoding (or the reader itself) is defective — never the other way
       * round.
       *
@@ -315,7 +315,7 @@ object CacheBatchReader:
       * `codec`, together with the record keys the read depended on — the one
       * reader-plus-decode step operation and fragment reads share.
       *
-      * The outcome is a [[CacheMissException]] failure only for a missing record or
+      * The outcome is a `CacheMissException` failure only for a missing record or
       * field. Anything the walk or `codec` throws — a decode defect, a policy bug —
       * is a `Panic`, and so is a decode failure: data the store holds under the
       * codec's own selections and does not decode is a defect, not a miss. No caller
