@@ -31,7 +31,7 @@ import scala.collection.immutable.VectorMap
   * each phase carries exactly the socket, fibers and timers that exist in it, so
   * an open socket without a connection, a reconnect without a timer, or an
   * acknowledged handshake that still waits for its ack cannot be written down.
-  * The state is changed only by one '''owner fiber''' that takes [[Msg]] commands
+  * The state is changed only by one '''owner fiber''' that takes `Msg` commands
   * from a mailbox, one at a time. Every transition is an exhaustive `match` on the
   * phase; a transition that stops a fiber or closes a socket runs that effect in
   * the owner and waits for it, so the next phase never starts while the previous
