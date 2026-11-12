@@ -741,8 +741,8 @@ abstract class UicTest extends kyo.test.Test[Any]:
       * lands inert, which is the trap the module documents.
       */
     private[uic] def click(el: UI.Ast.Element)(using Frame): Any < Async =
-        // A silent element runs no handler, as the dispatch does: the click reaches nothing.
-        silentNow(el).map { quiet =>
+        // A silent element, or one that hides clicks, runs no click handler, as the dispatch does: the click reaches nothing.
+        hiddenNow(el, "click").map { quiet =>
             if quiet then ()
             else
                 el.attrs.onClick match
@@ -829,8 +829,8 @@ abstract class UicTest extends kyo.test.Test[Any]:
             chain match
                 case Nil       => ()
                 case e :: rest =>
-                    // A silent element, target or ancestor, runs no handler: the event goes on as if it had none.
-                    silentNow(e).map { quiet =>
+                    // A silent element, target or ancestor, or one hiding clicks, runs no click handler: the event goes on as if it had none.
+                    hiddenNow(e, "click").map { quiet =>
                         if quiet then walk(rest, isTarget = false)
                         else
                             val a        = e.attrs
@@ -873,12 +873,14 @@ abstract class UicTest extends kyo.test.Test[Any]:
         if raw.isEmpty then Seq.empty else raw.split('.').toSeq
     end pathOf
 
-    /** Whether `el` answers a click: it declares a handler, the self-only one included, and is not silent by a constant
-      * (`silent(true)` or `disabled(true)`), since a silent element lists no event and its handlers never run.
+    /** Whether `el` answers a click: it declares a handler, the self-only one included, and neither a constant silence nor a constant
+      * partial silence that drops `click` holds, since a silent element lists no event and its handlers never run.
       */
     private[uic] def declaresClick(el: UI.Ast.Element): Boolean =
         val a = el.attrs
-        !silentConst(el) && (a.onClick.nonEmpty || a.onClickEvt.nonEmpty || a.onClickSelf.nonEmpty || a.onClickSelfEvt.nonEmpty)
+        !silentConst(el) && !partialConstHides(el, "click") &&
+        (a.onClick.nonEmpty || a.onClickEvt.nonEmpty || a.onClickSelf.nonEmpty || a.onClickSelfEvt.nonEmpty)
+    end declaresClick
 
     /** Whether `el` is silent by its constants: `silent(true)`, or `disabled(true)` on an element that has it. */
     private[uic] def silentConst(el: UI.Ast.Element): Boolean =
@@ -886,6 +888,10 @@ abstract class UicTest extends kyo.test.Test[Any]:
             (el match
                 case d: UI.Ast.HasDisabled => d.disabled.contains(true)
                 case _                     => false)
+
+    /** Whether `el` holds a constant `silentExcept` that does not keep the event `token` (see `UI.Element.silentExcept`). */
+    private[uic] def partialConstHides(el: UI.Ast.Element, token: String): Boolean =
+        el.attrs.partialSignal.isEmpty && el.attrs.partial && !el.attrs.partialKeep.contains(token)
 
     /** Whether `el` is silent now, reading the `disabled` and `silent` channels where they are bound, as the dispatch does. */
     private[uic] def silentNow(el: UI.Ast.Element)(using Frame): Boolean < Sync =
@@ -895,6 +901,14 @@ abstract class UicTest extends kyo.test.Test[Any]:
         val quiet: Boolean < Sync = el.attrs.silentSignal.fold(Kyo.lift(el.attrs.silent))(_.current)
         off.map(o => quiet.map(o || _))
     end silentNow
+
+    /** Whether `el` hides the event `token` now: silent now (see [[silentNow]]), or under a `silentExcept` that is on and does not keep it,
+      * read from its signal where one is bound, as the dispatch does.
+      */
+    private[uic] def hiddenNow(el: UI.Ast.Element, token: String)(using Frame): Boolean < Sync =
+        val partly: Boolean < Sync = el.attrs.partialSignal.fold(Kyo.lift(el.attrs.partial))(_.current)
+        silentNow(el).map(quiet => if quiet then true else partly.map(p => p && !el.attrs.partialKeep.contains(token)))
+    end hiddenNow
 
     /** The same, for a click that reached `el` THROUGH a control of the reader's own: an anchor in
       * a cell, a button in a row. Only the typed handler can be told, since the flag rides

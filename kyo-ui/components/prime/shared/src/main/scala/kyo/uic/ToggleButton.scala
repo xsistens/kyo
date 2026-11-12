@@ -134,12 +134,6 @@ object ToggleButton:
         radio: Maybe[RadioOption]
     ) derives CanEqual
 
-    private object Base:
-        /** The base of `q`, as the engine hands it: an unbound `checked` is bound to the instance's own ref. */
-        def apply(q: Props): Base =
-            Base(q.checked.heard, q.checked.fixed, q.checked.deaf, q.onBlur.isDefined, q.validity, q.access, q.radio)
-    end Base
-
     /** The button, drawn once over `props`, which hand it `checked` bound: to the instance's own ref where a run binds nothing
       * (carrying on from the binding when a run drops it), unbound where the button is drawn in place and its host binds it.
       *
@@ -151,9 +145,12 @@ object ToggleButton:
       * nothing to press.
       */
     private def drawn(props: UI.Live[Props])(using Frame): UI =
-        val checked           = props(_.checked.value(false))
-        val size              = props(_.size)
-        val base              = props(Base(_))
+        val checked = props(_.checked.value(false))
+        val size    = props(_.size)
+        // The base of the props as the engine hands them: an unbound `checked` is bound to the instance's own ref.
+        val base = props { q =>
+            Base(q.checked.heard, q.checked.fixed, q.checked.deaf, q.onBlur.isDefined, q.validity, q.access, q.radio)
+        }
         val disabled          = props(_.disabled)
         val readonly          = props(_.readonly)
         val toggle: UI.Action = props.call(_.checked).map(s => s.current(false).map(v => s.change(!v)))
@@ -163,14 +160,13 @@ object ToggleButton:
         UI.reactive {
             // SelectButton's `itemTemplate` replaces the icon and label; otherwise the current state's, or a non-breaking space
             // where no labels are set (Prime).
-            lazy val predefinedContent = UI.reactive {
+            val content: UI = props(_.content).read.getOrElse(UI.reactive {
                 val on    = checked.read
                 val shown = if on then props(_.onLabel).read else props(_.offLabel).read
                 val glyph = if on then props(_.onIcon).read else props(_.offIcon).read
                 fragment((glyph.map(GlyphSvg(_, "p-togglebutton-icon")).toList :+
                     (span.cssClass("p-togglebutton-label")(shown.getOrElse(" ")): UI))*)
-            }
-            val content: UI = props(_.content).read.getOrElse(predefinedContent)
+            })
             // Only a signal nobody hears is a mistake worth a card, and only while the reader could press: a constant nobody
             // hears is fixed, and drawn so. Its own block, so the flags it reads stay channels of the button.
             lazy val unheardCard = UI.reactive {
@@ -181,17 +177,15 @@ object ToggleButton:
             val off      = disabled.read
             val inert    = readonly.read || b.fixed
             val validity = FieldValidity(b.validity)
-            val marked   = validity.mark(
+            val shaped   = validity.mark(
                 button.cssClass("p-togglebutton").cssClass("p-component")
                     .when(b.access.id)(_.id(_))
                     .when(checked)(_.cssClass("p-togglebutton-checked"))
-            )
-            val shaped = marked
-                .cssClass.matching(size) {
-                    case Size.Small  => "p-togglebutton-sm"
-                    case Size.Normal => Absent
-                    case Size.Large  => "p-togglebutton-lg"
-                }
+            ).cssClass.matching(size) {
+                case Size.Small  => "p-togglebutton-sm"
+                case Size.Normal => Absent
+                case Size.Large  => "p-togglebutton-lg"
+            }
                 .cssClass.matching(size) {
                     case Size.Small  => "p-inputfield-sm"
                     case Size.Normal => Absent
@@ -207,16 +201,13 @@ object ToggleButton:
                 case Absent => shaped.aria(Aria.pressed -> checked.read)
             // readonly keeps the normal look and focusability, but never toggles. It says so as
             // `aria-disabled`, not `aria-readonly`: this is a `role="button"`, and that role has no
-            // readonly state to report. Disabled or readonly, the button is silent: its handlers check nothing, it lists
-            // no event while locked, and a change patches that in place.
+            // readonly state to report. Disabled, the button is silent for every event. Readonly or fixed, it is silent for
+            // every event but blur: its click and key handlers check nothing and it lists no such event while locked, and
+            // focus leaving a locked field still reaches its onBlur (RULEBOOK rule 6). A change patches that in place.
             val el = roled
-                .aria(
-                    Aria.label      -> b.access.name,
-                    Aria.labelledby -> b.access.nameRef
-                )
+                .aria(Aria.label -> b.access.name, Aria.labelledby -> b.access.nameRef, Aria.disabled -> (!off && inert))
                 .disabled(off)
-                .silent(inert)
-                .aria(Aria.disabled -> (!off && inert))
+                .silentExcept(inert, "blur")
                 .when(b.editable)(_.onClick(toggle))
                 .when(b.blurs)(_.onBlur(blur))
             val field = validity.follow(el(span.cssClass("p-togglebutton-content")(content)))
