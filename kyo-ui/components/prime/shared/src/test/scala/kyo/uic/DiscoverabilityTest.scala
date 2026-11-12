@@ -554,6 +554,14 @@ class DiscoverabilityTest extends UicTest:
     "Avatar has no href (not a link)" in {
         typeCheck(preamble + """def x = uic.Avatar().initials("AL").size(uic.Size.Large).shape(uic.AvatarShape.Square)""")
         typeCheckFailure(preamble + """def x = uic.Avatar().href("/x")""")
+        // The initials have one name: Prime's `label` alias is gone.
+        typeCheckFailure(preamble + """def x = uic.Avatar().label("AL")""")
+        // A click makes the control; there is no second switch for it.
+        typeCheckFailure(preamble + """def x = uic.Avatar().interactive(true)""")
+        typeCheck(preamble + """def x = uic.Avatar().initials("AL").id("me")""")
+        typeCheck(
+            preamble + """def x(s: Signal[String], u: Signal[String]) = uic.Avatar().initials(s).image(u).accessibleName(s)"""
+        )
     }
 
     "ProgressBar.value accepts Int or SignalRef[Int]; ui5's valueState/disabled are retired" in {
