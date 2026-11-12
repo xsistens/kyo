@@ -20,6 +20,13 @@ final class ReactiveScope private[kyo] ():
     extension [A](inline self: Signal[A])
         @scala.annotation.targetName("readSignal")
         inline def read: A = ${ kyo.uic.internal.ReactiveMacro.strayImpl[A]('self) }
+
+    /** An optional prop's value (an `Opt[Prop[A]]` field, or any `Maybe[Prop[A]]`), read once where the block starts: `Absent` where
+      * it is unset, the value where it is set, and a signal inside it followed like a signal anywhere.
+      */
+    extension [A](inline self: Maybe[UI.Prop[A]])
+        @scala.annotation.targetName("readOptional")
+        inline def read(using CanEqual[A, A]): Maybe[A] = ${ kyo.uic.internal.ReactiveMacro.strayImpl[Maybe[A]]('self) }
 end ReactiveScope
 
 /** A prop's value now, outside a [[reactive]] block: a read a handler makes when its event comes, with no region and no subscription.
@@ -27,6 +34,13 @@ end ReactiveScope
   */
 extension [A](self: UI.Prop[A])
     def read(using notInBlock: NotGiven[ReactiveScope], frame: Frame): A < Sync = UI.Prop.current(self)(using frame)
+
+/** An optional prop's value now, outside a [[reactive]] block: `Absent` where it is unset, else the value inside it now. */
+extension [A](self: Maybe[UI.Prop[A]])
+    @scala.annotation.targetName("readOptionalNow")
+    def read(using notInBlock: NotGiven[ReactiveScope], canEqual: CanEqual[A, A], frame: Frame): Maybe[A] < Sync =
+        UI.Prop.current(kyo.uic.internal.ReactiveMacro.optional(self))
+end extension
 
 /** A signal's value now, outside a [[reactive]] block; see the prop form. */
 extension [A](self: Signal[A])
