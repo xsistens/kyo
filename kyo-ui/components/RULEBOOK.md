@@ -197,6 +197,13 @@ UI.reactive {
   Over a constant it is the plain text, byte for byte. A text over two or more signals repaints only its text node, since the
   transport writes in place only a text over one.
 
+- **A value that decides the structure only through a condition stays a channel.** One block can say a bar's width, its label's
+  text and whether the label shows (`if pct != 0 then span(s"$pct%") else UI.empty`): the region compares `pct != 0`, not `pct`,
+  so a value moving within it patches the width and the text in place, and only a crossing draws the bar again. While a crossing
+  is on its way to the region, the run's channels keep what they showed, so no label ever reads "0%". This holds for an `if`
+  condition, a `match` selector and a guard written over reads and `val`s that only name them; a condition that is the read
+  itself, or one that uses a pattern's variable or a `val` defining something, keeps the read the region's.
+
 - **A locked element is silent, never a handler that checks the flag.** `disabled(off)` silences the element by itself;
   a lock that is not native `disabled` (readonly, a fixed value) says `silent(locked)`. A silent element lists no event in
   `data-kyo-ev` and runs no handler, as target or ancestor, and a signal patches that in place, so the handler only does its

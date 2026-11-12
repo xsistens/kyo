@@ -446,6 +446,98 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
         }
     }
 
+    "a read that decides the structure only through a derived condition" - {
+        given CanEqual[Any, Any] = CanEqual.derived
+
+        "is a region over the condition's value, and feeds its channels otherwise" in {
+            for
+                x <- Signal.initRef(40)
+                ui = UI.reactive {
+                    val pct = x.read
+                    div.inlineStyle(Style.width(pct.pct))(if pct != 0 then span(s"$pct%") else UI.empty)
+                }
+                region <- ui match
+                    case r: Reactive[?] => Kyo.lift(r)
+                    case other          => Kyo.lift(fail(s"no region over the condition: $other"))
+                compared <- region.source match
+                    case Present(p: Reactive.Source.Projected[?]) => Kyo.lift(p.signal.asInstanceOf[Signal[Any]])
+                    case other                                    => Kyo.lift(fail(s"the region keeps no value it compares: $other"))
+                at40  <- compared.current
+                drawn <- region.signal.current
+                _     <- x.set(60)
+                at60  <- compared.current
+                _     <- x.set(0)
+                at0   <- compared.current
+            yield
+                // The region compares what the condition gives: 40 and 60 are one value of it, 0 another.
+                assert(at40 == at60 && at40 != at0, s"the region compares $at40, $at60, $at0")
+                drawn match
+                    case d: Div =>
+                        assert(d.attrs.reactiveStyle.isDefined, s"the width is no channel: ${d.attrs}")
+                        d.children.toSeq match
+                            case Seq(s: SpanElement) => assert(s.children.toSeq.forall(_.isInstanceOf[Reactive[?]]), s"${s.children}")
+                            case other               => fail(s"the label is not drawn: $other")
+                        end match
+                    case other => fail(s"$other")
+                end match
+        }
+
+        "keyed by the read itself, it stays the region's value of the run" in {
+            for
+                on <- Signal.initRef(true)
+                ui = UI.reactive {
+                    val x = on.read
+                    if x then div.aria(Aria.pressed -> x) else span
+                }
+                drawn <- ui match
+                    case r: Reactive[?] => r.signal.current
+                    case other          => Kyo.lift(fail(s"the condition drew no region: $other"))
+            yield drawn match
+                case d: Div => assert(d.attrs.ariaAttrs.get("pressed").contains("true") && d.attrs.reactiveAttrs.isEmpty, s"${d.attrs}")
+                case other  => fail(s"$other")
+        }
+
+        "a channel inside never shows a value of a moment the structure has left" in {
+            Scope.run {
+                for
+                    x <- Signal.initRef(40)
+                    ui = UI.reactive {
+                        val pct = x.read
+                        div.inlineStyle(Style.width(pct.pct))(if pct != 0 then span(s"$pct%") else UI.empty)
+                    }
+                    region <- ui match
+                        case r: Reactive[?] => Kyo.lift(r)
+                        case other          => Kyo.lift(fail(s"no region over the condition: $other"))
+                    drawn <- region.signal.current
+                    label <- drawn match
+                        case d: Div =>
+                            d.children.toSeq match
+                                case Seq(s: SpanElement) =>
+                                    s.children.toSeq match
+                                        case Seq(r: Reactive[?]) => Kyo.lift(r.signal)
+                                        case other               => Kyo.lift(fail(s"$other"))
+                                case other => Kyo.lift(fail(s"$other"))
+                        case other => Kyo.lift(fail(s"$other"))
+                    seen <- AtomicRef.init(Chunk.empty[String])
+                    _    <- Fiber.init(label.observe {
+                        case t: Text => seen.getAndUpdate(_.append(t.value)).unit
+                        case _       => Kyo.unit
+                    })
+                    _ <- assertEventually(seen.get.map(_.nonEmpty))
+                    _ <- x.set(70)
+                    _ <- assertEventually(seen.get.map(_.lastMaybe.contains("70%")))
+                    // The label of a run drawn for `pct != 0`: at 0 the run is left, and the label keeps what it showed.
+                    _ <- x.set(0)
+                    _ <- x.set(80)
+                    _ <- assertEventually(seen.get.map(_.lastMaybe.contains("80%")))
+                    s <- seen.get
+                yield
+                    val steps = s.foldLeft(Chunk.empty[String])((acc, t) => if acc.lastMaybe.contains(t) then acc else acc.append(t))
+                    assert(!s.contains("0%") && steps == Chunk("40%", "70%", "80%"), s"the label showed $s")
+            }
+        }
+    }
+
     "a val of the block is a read to whoever uses it, so naming a read changes nothing" - {
         "a val that only reaches a channel is a channel too, with no region" in {
             for
