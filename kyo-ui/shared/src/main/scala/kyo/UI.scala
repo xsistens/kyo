@@ -1986,9 +1986,12 @@ object UI:
               * says the style is inline declarations, which is what a measured size or offset is; pseudo-state rules in
               * its values are not applied (bind them with `style(Signal)`, or statically). A property this channel sets
               * belongs to it: the static `style` of the same property is overridden while the channel holds it, and gone
-              * once the channel drops it.
+              * once the channel drops it. A constant has nothing to follow: it is written as `style(v)` writes it, with no
+              * channel, so a caller whose style may be either form hands it over in one call.
               */
-            def inlineStyle(v: Signal[Style]): Self = withReactiveStyle(v)
+            def inlineStyle(v: Prop[Style]): Self = v match
+                case s: Signal[Style] @unchecked => withReactiveStyle(s)
+                case c: Style                    => style(c)
 
             // ARIA attributes
             /** Sets `aria-*` attributes from `name -> value` entries, the name being the part after `aria-`:

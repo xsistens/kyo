@@ -95,6 +95,22 @@ class AttrsTest extends UITest:
         }
     }
 
+    "inlineStyle from a constant writes what style writes and binds no channel, from a signal it is the channel" in {
+        def html(ui: UI)(using Frame) = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
+        val st                        = Style.width(Length.Px(10)).height(Length.Px(20))
+        for
+            sig      <- Signal.initRef(st)
+            styled   <- html(UI.div.style(st))
+            constant <- html(UI.div.inlineStyle(st))
+            signaled <- html(UI.div.inlineStyle(sig))
+        yield
+            assert(constant == styled, s"constant $constant, style $styled")
+            assert(UI.div.inlineStyle(st).attrs.reactiveStyle.isEmpty && !UI.div.inlineStyle(st).attrs.hasChannels, "no channel")
+            assert(UI.div.inlineStyle(sig).attrs.reactiveStyle.nonEmpty, "a signal is the channel")
+            assert(signaled.contains("width: 10px") && signaled.contains("height: 20px"), s"signal written inline: $signaled")
+        end for
+    }
+
     "style row" in {
         withUI(UI.div(UI.div.style(Style.row).id("d"))) {
             Browser.assertAttributeSatisfies(Selector.id("d"), "style", "ignore")(_.contains("flex-direction: row")).unit
