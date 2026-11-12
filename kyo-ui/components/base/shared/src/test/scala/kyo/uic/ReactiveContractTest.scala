@@ -56,6 +56,8 @@ class ReactiveContractTest extends kyo.test.Test[Any]:
             @scala.annotation.tailrec
             def loop(i: Int, depth: Int): String =
                 if i >= html.length || depth == 0 then sb.toString
+                // A comment (a region's or a text channel's markers) shows nothing and opens nothing.
+                else if html.startsWith("<!--", i) then loop(html.indexOf("-->", i) + 3, depth)
                 else if html.charAt(i) == '<' then
                     val close = html.indexOf('>', i)
                     val tag   = html.substring(i, close + 1)
@@ -98,10 +100,13 @@ class ReactiveContractTest extends kyo.test.Test[Any]:
                 Kyo.foldLeft(ops)(Chunk(Out.in(initial, Out.none))) { (acc, op) =>
                     val was = acc.last
                     op match
-                        case Op.Paint(path, _, ui)  => HtmlRenderer.render(ui, path).map(h => acc.append(Out.in(h, was)))
-                        case Op.Attr(_, n, v, _)    => if n == "title" then acc.append(was.copy(title = v)) else acc
-                        case Op.Class(_, n, on, _)  => if n == "hot" then acc.append(was.copy(hot = on)) else acc
-                        case Op.Style(_, set, r, _) =>
+                        // A text channel the transport cannot write in place (one over several signals binds no synchronous
+                        // write) repaints its lone text node, which is the element's text, as a text patch is.
+                        case Op.Paint(_, _, t: UI.Ast.Text) => acc.append(was.copy(text = t.value))
+                        case Op.Paint(path, _, ui)          => HtmlRenderer.render(ui, path).map(h => acc.append(Out.in(h, was)))
+                        case Op.Attr(_, n, v, _)            => if n == "title" then acc.append(was.copy(title = v)) else acc
+                        case Op.Class(_, n, on, _)          => if n == "hot" then acc.append(was.copy(hot = on)) else acc
+                        case Op.Style(_, set, r, _)         =>
                             val w = set.collectFirst { case ("width", v) => v }.getOrElse(if r.contains("width") then "" else was.width)
                             acc.append(was.copy(width = w))
                         case Op.Text(_, v) => acc.append(was.copy(text = v))
@@ -483,16 +488,41 @@ class ReactiveContractTest extends kyo.test.Test[Any]:
 
         "a read that shapes the element runs the block and draws once per change" in {
             val runs = new Runs
+            // A parameter that takes only the value: what it builds from the read is structure the block cannot see into.
+            def shaped(v: Int)(using Frame): UI = span.id("out")(s"v=$v")
+            for
+                a <- Signal.initRef(1)
+                ui = UI.reactive {
+                    runs.tick()
+                    shaped(a.read)
+                }
+                c <- live(ui)(l => observed(a).andThen(cost(l, runs)(settle(a, 2).andThen(shows(l)(_.text == "v=2")))))
+            yield
+                report("cost", "structural read")(("runs", c.runs, 1), ("paints", c.paints, 1))
+                assert(c.runs <= 1 && c.paints <= 1, s"$c")
+            end for
+        }
+
+        "a read in a child text patches the text and runs nothing again" in {
+            val runs = new Runs
             for
                 a <- Signal.initRef(1)
                 ui = UI.reactive {
                     runs.tick()
                     span.id("out")(s"v=${a.read}")
                 }
-                c <- live(ui)(l => observed(a).andThen(cost(l, runs)(settle(a, 2).andThen(shows(l)(_.text == "v=2")))))
+                r <- live(ui) { l =>
+                    for
+                        _    <- observed(a)
+                        c    <- cost(l, runs)(settle(a, 2).andThen(shows(l)(_.text == "v=2")))
+                        seen <- l.shown
+                    yield (c, seen)
+                }
             yield
-                report("cost", "structural read")(("runs", c.runs, 1), ("paints", c.paints, 1))
-                assert(c.runs <= 1 && c.paints <= 1, s"$c")
+                val (c, seen) = r
+                report("cost", "text channel")(("runs", c.runs, 0), ("paints", c.paints, 0), ("patches", c.patches, 1))
+                // The guarantee of the rule (ISC-47): the text patches in place, the block runs and draws nothing again.
+                assert(c.runs == 0 && c.paints == 0 && seen.map(_.text).steps == Chunk("v=1", "v=2"), s"$c, ${seen.map(_.text)}")
             end for
         }
 
