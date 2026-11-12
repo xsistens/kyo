@@ -713,11 +713,18 @@ private[kyo] object EventDispatch:
                 // A button takes Enter and Space; an anchor takes Enter alone. That is not a
                 // simplification of the browser but the browser: Space with a link focused scrolls
                 // the page, it does not follow the link, and the ARIA link pattern says the same.
+                // An element that says it is a button and takes a click takes both keys, an anchor
+                // among them, as ARIA asks of it and no browser does (KeyPolicy.activatesAsButton).
                 val activateClick = if isTarget && KeyPolicy.activatesButton(e.keyboard.key) then
+                    val clicks = attrs.onClick.nonEmpty || attrs.onClickEvt.nonEmpty ||
+                        attrs.onClickSelf.nonEmpty || attrs.onClickSelfEvt.nonEmpty
                     elem match
-                        case _: Button                                            => recordActivation(selfPath)
+                        case _: Button => recordActivation(selfPath)
+                        case _ if KeyPolicy.activatesAsButton(e.keyboard.key, clicks, attrs.role.getOrElse("")) =>
+                            recordActivation(selfPath)
                         case _: Anchor if KeyPolicy.activatesLink(e.keyboard.key) => recordActivation(selfPath)
                         case _                                                    => Kyo.lift(())
+                    end match
                 else Kyo.lift(())
                 // Enter/Space on checkbox/radio triggers onChange. Space is the browser's; Enter is
                 // kyo's own, kept deliberately so a checkbox answers the same key in the TUI, where

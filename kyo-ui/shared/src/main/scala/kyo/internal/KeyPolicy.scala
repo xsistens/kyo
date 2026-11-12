@@ -62,6 +62,18 @@ private[kyo] object KeyPolicy:
 
     def activatesButton(key: String): Boolean = buttonActivationKeys.contains(key)
 
+    /** Whether `key` activates an element that is no native button but says it is one (`role="button"`) and carries a click
+      * handler of its own: Enter and Space, as on a button.
+      *
+      * ARIA asks such an element to answer both keys, and a browser gives a span or a div neither (Space scrolls the page). So
+      * kyo-ui answers them: the element lists `keydown` while it carries the role and a click, the dispatcher answers the key
+      * with a click at it, and the clients decline the browser's own default (see [[doubleActivates]]). A component sets the role
+      * and the click and writes no keys. Without a click handler of its own nothing is emulated: a link styled as a button keeps
+      * its navigation, which the dispatcher does not carry. A role set through a channel is not read here.
+      */
+    def activatesAsButton(key: String, declaresClick: Boolean, role: String): Boolean =
+        declaresClick && role == "button" && activatesButton(key)
+
     def submitsImplicitly(key: String): Boolean = implicitSubmissionKeys.contains(key)
 
     /** Keys that can activate anything at all: a button's, a link's, or a form's implicit submission. Every other key is decided
@@ -103,7 +115,7 @@ private[kyo] object KeyPolicy:
       * again. The browser's is the one to suppress, since the dispatcher's runs after the element's
       * own `onKeyDown` and keeps the two in a defined order.
       *
-      * The three branches differ because what the dispatcher emulates differs.
+      * The branches differ because what the dispatcher emulates differs.
       *
       *   - A '''button''' is suppressed whenever a keydown is posted at all. The dispatcher answers a
       *     keydown on a button by synthesizing a click at it, which is what a browser does and what
@@ -119,6 +131,11 @@ private[kyo] object KeyPolicy:
       *     or the form hears both. Nothing else submits on Enter: a textarea takes it as a line break
       *     and a select as a dropdown interaction, and both keep it.
       *
+      *   - An element with '''role="button"''' and a click handler of its own is a button to the
+      *     keyboard ([[activatesAsButton]]), an anchor among them: the dispatcher answers Enter and
+      *     Space with its click, so the browser's default goes (Space scrolled the page, an anchor's
+      *     Enter would be a second click).
+      *
       * A submitting button is not exempt: the synthesized click bubbles to its form like any other
       * click, so the form's submission comes from that click and the browser's would be a second one.
       */
@@ -127,14 +144,16 @@ private[kyo] object KeyPolicy:
         tag: String,
         declaresClick: Boolean,
         declaresKeyDown: Boolean,
-        insideForm: Boolean
+        insideForm: Boolean,
+        role: String
     ): Boolean =
         declaresKeyDown && {
             tag match
-                case "BUTTON" => activatesButton(key)
-                case "A"      => declaresClick && activatesLink(key)
-                case "INPUT"  => insideForm && submitsImplicitly(key)
-                case _        => false
+                case "BUTTON"                                         => activatesButton(key)
+                case _ if activatesAsButton(key, declaresClick, role) => true
+                case "A"                                              => declaresClick && activatesLink(key)
+                case "INPUT"                                          => insideForm && submitsImplicitly(key)
+                case _                                                => false
         }
     end doubleActivates
 

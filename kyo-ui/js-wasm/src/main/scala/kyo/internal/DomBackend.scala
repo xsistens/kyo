@@ -2216,7 +2216,8 @@ private[kyo] object DomBackend:
                 tag = target.tagName,
                 declaresClick = declared != null && declared.split(",").contains("click"),
                 declaresKeyDown = declaredInChain(target, "keydown"),
-                insideForm = target.closest("form") != null
+                insideForm = target.closest("form") != null,
+                role = if target.hasAttribute("role") then target.getAttribute("role") else ""
             )
         }
     end doubleActivation

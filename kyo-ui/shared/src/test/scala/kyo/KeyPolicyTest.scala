@@ -77,8 +77,39 @@ class KeyPolicyTest extends kyo.test.Test[Any]:
 
     // ---- double activation ----
 
-    private def doubles(key: String, tag: String, declaresClick: Boolean = true, insideForm: Boolean = false): Boolean =
-        KeyPolicy.doubleActivates(key, tag, declaresClick, declaresKeyDown = true, insideForm)
+    private def doubles(
+        key: String,
+        tag: String,
+        declaresClick: Boolean = true,
+        insideForm: Boolean = false,
+        role: String = ""
+    ): Boolean =
+        KeyPolicy.doubleActivates(key, tag, declaresClick, declaresKeyDown = true, insideForm, role)
+
+    "an element with role button and a click handler declines the browser's Enter and Space, which the dispatcher answers" in {
+        // A span or a div does nothing on Enter and scrolls the page on Space; the dispatcher's click is the activation.
+        assert(doubles("Enter", "SPAN", role = "button"))
+        assert(doubles(" ", "DIV", role = "button"))
+        // An anchor that says it is a button answers Space as well, and its own Enter would be a second click.
+        assert(doubles(" ", "A", role = "button"))
+        assert(doubles("Enter", "A", role = "button"))
+    }
+
+    "an element with role button and no click handler keeps the browser's keys" in {
+        // Nothing is emulated without a click handler on the element itself: a navigation link styled as a button still
+        // follows its href on Enter, which the dispatcher does not carry.
+        assert(!doubles("Enter", "SPAN", declaresClick = false, role = "button"))
+        assert(!doubles("Enter", "A", declaresClick = false, role = "button"))
+        assert(!doubles("a", "SPAN", role = "button"))
+    }
+
+    "the dispatcher and the clients read one rule for what a key activates on an element with role button" in {
+        assert(KeyPolicy.activatesAsButton("Enter", declaresClick = true, role = "button"))
+        assert(KeyPolicy.activatesAsButton(" ", declaresClick = true, role = "button"))
+        assert(!KeyPolicy.activatesAsButton("Escape", declaresClick = true, role = "button"))
+        assert(!KeyPolicy.activatesAsButton("Enter", declaresClick = true, role = "link"))
+        assert(!KeyPolicy.activatesAsButton("Enter", declaresClick = false, role = "button"))
+    }
 
     "a button is activated twice by Enter and by Space, submitting or not, handler or not" in {
         // A submitting button is not exempt: the dispatcher's synthesized click carries the form
@@ -127,8 +158,8 @@ class KeyPolicyTest extends kyo.test.Test[Any]:
     }
 
     "nothing in the chain declaring a keydown means no keydown is posted, so nothing is emulated" in {
-        assert(!KeyPolicy.doubleActivates("Enter", "BUTTON", declaresClick = true, declaresKeyDown = false, insideForm = true))
-        assert(!KeyPolicy.doubleActivates("Enter", "INPUT", declaresClick = false, declaresKeyDown = false, insideForm = true))
+        assert(!KeyPolicy.doubleActivates("Enter", "BUTTON", declaresClick = true, declaresKeyDown = false, insideForm = true, role = ""))
+        assert(!KeyPolicy.doubleActivates("Enter", "INPUT", declaresClick = false, declaresKeyDown = false, insideForm = true, role = ""))
     }
 
     "an element the browser does not activate, outside a form, is left alone" in {
@@ -138,14 +169,15 @@ class KeyPolicyTest extends kyo.test.Test[Any]:
 
     "a key outside the activation keys activates nothing, so the clients may skip reading the target" in {
         val keys       = Seq("a", "Tab", "Escape", "ArrowDown", "Backspace", "Enter", " ")
-        val tags       = Seq("BUTTON", "A", "INPUT", "DIV")
+        val tags       = Seq("BUTTON", "A", "INPUT", "DIV", "SPAN")
         val activating =
             for
                 key  <- keys
                 tag  <- tags
                 ck   <- Seq(true, false)
                 form <- Seq(true, false)
-                if KeyPolicy.doubleActivates(key, tag, declaresClick = ck, declaresKeyDown = true, insideForm = form)
+                role <- Seq("", "button")
+                if KeyPolicy.doubleActivates(key, tag, declaresClick = ck, declaresKeyDown = true, insideForm = form, role = role)
             yield key
         assert(activating.distinct.forall(KeyPolicy.mayActivate), activating.distinct.mkString(","))
         assert(!KeyPolicy.mayActivate("a") && !KeyPolicy.mayActivate("Tab"))

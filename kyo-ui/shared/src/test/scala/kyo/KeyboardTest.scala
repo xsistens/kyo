@@ -448,6 +448,82 @@ class KeyboardTest extends UITest:
             }
     }
 
+    // ---- an element with role="button" is a button to the keyboard ----
+    //
+    // ARIA asks an element that takes the button role to answer Enter and Space as a button does, and a browser gives a
+    // span or a div neither. kyo-ui does it for every such element that carries a click handler, so a component sets the
+    // role and the click and writes no keys. None of these apps declares a keydown anywhere: the role and the click are all
+    // it takes, and a page taller than the window shows whether Space also scrolled it.
+
+    private def roleButtonApp(target: SignalRef[Int] => UI)(using Frame): UI < Async =
+        for hits <- Signal.initRef(0)
+        yield UI.div(
+            target(hits),
+            hits.map(n => UI.span(n.toString).id("n")),
+            UI.div.style(Style.height(Length.parse("5000px")))
+        )
+
+    private def roleButton(hits: SignalRef[Int])(using Frame): UI =
+        UI.span.id("t").role("button").tabIndex(0).onClick(hits.getAndUpdate(_ + 1).unit)("go")
+
+    "Enter on an element with role button and a click handler activates it once" in {
+        roleButtonApp(roleButton).flatMap { ui =>
+            withUI(ui) {
+                for
+                    _ <- Browser.focus(Selector.id("t"))
+                    _ <- Browser.press(Selector.id("t"), Key.Enter)
+                    _ <- Browser.assertText(Selector.id("n"), "1")
+                yield ()
+            }
+        }
+    }
+
+    "Space on an element with role button and a click handler activates it once and leaves the page where it was" in {
+        roleButtonApp(roleButton).flatMap { ui =>
+            withUI(ui) {
+                for
+                    _        <- Browser.focus(Selector.id("t"))
+                    _        <- Browser.press(Selector.id("t"), Key.Space)
+                    _        <- Browser.assertText(Selector.id("n"), "1")
+                    scrolled <- Browser.evalInt("Math.round(window.scrollY)")
+                yield assert(scrolled == 0, s"Space scrolled the page to $scrolled")
+            }
+        }
+    }
+
+    "an element with role button hears its own key first, then is activated once" in {
+        for
+            keys <- Signal.initRef(0)
+            ui   <- roleButtonApp(hits =>
+                UI.span.id("t").role("button").tabIndex(0)
+                    .onKeyDown((_: UI.KeyboardEvent) => keys.getAndUpdate(_ + 1).unit)
+                    .onClick(hits.getAndUpdate(_ + 1).unit)("go")
+            )
+            seen <- withUI(ui) {
+                for
+                    _ <- Browser.focus(Selector.id("t"))
+                    _ <- Browser.press(Selector.id("t"), Key.Enter)
+                    _ <- Browser.assertText(Selector.id("n"), "1")
+                yield ()
+            }.andThen(keys.get)
+        yield assert(seen == 1, s"the element's own key handler ran $seen times")
+    }
+
+    "an anchor with no href and role button is activated by Space too" in {
+        // A link takes Enter alone, but this anchor says it is a button, so it answers as one (OrganizationChart's toggle).
+        roleButtonApp(hits => UI.a.id("t").role("button").tabIndex(0).onClick(hits.getAndUpdate(_ + 1).unit)("toggle")).flatMap {
+            ui =>
+                withUI(ui) {
+                    for
+                        _ <- Browser.focus(Selector.id("t"))
+                        _ <- Browser.press(Selector.id("t"), Key.Space)
+                        _ <- Browser.press(Selector.id("t"), Key.Enter)
+                        _ <- Browser.assertText(Selector.id("n"), "2")
+                    yield ()
+                }
+        }
+    }
+
     "the space bar arrives as Keyboard.Space" in {
         // The DOM calls the space bar `" "`, and `Keyboard.fromString` maps that one string. A key
         // that reaches a handler as `Unknown("Space")` matches no `case Keyboard.Space` anywhere in
