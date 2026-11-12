@@ -186,12 +186,15 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
     }
 
     "a UI block over two signals is one region, compared by the values read" in {
+        // A parameter that takes only the value, so the reads shape what the block draws.
+        def label(v: String)(using Frame): UI = span(v)
         for
             a <- Signal.initRef("x")
             b <- Signal.initRef(1)
-        yield UI.reactive(span(s"${a.read}${b.read}")) match
+        yield UI.reactive(label(s"${a.read}${b.read}")) match
             case r: Reactive[?] => assert(r.source.exists(_.isInstanceOf[Reactive.Source.Projected[?]]), s"${r.source}")
             case other          => fail(s"not one region: $other")
+        end for
     }
 
     "a block inside a block keeps its own reads: the outer region follows its read, the inner one its own" in {
@@ -209,7 +212,17 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
                 case other          => Kyo.lift(other)
         yield
             assert(ui.isInstanceOf[Reactive[?]], s"the outer block is no region: $ui")
-            assert(first.isInstanceOf[Reactive[?]], s"the inner block is no region of its own: $first")
+            // The inner block's read is its child text's channel: its own read, over its own signal.
+            val own = first match
+                case s: SpanElement =>
+                    s.children.toSeq match
+                        case Seq(r: Reactive[?]) => r.source.exists {
+                                case Reactive.Source.Lifted(sig) => sig eq inner
+                                case _                           => false
+                            }
+                        case _ => false
+                case _ => false
+            assert(own, s"the inner block does not follow its own read: $first")
             assert(last.isInstanceOf[SpanElement], s"$last")
     }
 
@@ -389,6 +402,47 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
             yield UI.reactive(label(on.read.toString)) match
                 case _: Reactive[?] => succeed
                 case other          => fail(s"no region for a read the block needs: $other")
+        }
+
+        "a read in a child text is that text's channel: the block draws no region, and the text follows the read" in {
+            for
+                a <- Signal.initRef(1)
+                ui = UI.reactive(span(s"v=${a.read}"))
+                text <- ui match
+                    case s: SpanElement =>
+                        s.children.toSeq match
+                            case Seq(r: Reactive[?]) => Kyo.lift(r)
+                            case other               => Kyo.lift(fail(s"the child is no text channel: $other"))
+                    case other => Kyo.lift(fail(s"the block drew a region: $other"))
+                lifted = text.source match
+                    case Present(Reactive.Source.Lifted(sig)) => Present(sig)
+                    case _                                    => Absent
+                before <- lifted.fold(Kyo.lift(""))(_.current)
+                _      <- a.set(2)
+                _      <- assertEventually(lifted.fold(Kyo.lift(false))(_.current.map(_ == "v=2")))
+            yield assert(lifted.isDefined && before == "v=1", s"${text.source}, $before")
+        }
+
+        "a val that only reaches a child text is that text's channel too, with no region" in {
+            for
+                a <- Signal.initRef(1)
+            yield UI.reactive {
+                val label = s"v=${a.read}"
+                span(label)
+            } match
+                case s: SpanElement => assert(s.children.toSeq.forall(_.isInstanceOf[Reactive[?]]), s"${s.children}")
+                case other          => fail(s"the block drew a region: $other")
+        }
+
+        "a child text over a constant is the plain text" in {
+            val a: Prop[Int] = 1
+            UI.reactive(span(s"v=${a.read}")) match
+                case s: SpanElement =>
+                    s.children.toSeq match
+                        case Seq(t: Text) => assert(t.value == "v=1", s"$t")
+                        case other        => fail(s"$other")
+                case other => fail(s"$other")
+            end match
         }
     }
 
@@ -711,7 +765,7 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
             typeCheckFailure("""
                 import kyo.*
                 val n: UI.Prop[Int] = 1
-                UI.reactive(UI.div(UI.span(n.read.toString), UI.input.value("start")))
+                UI.reactive(UI.div(UI.span.id(s"n${n.read}"), UI.input.value("start")))
             """)("every run of the block puts it back")
         }
 
@@ -719,7 +773,7 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
             typeCheckFailure("""
                 import kyo.*
                 val n: UI.Prop[Int] = 1
-                UI.reactive(UI.div(UI.span(n.read.toString), UI.checkbox.checked(false)))
+                UI.reactive(UI.div(UI.span.id(s"n${n.read}"), UI.checkbox.checked(false)))
             """)("every run of the block puts it back")
         }
 
@@ -735,7 +789,7 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
             typeCheckFailure("""
                 import kyo.*
                 val n: UI.Prop[Int] = 1
-                UI.reactive(UI.div(UI.span(n.read.toString), UI.mounted(Sync.defer(UI.span("own")))))
+                UI.reactive(UI.div(UI.span.id(s"n${n.read}"), UI.mounted(Sync.defer(UI.span("own")))))
             """)("every run of the block starts it over")
         }
 
@@ -744,10 +798,10 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
                 n    <- Signal.initRef(1)
                 text <- Signal.initRef("text")
                 // The value reads, so it is a channel of its own and the field follows it.
-                follows = UI.reactive(UI.div(UI.span(n.read.toString), UI.input.value(n.read.toString)))
+                follows = UI.reactive(UI.div(UI.span.id(s"n${n.read}"), UI.input.value(n.read.toString)))
                 // A signal is followed, and a keyed mount keeps its instance.
                 kept = UI.reactive(UI.div(
-                    UI.span(n.read.toString),
+                    UI.span.id(s"n${n.read}"),
                     UI.input.value(text.readOnly),
                     UI.mounted(Sync.defer(UI.span("own"))).keyed("k")
                 ))

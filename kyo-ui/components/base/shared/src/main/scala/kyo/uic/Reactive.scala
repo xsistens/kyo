@@ -62,7 +62,8 @@ extension [A](self: Signal[A])
   *
   * A read in an argument whose parameter takes `T | Signal[T]` (a [[UI.Prop]], as `aria`, `cssClass` or `disabled` do) is that
   * argument's own channel and not a read of the block: `el.aria(Aria.checked -> on.read)` patches the attribute in place and the
-  * block draws no region for it. A block `val` is a read to whoever uses it, so naming a read changes nothing: one that only
+  * block draws no region for it. A text child is such an argument too: `span(s"v=${n.read}")` patches the text node in place, and
+  * over a constant it is the plain text. A block `val` is a read to whoever uses it, so naming a read changes nothing: one that only
   * reaches channel arguments is a channel too, and one the structure also uses (a condition, a value drawn, a lambda) is the
   * region's, as is any read the region already has wherever it appears, with one value per run.
   *

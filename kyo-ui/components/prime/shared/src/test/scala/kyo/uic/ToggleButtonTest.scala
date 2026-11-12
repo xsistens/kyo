@@ -57,7 +57,8 @@ class ToggleButtonTest extends ReactiveValueContract:
 
     "a host region that runs again keeps what the reader pressed and shows the run's props" in {
         def labelled(t: UI): Boolean < Sync =
-            elementsWithClass(t, "p-togglebutton-label").map(_.headOption.exists(l => textOf(l) == "on 1"))
+            // The label is a text channel, so it is read at its current value.
+            elementsWithClass(t, "p-togglebutton-label").map(_.headOption.fold(Kyo.lift(false))(l => textNow(l).map(_ == "on 1")))
         for
             tick <- Signal.initRef(0)
             ui = UI.div(tick.render(n => UI.div(uic.ToggleButton().onLabel(s"on $n"))))
@@ -76,7 +77,7 @@ class ToggleButtonTest extends ReactiveValueContract:
 
     "a run that stops binding checked carries on from what the button showed" in {
         def ranOnce(t: UI): Boolean < Sync =
-            elementsWithClass(t, "p-togglebutton-label").map(_.headOption.exists(l => textOf(l).endsWith(" 1")))
+            elementsWithClass(t, "p-togglebutton-label").map(_.headOption.fold(Kyo.lift(false))(l => textNow(l).map(_.endsWith(" 1"))))
         for
             tick <- Signal.initRef(0)
             held <- Signal.initRef(true)
@@ -89,7 +90,7 @@ class ToggleButtonTest extends ReactiveValueContract:
             (every, _, _) <-
                 paintedAround(ui, t => elementsWithClass(t, "p-togglebutton").map(_.nonEmpty), ranOnce)(_ => setSettled(tick, 1))
             shown  <- pressed(every)
-            labels <- elementsWithClass(every, "p-togglebutton-label").map(_.map(textOf))
+            labels <- elementsWithClass(every, "p-togglebutton-label").map(ls => Kyo.foreach(ls)(textNow))
             ref    <- held.get
         yield assert(
             shown,
@@ -110,8 +111,8 @@ class ToggleButtonTest extends ReactiveValueContract:
             ))
             // The click comes once the button shows the run: the host region settling is not yet the instance having its props.
             reached = (t: UI) =>
-                elementsWithClass(t, "p-togglebutton-label").map(ls =>
-                    if ls.exists(textOf(_) == "off 1") then elementWithClass(t, "p-togglebutton").map(click)
+                elementsWithClass(t, "p-togglebutton-label").map(ls => Kyo.foreach(ls)(textNow)).map(texts =>
+                    if texts.contains("off 1") then elementWithClass(t, "p-togglebutton").map(click)
                     else throw new AssertionError("the button does not show the run yet")
                 )
             _  <- actedOn(ui, _ => true)(_ => setSettled(tick, 1), reached)
