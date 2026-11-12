@@ -83,9 +83,14 @@ private[uic] object PopupTrigger:
         fixed: Boolean,
         activate: Maybe[UI.Action]
     )(using Frame): UI.Ast.Element =
-        val native                                           = isNative(e)
+        val native = isNative(e)
+        // A trigger with a click of its own that carries the button role gets Enter and Space from kyo-ui as that click, which
+        // reaches the host's click around it too, so it takes no keys here: they would run the host's action a second time.
+        val clicks = e.attrs.onClick.nonEmpty || e.attrs.onClickEvt.nonEmpty ||
+            e.attrs.onClickSelf.nonEmpty || e.attrs.onClickSelfEvt.nonEmpty
+        val keyedByClick                                     = clicks && e.attrs.role.forall(_ == "button")
         val activation: Maybe[UI.KeyboardEvent => UI.Action] =
-            if native then Absent
+            if native || keyedByClick then Absent
             else
                 activate.map(act =>
                     evt =>

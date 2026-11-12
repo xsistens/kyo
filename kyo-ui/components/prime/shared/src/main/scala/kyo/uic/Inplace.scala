@@ -53,13 +53,8 @@ final class Inplace private[uic] (private[uic] val p: Inplace.Props) extends Nod
         else if activeSlot.fixed then d = d.aria(Aria.disabled -> "true")
         else
             val open = activeSlot.change(true)
-            // A `role="button"` owes the reader both keys, and a div is not a button, so the
-            // browser supplies neither. Enter alone was half of the contract.
-            d = d.onClick(open).onKeyDown { evt =>
-                evt.key match
-                    case Keyboard.Enter | Keyboard.Space => open
-                    case _                               => ()
-            }
+            // A `role="button"` owes the reader both keys, which kyo-ui answers with the click.
+            d = d.onClick(open)
         end if
         d(UI.children(displayV.toList)*)
     end displaySide
