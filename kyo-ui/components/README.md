@@ -278,7 +278,7 @@ val importing: UI < Async =
     )
 ```
 
-`ProgressBar.value` takes `Int | Signal[Int]`, and the signal form is the one most work wants: progress is computed from other state and never edited, so a derived signal (`loaded.zip(total).map(pct)`) is the natural binding.
+`ProgressBar.value` takes `Prop[Int]`, a constant or a signal, and the signal form is the one most work wants: progress is computed from other state and never edited, so a derived signal (`loaded.zip(total).map(pct)`) is the natural binding. A signal patches the fill, `aria-valuenow` and the label's text in place; `mode` and `showValue` take a signal too.
 
 `Skeleton` covers the moment before there is any content to report on, holding the shape the content will take.
 
