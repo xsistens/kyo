@@ -734,6 +734,55 @@ class ReactiveContractTest extends kyo.test.Test[Any]:
             end for
         }
 
+        "a read that decides the structure only through a condition feeds channels otherwise" in {
+            val runs = new Runs
+            for
+                x <- Signal.initRef(40)
+                // The ProgressBar shape: the value feeds the width and the label's text; it decides the structure only
+                // through `pct != 0` (no label at zero).
+                ui = UI.reactive {
+                    runs.tick()
+                    val pct = x.read
+                    div.id("out").inlineStyle(Style.width(pct.pct))(
+                        if pct != 0 then span(s"$pct%") else UI.empty
+                    )
+                }
+                r <- live(ui) { l =>
+                    for
+                        _     <- observed(x)
+                        move  <- cost(l, runs)(settle(x, 60).andThen(shows(l)(o => o.width == "60%" && o.text == "60%")))
+                        cross <- cost(l, runs)(settle(x, 0).andThen(shows(l)(o => o.width == "0%" && o.text == "")))
+                        back  <- cost(l, runs)(settle(x, 5).andThen(shows(l)(o => o.width == "5%" && o.text == "5%")))
+                        seen  <- l.shown
+                        now   <- truth(ui)
+                    yield (move, cross, back, seen, now)
+                }
+            yield
+                val (move, cross, back, seen, now) = r
+                report("cost", "structure through a derived condition, value moved")(
+                    ("runs", move.runs, 0),
+                    ("paints", move.paints, 0)
+                )
+                report("cost", "structure through a derived condition, condition crossed")(
+                    ("runs", cross.runs, 1),
+                    ("paints", cross.paints, 1)
+                )
+                report("cost", "structure through a derived condition, condition crossed back")(
+                    ("runs", back.runs, 1),
+                    ("paints", back.paints, 1)
+                )
+                // Correctness, asserted for any implementation: the label never shows at zero (no "0%"), its text steps through
+                // exactly the values written, and the client ends where a static render of the current inputs is.
+                val texts = seen.map(_.text).steps
+                assert(
+                    texts == Chunk("40%", "60%", "", "5%") && seen.last == now && move.paints <= 1 && cross.paints <= 1,
+                    s"texts $texts, last ${seen.last}, truth $now, costs $move $cross $back"
+                )
+                // The guarantee of the rule (ISC-46): a move that leaves the condition as it was runs and draws nothing again.
+                assert(move.runs == 0 && move.paints == 0, s"a move within the condition cost $move")
+            end for
+        }
+
         "the diamond runs once per change of its source" in {
             val runs = new Runs
             for
