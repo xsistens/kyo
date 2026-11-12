@@ -31,7 +31,7 @@ final class Tag private[uic] (private[uic] val p: Tag.Props) extends Component(S
       * children): the severity and `rounded` reach the root through its class channels, the label through its text channel, and an
       * icon signal swaps the glyph in its own region below the tag, so constants draw no region and a signal patches in place. A tag
       * that acts on a click is a control, reachable and operable as one: the pointer cursor alone would leave the action to the
-      * mouse. Card, Avatar and Icon carry the same three settings.
+      * mouse. The button role and the click are all it takes: kyo-ui answers Enter and Space on such an element with its click.
       */
     private[uic] def render(using Frame): UI =
         span.cssClass("p-tag", "p-component")
@@ -47,13 +47,7 @@ final class Tag private[uic] (private[uic] val p: Tag.Props) extends Component(S
                 case Severity.Contrast  => "p-tag-contrast"
             }
             .when(p.rounded)(_.cssClass("p-tag-rounded"))
-            .when(p.onClick) { (el, act) =>
-                el.cssClass("p-uic-clickable").role("button").tabIndex(0).onClick(act).onKeyDown { evt =>
-                    evt.key match
-                        case Keyboard.Enter | Keyboard.Space => act
-                        case _                               => ()
-                }
-            }(UI.children(
+            .when(p.onClick)(_.cssClass("p-uic-clickable").role("button").tabIndex(0).onClick(_))(UI.children(
                 p.icon.map(GlyphSvg(_, "p-tag-icon")),
                 p.label.map(text => span.cssClass("p-tag-label")(text)),
                 p.extraChildren
