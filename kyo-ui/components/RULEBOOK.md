@@ -143,8 +143,8 @@ helper of the component's own, and never with `s"p-x-${v.token}"` on a value rea
   and puts the new one on in place and nothing is drawn again. The match names every case, so under `-Werror` a case left out
   does not compile.
 - **Every case is written out** at the component, with its class spelled in full (`"p-button-sm"`), so the class a reader looks
-  for in the CSS is the one the source shows. A mapping that the type knows and the class does not (Tag's token for a severity)
-  is the one place a function of the case stays: `matching(sig)(s => tagToken(s).map(t => s"p-tag-$t"))`.
+  for in the CSS is the one the source shows. A mapping that the type knows and the class does not is the one place a function
+  of the case stays, written inline in the `matching` call.
 - **Shape:**
 
 ```scala
