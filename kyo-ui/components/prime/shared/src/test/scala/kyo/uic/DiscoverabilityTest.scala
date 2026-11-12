@@ -572,6 +572,12 @@ class DiscoverabilityTest extends UicTest:
         typeCheckFailure(preamble + """def x = uic.ProgressBar().disabled(true)""")
         typeCheckFailure(preamble + """def x = uic.ProgressBar().hideValue(true)""")
         typeCheckFailure(preamble + """def x = uic.ProgressIndicator()""")
+        typeCheck(
+            preamble +
+                """def x(m: Signal[uic.ProgressBarMode], s: Signal[Boolean]) = uic.ProgressBar().mode(m).showValue(s).valueTemplate(v => s"$v of 100")"""
+        )
+        typeCheckFailure(preamble + """def x = uic.ProgressBar().valueTemplate((v: String) => v)""")
+        typeCheck(preamble + """def x = uic.ProgressBar().value(40).id("upload")""")
     }
 
     "Message replaces MessageStrip: severity/closable, no ui5 design or colorScheme" in {
