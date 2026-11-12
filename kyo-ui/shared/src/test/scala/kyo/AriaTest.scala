@@ -105,6 +105,22 @@ class AriaTest extends kyo.test.Test[Any]:
         }
     }
 
+    // ---- form: the bare `form` HTML attribute on a form-associated control ----
+
+    "form(id) renders the bare form attribute on a button" in {
+        val html = renderHtml(UI.button("Save").form("order-form"))
+        html.map { s =>
+            assert(s.contains(""" form="order-form""""), s"missing bare form attribute: $s")
+        }
+    }
+
+    "no form set emits no form attribute" in {
+        val html = renderHtml(UI.button("Save"))
+        html.map { s =>
+            assert(!s.contains(" form="), s"Expected no form attribute but got: $s")
+        }
+    }
+
     "role and aria-role are distinct attributes and both render" in {
         val html = renderHtml(UI.div.role("img").aria("role", "button"))
         html.map { s =>

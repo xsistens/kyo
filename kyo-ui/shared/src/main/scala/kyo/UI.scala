@@ -1460,6 +1460,12 @@ object UI:
             def focusTrap(v: Boolean): Self  = withAttrs(attrs.copy(focusTrap = Present(v)))
             def focusGroup(id: String): Self = withAttrs(attrs.copy(focusGroup = Present(id)))
 
+            /** Associates this form control with the `<form>` element whose `id` is `id`, rendered as the native bare
+              * `form="<id>"` attribute. The browser then ties the control to that form even where the control sits
+              * outside the form's markup.
+              */
+            def form(id: String): Self = withAttrs(attrs.copy(form = Present(id)))
+
             /** Declarative focus seeding: when a re-render inserts this element newly into the DOM (its `data-kyo-path` was
               * not present before), the client calls `.focus()` on it once; re-rendering an already-visible element (same
               * path) does not re-seed. Seeding runs after focus/caret restore, so opening a panel wins over
@@ -2040,6 +2046,7 @@ object UI:
             jsProps: Map[String, String] = Map.empty,
             cssClasses: Chunk[String] = Chunk.empty,
             role: Maybe[String] = Absent,
+            form: Maybe[String] = Absent,
             // Declarative reactive channels: the element renders each signal's current value at SSR, then an
             // observer (started in ReactiveUI.subscribeScoped) patches it IN PLACE on emission (no re-render).
             // reactiveAttrs: fully-qualified name -> value (aria/placeholder/title(sig)); reactiveBoolAttrs:

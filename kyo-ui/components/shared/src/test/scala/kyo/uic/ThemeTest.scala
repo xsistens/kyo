@@ -248,4 +248,18 @@ class ThemeTest extends UicTest:
         assert(sheet.indexOf("""[data-theme="brand"] {""") > sheet.indexOf(""":root, [data-theme]"""))
         assert(sheet.contains("--p-primary-400: #1ed760;"))
     }
+
+    "a portaled panel drops the min-width Prime sizes its overlays with" in {
+        // `.p-select-overlay { min-width: 100% }` is Prime's own field-panel width. A portaled panel sits at the body
+        // with position:fixed, where 100% is the whole viewport: Portal's first measure read a window-wide panel and
+        // clamped it to the left edge. The reset has to come after Prime's rule, at a specificity that beats it.
+        val sheet  = Theme.primeCss
+        val rule   = ".p-uic-overlay-panel.p-uic-overlay-portal {"
+        val at     = sheet.indexOf(rule)
+        val body   = sheet.substring(at, sheet.indexOf("}", at))
+        val select = sheet.indexOf(".p-select-overlay {")
+        assert(sheet.substring(select, sheet.indexOf("}", select)).contains("min-width: 100%"), "Prime still sizes it this way")
+        assert(at > select, "the reset comes after Prime's rule")
+        assert(body.contains("min-width: 0"), body)
+    }
 end ThemeTest

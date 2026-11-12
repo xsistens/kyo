@@ -790,8 +790,12 @@ object Theme:
       |   place. position:fixed overrides the anchor classes' absolute geometry (two
       |   classes beat one); opacity:0 gates the unmeasured first paint — the first
       |   geometry patch sets opacity:1 inline. The probe is an inset-0 child of the
-      |   anchor that stands in for it as a measurable, id-addressed box. */
-      |.p-uic-overlay-panel.p-uic-overlay-portal { position: fixed; opacity: 0; }
+      |   anchor that stands in for it as a measurable, id-addressed box. min-width
+      |   resets Prime's own min-width:100% (.p-select-overlay and kin): at the body
+      |   it resolves against the viewport, the first measure then reads a
+      |   window-wide panel and clamps it to the left edge. The measured min-width
+      |   from the anchor replaces it inline. */
+      |.p-uic-overlay-panel.p-uic-overlay-portal { position: fixed; opacity: 0; min-width: 0; }
       |.p-uic-overlay-anchor-probe { position: absolute; inset: 0; pointer-events: none; visibility: hidden; }
       |/* Prime's select header/list container are blocks (kyo base CSS would make
       |   these divs column flexboxes). */

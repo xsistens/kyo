@@ -850,6 +850,7 @@ private[kyo] object HtmlRenderer:
             }
         end if
         attrs.role.foreach(r => w(sb, s""" role="${esc(r)}""""))
+        attrs.form.foreach(f => w(sb, s""" form="${esc(f)}""""))
         if attrs.dataAttrs.nonEmpty then
             attrs.dataAttrs.toSeq.sortBy(_._1).foreach { case (name, value) =>
                 w(sb, s""" data-$name="${esc(value)}"""")
@@ -2176,6 +2177,10 @@ private[kyo] object HtmlRenderer:
            |    var g=node.cloneNode(true);kyoStrip(g);
            |    g.style.position="fixed";g.style.left=rect.left+"px";g.style.top=rect.top+"px";
            |    g.style.width=rect.width+"px";g.style.height=rect.height+"px";g.style.margin="0";g.style.pointerEvents="none";
+           |    // At <body> a class's percentage min-size resolves against the viewport and beats the inline size (a dropdown's
+           |    // min-width:100% stretched the ghost to the window edge). Only the minimum is reset: max-* stays with the
+           |    // classes, so a leave that collapses through max-height still can.
+           |    g.style.boxSizing="border-box";g.style.minWidth="0";g.style.minHeight="0";
            |    g.setAttribute("data-kyo-ghost","1");
            |    ghosts.push({src:node,node:g,leave:leave});
            |  }
