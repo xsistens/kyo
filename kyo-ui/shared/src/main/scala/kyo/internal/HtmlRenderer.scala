@@ -1435,10 +1435,10 @@ private[kyo] object HtmlRenderer:
       * `data-kyo-ev` lists them. Inline, so the one writer above appends straight into the render's builder.
       */
     private inline def declaredEvents(elem: Element)(inline add: String => Unit): Unit =
-        val attrs = elem.attrs
-        if attrs.onClick.nonEmpty || attrs.onClickEvt.nonEmpty ||
+        val attrs  = elem.attrs
+        val clicks = attrs.onClick.nonEmpty || attrs.onClickEvt.nonEmpty ||
             attrs.onClickSelf.nonEmpty || attrs.onClickSelfEvt.nonEmpty
-        then add("click")
+        if clicks then add("click")
         if attrs.onContextMenu.nonEmpty || attrs.onContextMenuEvt.nonEmpty then add("contextmenu")
         if attrs.onFocus.nonEmpty || attrs.onFocusEvt.nonEmpty then add("focus")
         // "blurtext" marks a text field whose blur carries its text, so the client reads the text off the field only
@@ -1448,7 +1448,9 @@ private[kyo] object HtmlRenderer:
             case _             => false
         if attrs.onBlur.nonEmpty || attrs.onBlurEvt.nonEmpty || blurText then add("blur")
         if blurText then add("blurtext")
-        if attrs.onKeyDown.nonEmpty || attrs.onKeyDownSelf.nonEmpty then add("keydown")
+        // An element that says it is a button and takes a click is activated by Enter and Space, which the client posts as a
+        // keydown only where one is listed (KeyPolicy.activatesAsButton).
+        if attrs.onKeyDown.nonEmpty || attrs.onKeyDownSelf.nonEmpty || (clicks && attrs.role.contains("button")) then add("keydown")
         if attrs.onKeyUp.nonEmpty then add("keyup")
         if attrs.onHover.nonEmpty || attrs.onHoverEvt.nonEmpty then add("mouseover")
         if attrs.onUnhover.nonEmpty || attrs.onUnhoverEvt.nonEmpty then add("mouseout")
@@ -2789,9 +2791,13 @@ private[kyo] object HtmlRenderer:
            |      var __ck=!!(__own&&__own.split(",").indexOf("click")>=0);
            |      var __tg=e.target.tagName;
            |      var __inf=!!(e.target.closest&&e.target.closest("form"));
+           |      // An element with role="button" and a click of its own is a button to the keyboard, an anchor
+           |      // among them; the dispatcher answers both keys, so Space scrolls nothing.
+           |      var __rb=__ck&&e.target.getAttribute("role")==="button";
            |      // An anchor keeps the click-handler gate: suppressing Enter on a plain link would take
            |      // its navigation with it, and navigation is the one thing the dispatcher does not carry.
            |      var __act=(__tg==="BUTTON")?($jsButtonActivation)
+           |               :__rb?($jsButtonActivation)
            |               :(__tg==="A")?(__ck&&($jsLinkActivation))
            |               :(__tg==="INPUT")?(__inf&&($jsImplicitSubmit))
            |               :false;

@@ -2019,7 +2019,14 @@ object UI:
                 // Unsafe: every element is its own `Self` (each case class fixes `type Self` to itself).
                 v.fold(this.asInstanceOf[Self])(title(_))
 
-            /** Sets the WAI-ARIA `role` attribute (emitted as the bare `role="..."` HTML attribute). */
+            /** Sets the WAI-ARIA `role` attribute (emitted as the bare `role="..."` HTML attribute).
+              *
+              * An element with `role("button")` and a click handler of its own is a button to the keyboard: Enter and Space run
+              * that click, as on a `button`, and Space does not scroll the page, so `span.role("button").tabIndex(0).onClick(a)`
+              * needs no key handler. ARIA asks this of the role, and a browser gives a span or a div neither key. Without a click
+              * handler on the element nothing is emulated (a link styled as a button keeps its navigation). A role set through
+              * `when` over a signal is not read for it.
+              */
             def role(v: String): Self =
                 withAttrs(attrs.copy(role = Present(v)))
 
