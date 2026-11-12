@@ -19,6 +19,10 @@ import scala.quoted.*
   * a read inside any other lambda, local `def` or by-name argument (each runs later, or again, or not at all, with no effect to
   * read in), and the block's scope handed on to code the expansion cannot see.
   */
+// `@publicInBinary`: the inline reads and `UI.reactive` reach this object from code that expands elsewhere. Without it the compiler adds an
+// accessor whose parameter is typed by the package `kyo.uic.internal`, a class no loader finds, and reflecting on the classes that hold
+// those accessors fails (ReactiveReflectionTest).
+@scala.annotation.publicInBinary
 private[kyo] object ReactiveMacro:
 
     // ---- What the expansion calls at run time ----
