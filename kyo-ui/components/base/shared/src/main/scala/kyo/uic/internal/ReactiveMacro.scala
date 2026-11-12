@@ -28,7 +28,7 @@ private[kyo] object ReactiveMacro:
     // ---- What the expansion calls at run time ----
 
     /** The reads as one value: a chunk of them while none is a signal, else one signal over each distinct signal, by reference. */
-    def combine(reads: Seq[Any])(using Frame): Chunk[Any] | Signal[Chunk[Any]] =
+    def combine(reads: Seq[Any])(using Frame): UI.Prop[Chunk[Any]] =
         val signals = reads.foldLeft(Chunk.empty[Signal[Any]]) {
             case (acc, s: Signal[?]) if !acc.exists(_ eq s) => acc.append(s.asInstanceOf[Signal[Any]])
             case (acc, _)                                   => acc
@@ -54,7 +54,8 @@ private[kyo] object ReactiveMacro:
                         if slot >= 0 then out(i) = values(slot)
                         i += 1
                     end while
-                    Chunk.from(out)
+                    // `out` is fresh for this emission and never touched again, so the chunk takes it without a second copy.
+                    Chunk.fromNoCopy(out)
                 }
             end if
         end if
@@ -62,15 +63,11 @@ private[kyo] object ReactiveMacro:
 
     /** A value block: a constant from constants, else the block mapped over the reads' signal. */
     def value[T](reads: Seq[Any])(f: Chunk[Any] => T)(using CanEqual[T, T], Frame): UI.Prop[T] =
-        combine(reads) match
-            case s: Signal[?] => s.asInstanceOf[Signal[Chunk[Any]]].map(f)
-            case c            => f(c.asInstanceOf[Chunk[Any]])
+        UI.Prop.map[Chunk[Any], T](combine(reads))(f)
 
     /** A UI block: drawn once from constants, else one region over the reads' signal, compared by the values read. */
     def draw(reads: Seq[Any])(f: Chunk[Any] => UI)(using Frame): UI =
-        combine(reads) match
-            case s: Signal[?] => UI.render(s.asInstanceOf[Signal[Chunk[Any]]])(f)
-            case c            => f(c.asInstanceOf[Chunk[Any]])
+        UI.Prop.render[Chunk[Any]](combine(reads))(f)
 
     /** An optional prop as one prop of an option: `Absent` where it is unset, the value where it is set, a signal inside it followed
       * (as `UI.Live` reads an optional field). What a block's optional read takes out of it.
@@ -83,6 +80,34 @@ private[kyo] object ReactiveMacro:
     def atEvent[A, S](reads: Seq[Any])(f: Chunk[Any] => A < S)(using Frame): A < (S & Sync) =
         if reads.isEmpty then f(Chunk.empty)
         else Kyo.foreach(reads)(r => UI.Prop.current(r.asInstanceOf[UI.Prop[Any]])).map(values => f(Chunk.from(values)))
+
+    /** A branch form whose branches read, as a value: the branch its condition picks, as a prop. The branches are by-name, so only the one picked is built;
+      * a signal condition switches to the branch it picks, and the
+      * untaken branch has no observer. A constant condition picks at once.
+      */
+    def choose[A](cond: UI.Prop[Boolean])(yes: => UI.Prop[A], no: => UI.Prop[A])(using Frame): UI.Prop[A] =
+        // The switch compares each picked value with the one before, as `combine` compares its reads.
+        given CanEqual[A, A] = CanEqual.derived
+        cond match
+            case s: Signal[?] => s.asInstanceOf[Signal[Boolean]].switchMap(b => UI.Prop.signal(if b then yes else no))
+            case b            => if b.asInstanceOf[Boolean] then yes else no
+    end choose
+
+    /** A branch form whose branches read, drawn: the branch its condition picks, drawn in one region over the condition. */
+    def pick(cond: UI.Prop[Boolean])(yes: => UI, no: => UI)(using Frame): UI = UI.Prop.render(cond)(on => if on then yes else no)
+
+    /** A match whose case bodies read, as a value: the case its selector picks, as a prop. `cases` builds the case the selector's value
+      * takes, so only that case is built and subscribed; a signal selector switches to the case it picks.
+      */
+    def matched[S, A](sel: UI.Prop[S])(cases: S => UI.Prop[A])(using Frame): UI.Prop[A] =
+        given CanEqual[A, A] = CanEqual.derived
+        sel match
+            case s: Signal[?] => s.asInstanceOf[Signal[S]].switchMap(v => UI.Prop.signal(cases(v)))
+            case v            => cases(v.asInstanceOf[S])
+    end matched
+
+    /** A match whose case bodies draw: the case its selector picks, drawn in one region over the selector. */
+    def pickOn[S](sel: UI.Prop[S])(cases: S => UI)(using Frame): UI = UI.Prop.render(sel)(cases)
 
     // ---- The expansion ----
 
@@ -117,6 +142,10 @@ private[kyo] object ReactiveMacro:
             case Block(Nil, inner)      => strip(inner)
             case _                      => t
 
+        // The value a slot of a run's chunk holds, cast to the read's type.
+        def slotTerm(values: Expr[Chunk[Any]], slot: Int, tpe: TypeRepr): Term = tpe.widen.asType match
+            case '[t] => '{ ${ values }(${ Expr(slot) }).asInstanceOf[t] }.asTerm
+
         val (scopeParam, written, lambdaSym) = strip(body.asTerm) match
             case Block(List(dd @ DefDef(_, List(TermParamClause(List(param))), _, Some(rhs))), _: Closure) =>
                 (param.symbol, rhs, dd.symbol)
@@ -127,7 +156,9 @@ private[kyo] object ReactiveMacro:
 
         // A read through the block's own scope: `scope.read[A](arg)`, as the compiler writes a given member's extension. An optional
         // read (over a `Maybe[Prop[A]]`, with its `CanEqual`) reads the prop of an option its receiver makes, `optional(arg)`.
-        val optionalSym = TypeRepr.of[ReactiveMacro.type].termSymbol.methodMember("optional").head
+        val optionalSym = TypeRepr.of[ReactiveMacro.type].termSymbol.methodMember("optional").headOption.getOrElse(
+            report.errorAndAbort("kyo-ui has no `ReactiveMacro.optional`: the expansion of `UI.reactive` needs it.")
+        )
         object Read:
             def unapply(t: Term): Option[Term] = t match
                 case Apply(Apply(fn @ TypeApply(Select(q, "read"), List(a)), List(arg)), List(ce))
@@ -232,35 +263,39 @@ private[kyo] object ReactiveMacro:
                     case List(p) => p =:= booleanType
                     case _       => false)
 
+        // Whether `p` holds for a node of `t` or for one under it. A node that holds is not descended into.
+        def anyIn(t: Tree)(p: Tree => Boolean): Boolean =
+            var found = false
+            new TreeTraverser:
+                override def traverseTree(tree: Tree)(owner: Symbol): Unit =
+                    if p(tree) then found = true else super.traverseTree(tree)(owner)
+            .traverseTree(t)(lambdaSym)
+            found
+        end anyIn
+        // Every symbol `t` defines, its definitions at any depth, traversed from `owner`.
+        def definitionsIn(t: Tree, owner: Symbol): scala.collection.mutable.Set[Symbol] =
+            val out = scala.collection.mutable.Set.empty[Symbol]
+            new TreeTraverser:
+                override def traverseTree(tree: Tree)(o: Symbol): Unit =
+                    tree match
+                        case d: Definition => out += d.symbol
+                        case _             => ()
+                    super.traverseTree(tree)(o)
+                end traverseTree
+            .traverseTree(t)(owner)
+            out
+        end definitionsIn
         // What the block defines, so a condition over it counts as one that reads.
-        val defined = scala.collection.mutable.Set.empty[Symbol]
-        new TreeTraverser:
-            override def traverseTree(tree: Tree)(owner: Symbol): Unit =
-                tree match
-                    case d: Definition => defined += d.symbol
-                    case _             => ()
-                super.traverseTree(tree)(owner)
-            end traverseTree
-        .traverseTree(written)(lambdaSym)
-        def readsOrDefined(t: Tree): Boolean =
-            var found = false
-            new TreeTraverser:
-                override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
-                    case Read(_)                                  => found = true
-                    case id: Ident if defined.contains(id.symbol) => found = true
-                    case _                                        => super.traverseTree(tree)(owner)
-            .traverseTree(t)(lambdaSym)
-            found
-        end readsOrDefined
-        def mentions(sym: Symbol)(t: Tree): Boolean =
-            var found = false
-            new TreeTraverser:
-                override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
-                    case id: Ident if id.symbol == sym => found = true
-                    case _                             => super.traverseTree(tree)(owner)
-            .traverseTree(t)(lambdaSym)
-            found
-        end mentions
+        val defined                          = definitionsIn(written, lambdaSym)
+        def readsOrDefined(t: Tree): Boolean = anyIn(t) {
+            case Read(_)   => true
+            case id: Ident => defined.contains(id.symbol)
+            case _         => false
+        }
+        def refsTo(set: collection.Set[Symbol])(t: Tree): Boolean = anyIn(t) {
+            case id: Ident => set.contains(id.symbol)
+            case _         => false
+        }
 
         // The arguments of a call, a varargs one spread out.
         def spread(args: List[Term]): List[Term] = args.flatMap(a =>
@@ -286,7 +321,7 @@ private[kyo] object ReactiveMacro:
         // step is not a toggle setter with plain values.
         def onToggle(body: Term, p: Symbol, recv: Term): Maybe[Term] =
             def plain(args: List[Term], types: List[TypeRepr]): Boolean =
-                args.size == types.size && args.zip(types).forall((a, t) => a.tpe.widen <:< t && !mentions(p)(a))
+                args.size == types.size && args.zip(types).forall((a, t) => a.tpe.widen <:< t && !refsTo(Set(p))(a))
             strip(body) match
                 case id: Ident if id.symbol == p => Present(recv)
                 case Apply(Apply(TypeApply(Select(m, "apply"), _), List(sel @ Select(inner, "cssClass"))), args)
@@ -296,7 +331,7 @@ private[kyo] object ReactiveMacro:
                     else Absent
                 case Apply(sel @ Select(inner, name), args) if (name == "aria" || name == "data") && sel.symbol.owner == elementClass =>
                     val entries = spread(args)
-                    if entries.forall(e => constantEntry(e) && !mentions(p)(e)) then
+                    if entries.forall(e => constantEntry(e) && !refsTo(Set(p))(e)) then
                         onToggle(inner, p, recv).flatMap(toggleCall(_, name, entries))
                     else Absent
                 case Apply(sel @ Select(inner, name), args) if setterOwners.contains(sel.symbol.owner) =>
@@ -374,35 +409,16 @@ private[kyo] object ReactiveMacro:
         .transformTerm(toggled)(lambdaSym)
 
         // What the block defines, so no read refers to it.
-        val local = scala.collection.mutable.Set.empty[Symbol]
-        new TreeTraverser:
-            override def traverseTree(tree: Tree)(owner: Symbol): Unit =
-                tree match
-                    case d: Definition => local += d.symbol
-                    case _             => ()
-                super.traverseTree(tree)(owner)
-            end traverseTree
-        .traverseTree(rhs)(lambdaSym)
+        val local = definitionsIn(rhs, lambdaSym)
 
         // Whether `t` refers to something the block defines outside `t`: what `t` defines itself (a lambda's parameter, a val in
         // it) is taken out of the block with it.
         def refersToLocal(t: Term): Boolean =
-            val own = scala.collection.mutable.Set.empty[Symbol]
-            new TreeTraverser:
-                override def traverseTree(tree: Tree)(owner: Symbol): Unit =
-                    tree match
-                        case d: Definition => own += d.symbol
-                        case _             => ()
-                    super.traverseTree(tree)(owner)
-                end traverseTree
-            .traverseTree(t)(lambdaSym)
-            var found = false
-            new TreeTraverser:
-                override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
-                    case id: Ident if local.contains(id.symbol) && !own.contains(id.symbol) => found = true
-                    case _                                                                  => super.traverseTree(tree)(owner)
-            .traverseTree(t)(lambdaSym)
-            found
+            val own = definitionsIn(t, lambdaSym)
+            anyIn(t) {
+                case id: Ident => local.contains(id.symbol) && !own.contains(id.symbol)
+                case _         => false
+            }
         end refersToLocal
 
         def deferredError(at: Position, what: String): Nothing =
@@ -417,24 +433,26 @@ private[kyo] object ReactiveMacro:
                 at
             )
 
-        def containsRead(t: Tree): Boolean =
-            var found = false
-            new TreeTraverser:
-                override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
-                    case Read(_) => found = true
-                    case _       => super.traverseTree(tree)(owner)
-            .traverseTree(t)(lambdaSym)
-            found
-        end containsRead
+        def containsRead(t: Tree): Boolean = anyIn(t) {
+            case Read(_) => true
+            case _       => false
+        }
+
+        // ---- Lazy branches: a branch form whose branch reads is subscribed only while it is taken ----
+        //
+        // An `if` (and `&&` or `||`, which the compiler writes as one) with a read in a branch is taken out of the block as a read of
+        // its own: its condition and each branch are compiled as props of their own, and the branch the condition picks is the one
+        // subscribed (`ReactiveMacro.choose`). A branch that uses a `val` of the block stays eager, since the block's `val` exists only
+        // in the block's run. A value-typed form is read as one value; a UI-typed form at the top of the block is drawn by its
+        // condition (`pick`). A UI-typed `if` or `match` nested in an element is subscribed only while its branch is taken; only a form that uses a block `val` or shares a read with the rest of the block stays eager.
 
         // A parameter that takes `T | Signal[T]` (a `Prop[T]`), as its `T`: an argument there may be a signal, so what it reads is
         // that argument's own channel and not a read of the block.
-        val signalClass                                 = TypeRepr.of[Signal[Any]].typeSymbol
         def channelOf(param: TypeRepr): Maybe[TypeRepr] = param.dealias match
             case OrType(a, b) =>
                 def signalOf(s: TypeRepr, other: TypeRepr): Maybe[TypeRepr] = s.dealias match
-                    case AppliedType(c, List(x)) if c.typeSymbol == signalClass && x =:= other => Present(other)
-                    case _                                                                     => Absent
+                    case AppliedType(c, List(x)) if c.typeSymbol == signalSymbol && x =:= other => Present(other)
+                    case _                                                                      => Absent
                 signalOf(a, b).orElse(signalOf(b, a))
             case _ => Absent
 
@@ -468,18 +486,15 @@ private[kyo] object ReactiveMacro:
         def handlerType(t: TypeRepr): Boolean = t.widen.dealias match
             case AppliedType(tc, List(_, eff)) if tc.typeSymbol == pendingClass => eff <:< TypeRepr.of[Sync]
             case _                                                              => false
-        def handlerArgs(fn: Term, args: List[Term]): List[Boolean] =
+        // Per argument of a call, the type a by-name parameter takes where it is a handler's: the argument is a handler.
+        def handlerArgs(fn: Term, args: List[Term]): List[Maybe[TypeRepr]] =
             val params = paramTypes(fn)
             args.indices.toList.map(i =>
                 params.lift(i) match
-                    case Some(ByNameType(t)) => handlerType(t)
-                    case _                   => false
+                    case Some(ByNameType(t)) if handlerType(t) => Present(t)
+                    case _                                     => Absent
             )
         end handlerArgs
-        // The type a by-name parameter takes, for a handler argument.
-        def byNameOf(fn: Term, i: Int): TypeRepr = paramTypes(fn)(i) match
-            case ByNameType(t) => t
-            case other         => other
         def isHandlerLambda(dd: DefDef): Boolean =
             dd.name.startsWith("$anonfun") && dd.rhs.exists(r => handlerType(r.tpe))
 
@@ -511,16 +526,6 @@ private[kyo] object ReactiveMacro:
                 case _ => super.traverseTree(tree)(owner)
         .traverseTree(rhs)(lambdaSym)
 
-        def refsTo(set: collection.Set[Symbol])(t: Tree): Boolean =
-            var found = false
-            new TreeTraverser:
-                override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
-                    case id: Ident if set.contains(id.symbol) => found = true
-                    case _                                    => super.traverseTree(tree)(owner)
-            .traverseTree(t)(lambdaSym)
-            found
-        end refsTo
-
         // Only a `val` that holds what a read gave takes part, directly or through another such `val`.
         val reading = scala.collection.mutable.Set.empty[Symbol]
         var grew    = true
@@ -551,16 +556,16 @@ private[kyo] object ReactiveMacro:
                 // A handler reads what it uses when it runs: a use there needs nothing of the region.
                 case dd: DefDef if isHandlerLambda(dd) => dd.rhs.foreach(Uses(inArg = true, inVal, deferred = false).traverseTree(_)(owner))
                 case t if isDeferred(t)                => Uses(inArg, inVal, deferred = true).traverseTreeChildren(t)(owner)
-                case Apply(fn, args) if deferred && handlerArgs(fn, args).contains(true) =>
+                case Apply(fn, args) if deferred && handlerArgs(fn, args).exists(_.isDefined) =>
                     traverseTree(fn)(owner)
                     handlerArgs(fn, args).zip(args).foreach { (h, a) =>
-                        if h then Uses(inArg = true, inVal, deferred = false).traverseTree(a)(owner) else traverseTree(a)(owner)
+                        if h.isDefined then Uses(inArg = true, inVal, deferred = false).traverseTree(a)(owner) else traverseTree(a)(owner)
                     }
                 case Apply(fn, args) if !deferred =>
                     traverseTree(fn)(owner)
                     val handler = handlerArgs(fn, args)
                     propArgs(fn, args).zip(args).zipWithIndex.foreach { case ((x, a), i) =>
-                        if x.isDefined || handler(i) then Uses(inArg = true, inVal, deferred = false).traverseTree(a)(owner)
+                        if x.isDefined || handler(i).isDefined then Uses(inArg = true, inVal, deferred = false).traverseTree(a)(owner)
                         else traverseTree(a)(owner)
                     }
                 case _ => super.traverseTree(tree)(owner)
@@ -599,6 +604,17 @@ private[kyo] object ReactiveMacro:
         // Whether a handler reads: a read in it, or a channel-only `val` it uses.
         def readsInHandler(t: Tree): Boolean = containsRead(t) || refsTo(channelOnly)(t)
 
+        // The reads of a term, hoisted to `to`: one slot per stable path (the first read of a path holds it) and one per other read.
+        // Gives each read's stable path, the slot of each read, and the expression that evaluates the kept reads.
+        def slotsOf(reads: List[Term], to: Symbol): (List[Maybe[List[Symbol]]], List[Int], Expr[Seq[Any]]) =
+            val keys    = reads.map(stablePath)
+            val slots   = keys.zipWithIndex.map { (k, i) => k.fold(i)(path => keys.indexWhere(_.contains(path))) }
+            val kept    = slots.distinct
+            val slotOf  = slots.map(kept.indexOf(_))
+            val hoisted = Expr.ofSeq(kept.map(i => reads(i).changeOwner(to).asExprOf[Any]))
+            (keys, slotOf, hoisted)
+        end slotsOf
+
         // A handler as code that reads when it runs: every read in it (and every channel-only `val` it uses, through its prop) taken
         // at its start with `Prop.current`, in tree order, one per stable path, and the handler as a function of those values. A
         // handler inside it takes its own; a read in other deferred code inside it is refused, as in the block.
@@ -606,15 +622,7 @@ private[kyo] object ReactiveMacro:
             val (a, eff) = expected.widen.dealias match
                 case AppliedType(_, List(a, eff)) => (a, eff)
                 case other                        => report.errorAndAbort(s"not a handler: ${other.show}", term.pos)
-            val own = scala.collection.mutable.Set.empty[Symbol]
-            new TreeTraverser:
-                override def traverseTree(tree: Tree)(o: Symbol): Unit =
-                    tree match
-                        case d: Definition => own += d.symbol
-                        case _             => ()
-                    super.traverseTree(tree)(o)
-                end traverseTree
-            .traverseTree(term)(owner)
+            val own   = definitionsIn(term, owner)
             val reads = scala.collection.mutable.ArrayBuffer.empty[Term]
             final class Collector(deferred: Maybe[String]) extends TreeTraverser:
                 override def traverseTree(tree: Tree)(o: Symbol): Unit = tree match
@@ -639,7 +647,7 @@ private[kyo] object ReactiveMacro:
                         val byName  = paramTypes(fn).map { case ByNameType(_) => true; case _ => false }
                         val handler = handlerArgs(fn, args)
                         args.zipWithIndex.foreach { (x, i) =>
-                            if handler(i) then ()
+                            if handler(i).isDefined then ()
                             else if byName.lift(i).getOrElse(false) then
                                 Collector(deferred.orElse(Present("a by-name argument"))).traverseTree(x)(o)
                             else traverseTree(x)(o)
@@ -654,11 +662,7 @@ private[kyo] object ReactiveMacro:
             end Collector
             Collector(Absent).traverseTree(term)(owner)
 
-            val keys    = reads.toList.map(stablePath)
-            val slots   = keys.zipWithIndex.map { (k, i) => k.fold(i)(path => keys.indexWhere(_.contains(path))) }
-            val kept    = slots.distinct
-            val slotOf  = slots.map(kept.indexOf(_))
-            val hoisted = Expr.ofSeq(kept.map(i => reads(i).changeOwner(owner).asExprOf[Any]))
+            val (_, slotOf, hoisted) = slotsOf(reads.toList, owner)
 
             (a.asType, eff.asType) match
                 case ('[av], '[ev]) =>
@@ -672,18 +676,11 @@ private[kyo] object ReactiveMacro:
                             def slotValue(tpe: TypeRepr): Term =
                                 val slot = slotOf(next)
                                 next += 1
-                                tpe.widen.asType match
-                                    case '[t] => '{ ${ values }(${ Expr(slot) }).asInstanceOf[t] }.asTerm
+                                slotTerm(values, slot, tpe)
                             end slotValue
                             new TreeMap:
                                 override def transformStatement(tree: Statement)(o: Symbol): Statement = tree match
-                                    case dd: DefDef if isHandlerLambda(dd) && dd.rhs.exists(readsInHandler) =>
-                                        DefDef.copy(dd)(
-                                            dd.name,
-                                            dd.paramss,
-                                            dd.returnTpt,
-                                            dd.rhs.map(compileHandler(_, dd.symbol, dd.returnTpt.tpe))
-                                        )
+                                    case dd: DefDef if isHandlerLambda(dd) && dd.rhs.exists(readsInHandler) => compiledHandler(dd)
                                     case _ => super.transformStatement(tree)(o)
                                 override def transformTerm(tree: Term)(o: Symbol): Term = tree match
                                     case Read(_)                                      => slotValue(tree.tpe)
@@ -691,8 +688,9 @@ private[kyo] object ReactiveMacro:
                                     case Apply(fn, args)                              =>
                                         val handler = handlerArgs(fn, args)
                                         val args1   = args.zipWithIndex.map { (x, i) =>
-                                            if handler(i) && readsInHandler(x) then compileHandler(x, o, byNameOf(fn, i))
-                                            else transformTerm(x)(o)
+                                            handler(i) match
+                                                case Present(t) if readsInHandler(x) => compileHandler(x, o, t)
+                                                case _                               => transformTerm(x)(o)
                                         }
                                         Apply.copy(tree)(transformTerm(fn)(o), args1)
                                     case _ => super.transformTerm(tree)(o)
@@ -703,14 +701,102 @@ private[kyo] object ReactiveMacro:
             end match
         end compileHandler
 
+        // A handler lambda that reads, its body compiled as a handler (see `compileHandler`).
+        def compiledHandler(dd: DefDef): DefDef = DefDef.copy(dd)(
+            dd.name,
+            dd.paramss,
+            dd.returnTpt,
+            dd.rhs.map(compileHandler(_, dd.symbol, dd.returnTpt.tpe))
+        )
+
+        // The stable paths of the reads in `t`, each read's path (a read without one has none to share).
+        def readPaths(t: Tree): List[List[Symbol]] =
+            val out = scala.collection.mutable.ListBuffer.empty[List[Symbol]]
+            new TreeTraverser:
+                override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
+                    case Read(arg) => stablePath(arg).foreach(p => out += p)
+                    case _         => super.traverseTree(tree)(owner)
+            .traverseTree(t)(lambdaSym)
+            out.toList
+        end readPaths
+        // A branch reading what the condition reads takes that value from the block's own run (ISC-36), which a branch compiled apart
+        // cannot do, so such a form stays the block's.
+        def sharesRead(c: Term, y: Term, n: Term): Boolean =
+            val branches = readPaths(y) ++ readPaths(n)
+            readPaths(c).exists(branches.contains)
+        // `a && b` and `a || b` on a `Boolean` are the forms `if a then b else false` and `if a then true else b`, as the compiler's
+        // inlining of them would write (it does not inline them here, so they are written out).
+        def lazyParts(t: Term): Maybe[(Term, Term, Term)] =
+            val parts: Maybe[(Term, Term, Term)] = strip(t) match
+                case If(c, y, n) => Present((c, y, n))
+                case Apply(sel @ Select(a, op), List(b)) if (op == "&&" || op == "||") && sel.symbol.owner == booleanType.typeSymbol =>
+                    if op == "&&" then Present((a, b, Literal(BooleanConstant(false))))
+                    else Present((a, Literal(BooleanConstant(true)), b))
+                case _ => Absent
+            parts.filter { (c, y, n) =>
+                (containsRead(y) || containsRead(n)) && !refersToLocal(c) && !refersToLocal(y) && !refersToLocal(n) && !sharesRead(c, y, n)
+            }
+        end lazyParts
+        // A `match` whose case bodies read: the selector and each case body are props of their own, and only the case the selector
+        // picks is subscribed (`ReactiveMacro.matched`, or `pickOn` where it draws). A case that uses a `val` of the block, a guard
+        // that reads or uses one, and a selector that shares a read with a body stay eager, as a branch form does (ISC-29, ISC-36).
+        def lazyCases(t: Term): Maybe[(Term, List[CaseDef])] = strip(t) match
+            case Match(sel, cases) if cases.exists(cd => containsRead(cd.rhs)) =>
+                def localOutside(x: Tree, own: collection.Set[Symbol]): Boolean = anyIn(x) {
+                    case id: Ident => local.contains(id.symbol) && !own.contains(id.symbol)
+                    case _         => false
+                }
+                val selPaths = readPaths(sel)
+                val ok       = !refersToLocal(sel) && cases.forall { cd =>
+                    val own = definitionsIn(cd, lambdaSym)
+                    !cd.guard.exists(g => containsRead(g) || localOutside(g, own)) &&
+                    !localOutside(cd.rhs, own) &&
+                    readPaths(cd.rhs).forall(p => !selPaths.contains(p))
+                }
+                if ok then Present((sel, cases)) else Absent
+            case _ => Absent
+        end lazyCases
         // The block, a channel argument in it, or a channel-only `val`, as one value over its reads: every read in tree order (the
         // order the replacement visits them in) taken out, refusing the ones that cannot be, and the term as a function of the
         // values read. A read the region around already has is that region's value of the run. A channel argument or a
         // channel-only `val` inside is compiled the same way, on its own, and its reads are not the term's.
         // `from` owns what the term defines, `to` is where its value goes. The term is rewritten as it is and moved to `to` after, so
         // the symbols the data flow found are the ones it rewrites (moving a tree to a new owner gives its definitions new symbols).
-        def compile(term: Term, from: Symbol, to: Symbol, result: TypeRepr, taken: Map[List[Symbol], Taken]): Term =
+        // `inBranch`: the term is a branch or a condition of a lazy form. Its value is switched on by `ReactiveMacro.choose`, which compares
+        // with its own equality, so a type the block would not compare (no `CanEqual` given) is compared the same way there.
+        def compile(
+            term: Term,
+            from: Symbol,
+            to: Symbol,
+            result: TypeRepr,
+            taken: Map[List[Symbol], Taken],
+            inBranch: Boolean = false
+        ): Term =
+            lazyParts(term) match
+                case Present((c, y, n)) if result <:< TypeRepr.of[UI] => lazyPick(c, y, n, from, to, taken)
+                case _                                                =>
+                    lazyCases(term) match
+                        case Present((sel, cases)) if result <:< TypeRepr.of[UI] => lazyPickOn(sel, cases, from, to, taken)
+                        case _                                                   => compileReads(term, from, to, result, taken, inBranch)
+        end compile
+
+        def compileReads(term: Term, from: Symbol, to: Symbol, result: TypeRepr, taken: Map[List[Symbol], Taken], inBranch: Boolean): Term =
             def isTaken(arg: Term): Boolean = stablePath(arg).exists(taken.contains)
+            // The lazy forms the collector took out as reads, by identity: the lambda transform replaces exactly these.
+            val lazyNodes = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap[Tree, java.lang.Boolean])
+            // A lazy form here, when none of the reads it holds is read anywhere else in this term or taken from the region around: a
+            // read the rest of the term shares is one slot of the term (the block never sees two values of one source), so it stays eager.
+            def lazyIn(t: Term): Maybe[(Term, Term, Term)] = lazyValue(t).filter { (c, y, n) =>
+                val inside = readPaths(c) ++ readPaths(y) ++ readPaths(n)
+                val whole  = readPaths(term)
+                inside.forall(p => whole.count(_ == p) == inside.count(_ == p) && !taken.contains(p))
+            }
+            // A lazy `match` here: as `lazyIn`, its reads (selector and bodies) none of which the rest of the term or the region shares.
+            def lazyMatchIn(t: Term): Maybe[(Term, List[CaseDef])] = lazyCases(t).filter { (sel, cases) =>
+                val inside = readPaths(sel) ++ cases.flatMap(cd => readPaths(cd.rhs))
+                val whole  = readPaths(term)
+                inside.forall(p => whole.count(_ == p) == inside.count(_ == p) && !taken.contains(p))
+            }
             // What this term reads: a read's argument, or the prop of a channel-only `val`.
             val reads = scala.collection.mutable.ArrayBuffer.empty[Term]
             final class Collector(deferred: Maybe[String]) extends TreeTraverser:
@@ -739,6 +825,16 @@ private[kyo] object ReactiveMacro:
                             )
                         end if
                         if !isTaken(arg) then reads += arg
+                    case t: Term if deferred.isEmpty && lazyIn(t).isDefined =>
+                        lazyIn(t).foreach { case (c, y, n) =>
+                            discard(lazyNodes.add(t))
+                            reads += lazyChoice(c, y, n, t.tpe.widen, from, to, taken)
+                        }
+                    case t: Term if deferred.isEmpty && !(t.tpe.widen <:< TypeRepr.of[UI]) && lazyMatchIn(t).isDefined =>
+                        lazyMatchIn(t).foreach { case (sel, cases) =>
+                            discard(lazyNodes.add(t))
+                            reads += lazyMatchValue(sel, cases, t.tpe.widen, from, to, taken)
+                        }
                     case id: Ident if channelOnly.contains(id.symbol) =>
                         reads += Ref(propOf(id.symbol))
                     case vd: ValDef if channelOnly.contains(vd.symbol) => () // its own value, compiled where it is replaced
@@ -748,8 +844,8 @@ private[kyo] object ReactiveMacro:
                         val channel = if deferred.isEmpty then channels(fn, args) else args.map(_ => Absent)
                         val handler = handlerArgs(fn, args)
                         args.zipWithIndex.foreach { (a, i) =>
-                            if channel(i).isDefined then () // its own value, compiled where it is replaced
-                            else if handler(i) then ()      // a handler takes its own reads, when it runs
+                            if channel(i).isDefined then ()      // its own value, compiled where it is replaced
+                            else if handler(i).isDefined then () // a handler takes its own reads, when it runs
                             else if byName.lift(i).getOrElse(false) then
                                 Collector(deferred.orElse(Present("a by-name argument"))).traverseTree(a)(owner)
                             else traverseTree(a)(owner)
@@ -765,11 +861,7 @@ private[kyo] object ReactiveMacro:
             Collector(Absent).traverseTree(term)(from)
 
             // One slot per stable path, and one per other read.
-            val keys    = reads.toList.map(stablePath)
-            val slots   = keys.zipWithIndex.map { (k, i) => k.fold(i)(path => keys.indexWhere(_.contains(path))) }
-            val kept    = slots.distinct
-            val slotOf  = slots.map(kept.indexOf(_))
-            val hoisted = Expr.ofSeq(kept.map(i => reads(i).changeOwner(to).asExprOf[Any]))
+            val (keys, slotOf, hoisted) = slotsOf(reads.toList, to)
 
             // The term as a function of the read values, each channel argument and channel-only `val` in it replaced by its own
             // value, which takes what this term reads as this term's values of the run.
@@ -781,24 +873,16 @@ private[kyo] object ReactiveMacro:
                     (lambdaOwner, params) =>
                         val values = Ref(params.head.symbol).asExprOf[Chunk[Any]]
                         val inner  = taken ++ keys.zip(slotOf).collect { case (Present(path), slot) => path -> Taken(values, slot) }
-                        def valueOf(t: Taken, tpe: TypeRepr): Term = tpe.widen.asType match
-                            case '[a] => '{ ${ t.values }(${ Expr(t.slot) }).asInstanceOf[a] }.asTerm
-                        var next                           = 0
+                        var next   = 0
                         def slotValue(tpe: TypeRepr): Term =
-                            val t = Taken(values, slotOf(next))
+                            val slot = slotOf(next)
                             next += 1
-                            valueOf(t, tpe)
+                            slotTerm(values, slot, tpe)
                         end slotValue
                         new TreeMap:
                             override def transformStatement(tree: Statement)(o: Symbol): Statement = tree match
-                                case dd: DefDef if isHandlerLambda(dd) && dd.rhs.exists(readsInHandler) =>
-                                    DefDef.copy(dd)(
-                                        dd.name,
-                                        dd.paramss,
-                                        dd.returnTpt,
-                                        dd.rhs.map(compileHandler(_, dd.symbol, dd.returnTpt.tpe))
-                                    )
-                                case vd: ValDef if channelOnly.contains(vd.symbol) =>
+                                case dd: DefDef if isHandlerLambda(dd) && dd.rhs.exists(readsInHandler) => compiledHandler(dd)
+                                case vd: ValDef if channelOnly.contains(vd.symbol)                      =>
                                     val tpe     = vd.tpt.tpe.widen
                                     val propTpe = tpe.asType match
                                         case '[t] => TypeRepr.of[UI.Prop[t]]
@@ -807,9 +891,11 @@ private[kyo] object ReactiveMacro:
                                     ValDef(sym, Some(compile(vd.rhs.get, vd.symbol, sym, tpe, inner)))
                                 case _ => super.transformStatement(tree)(o)
                             override def transformTerm(tree: Term)(o: Symbol): Term = tree match
-                                case Read(arg) =>
+                                // A lazy form is the prop the collector took out, a slot like a read.
+                                case _ if lazyNodes.contains(tree) => slotValue(tree.tpe)
+                                case Read(arg)                     =>
                                     val had = stablePath(arg).flatMap(p => Maybe.fromOption(taken.get(p)))
-                                    if had.isDefined then valueOf(had.get, tree.tpe) else slotValue(tree.tpe)
+                                    had.fold(slotValue(tree.tpe))(t => slotTerm(t.values, t.slot, tree.tpe))
                                 case id: Ident if channelOnly.contains(id.symbol) => slotValue(id.tpe)
                                 case Apply(fn, args)                              =>
                                     val fn1     = transformTerm(fn)(o)
@@ -817,18 +903,19 @@ private[kyo] object ReactiveMacro:
                                     val channel = channels(fn, args)
                                     val handler = handlerArgs(fn, args)
                                     val args1   = args.zipWithIndex.map { (a, i) =>
-                                        if channel(i).isEmpty && handler(i) && readsInHandler(a) then compileHandler(a, o, byNameOf(fn, i))
-                                        else
-                                            channel(i) match
-                                                case Present(x) =>
-                                                    strip(a) match
-                                                        // A bare read, or a bare channel-only `val`, hands on what it reads.
-                                                        case Read(of)
-                                                            if !stablePath(of).exists(inner.contains) && of.tpe.widen <:< params(i) =>
-                                                            of.changeOwner(o)
-                                                        case id: Ident if channelOnly.contains(id.symbol) => Ref(propOf(id.symbol))
-                                                        case _                                            => compile(a, o, o, x, inner)
-                                                case Absent => transformTerm(a)(o)
+                                        handler(i).filter(_ => channel(i).isEmpty && readsInHandler(a)) match
+                                            case Present(t) => compileHandler(a, o, t)
+                                            case _          =>
+                                                channel(i) match
+                                                    case Present(x) =>
+                                                        strip(a) match
+                                                            // A bare read, or a bare channel-only `val`, hands on what it reads.
+                                                            case Read(of)
+                                                                if !stablePath(of).exists(inner.contains) && of.tpe.widen <:< params(i) =>
+                                                                of.changeOwner(o)
+                                                            case id: Ident if channelOnly.contains(id.symbol) => Ref(propOf(id.symbol))
+                                                            case _                                            => compile(a, o, o, x, inner)
+                                                    case Absent => transformTerm(a)(o)
                                     }
                                     Apply.copy(tree)(fn1, args1)
                                 case _ => super.transformTerm(tree)(o)
@@ -841,19 +928,101 @@ private[kyo] object ReactiveMacro:
                     val f = lambdaOf[UI]
                     '{ ReactiveMacro.draw($hoisted)($f)(using $frame) }.asTerm.changeOwner(to)
                 case '[r] =>
-                    val equal = canEqualOf(result).getOrElse(
-                        report.errorAndAbort(
-                            s"""A `UI.reactive` block that yields a ${result.show} needs a `CanEqual[${result.show}, ${result.show}]`.
-                               |
-                               |Over a signal the block is mapped, and the mapped signal compares each value with the one before.
-                               |""".stripMargin,
-                            term.pos
-                        )
-                    ).asExprOf[CanEqual[r, r]]
+                    val equal: Expr[CanEqual[r, r]] =
+                        if inBranch then '{ CanEqual.derived: CanEqual[r, r] }
+                        else
+                            canEqualOf(result).getOrElse(
+                                report.errorAndAbort(
+                                    s"""A `UI.reactive` block that yields a ${result.show} needs a `CanEqual[${result.show}, ${result.show}]`.
+                                       |
+                                       |Over a signal the block is mapped, and the mapped signal compares each value with the one before.
+                                       |""".stripMargin,
+                                    term.pos
+                                )
+                            ).asExprOf[CanEqual[r, r]]
                     val f = lambdaOf[r]
                     '{ ReactiveMacro.value[r]($hoisted)($f)(using $equal, $frame) }.asTerm.changeOwner(to)
             end match
-        end compile
+        end compileReads
+
+        // The lazy form as a value inside the block: a value-typed one (a UI-typed one is not read as a value: its condition draws it where it stands, `lazyPick`, and only the taken branch is subscribed).
+        def lazyValue(t: Term): Maybe[(Term, Term, Term)] =
+            if t.tpe.widen <:< TypeRepr.of[UI] then Absent else lazyParts(t)
+
+        // The lazy form as a prop of its own: its condition and both branches compiled as props (building one subscribes to nothing),
+        // and `ReactiveMacro.choose` observes only the one the condition picks. Its reads belong to the branches, so the block takes none.
+        def lazyChoice(c: Term, y: Term, n: Term, result: TypeRepr, from: Symbol, to: Symbol, taken: Map[List[Symbol], Taken]): Term =
+            val cond = compile(c, from, to, TypeRepr.of[Boolean], taken, inBranch = true)
+            val yes  = compile(y, from, to, result, taken, inBranch = true)
+            val no   = compile(n, from, to, result, taken, inBranch = true)
+            result.asType match
+                case '[r] =>
+                    val cc = cond.asExprOf[UI.Prop[Boolean]]
+                    val yy = yes.asExprOf[UI.Prop[r]]
+                    val nn = no.asExprOf[UI.Prop[r]]
+                    '{ ReactiveMacro.choose[r]($cc)($yy, $nn)(using $frame) }.asTerm.changeOwner(to)
+            end match
+        end lazyChoice
+
+        // The lazy form drawn at the top of the block: the condition's prop picks the branch drawn. Both branches are built where the
+        // block is (building a UI node subscribes to nothing), and the picked one is the one rendered.
+        def lazyPick(c: Term, y: Term, n: Term, from: Symbol, to: Symbol, taken: Map[List[Symbol], Taken]): Term =
+            val cond = compile(c, from, to, TypeRepr.of[Boolean], taken)
+            val yes  = compile(y, from, to, TypeRepr.of[UI], taken)
+            val no   = compile(n, from, to, TypeRepr.of[UI], taken)
+            val cc   = cond.asExprOf[UI.Prop[Boolean]]
+            val yy   = yes.asExprOf[UI]
+            val nn   = no.asExprOf[UI]
+            '{ ReactiveMacro.pick($cc)($yy, $nn)(using $frame) }.asTerm.changeOwner(to)
+        end lazyPick
+
+        // The lazy `match` as a value inside the block: its selector as a prop, and the case its value picks as a prop built over that
+        // case's pattern variables (`ReactiveMacro.matched`). A slot like a lazy `if`'s.
+        def lazyMatchValue(
+            sel: Term,
+            cases: List[CaseDef],
+            result: TypeRepr,
+            from: Symbol,
+            to: Symbol,
+            taken: Map[List[Symbol], Taken]
+        ): Term =
+            val selType = sel.tpe.widen
+            val selProp = compile(sel, from, to, selType, taken, inBranch = true)
+            selType.asType match
+                case '[s] =>
+                    result.asType match
+                        case '[r] =>
+                            val f = Lambda(
+                                to,
+                                MethodType(List("selected"))(_ => List(selType), _ => TypeRepr.of[UI.Prop[r]]),
+                                (lo, params) =>
+                                    val arms = cases.map(cd =>
+                                        CaseDef.copy(cd)(cd.pattern, cd.guard, compile(cd.rhs, from, lo, result, taken, inBranch = true))
+                                    )
+                                    Match(Ref(params.head.symbol), arms).changeOwner(lo)
+                            ).asExprOf[s => UI.Prop[r]]
+                            '{ ReactiveMacro.matched[s, r](${ selProp.asExprOf[UI.Prop[s]] })($f)(using $frame) }.asTerm.changeOwner(to)
+                    end match
+            end match
+        end lazyMatchValue
+
+        // The lazy `match` drawn at the top of the block: the selector's prop picks the case drawn (`ReactiveMacro.pickOn`).
+        def lazyPickOn(sel: Term, cases: List[CaseDef], from: Symbol, to: Symbol, taken: Map[List[Symbol], Taken]): Term =
+            val selType = sel.tpe.widen
+            val selProp = compile(sel, from, to, selType, taken, inBranch = true)
+            selType.asType match
+                case '[s] =>
+                    val f = Lambda(
+                        to,
+                        MethodType(List("selected"))(_ => List(selType), _ => TypeRepr.of[UI]),
+                        (lo, params) =>
+                            val arms =
+                                cases.map(cd => CaseDef.copy(cd)(cd.pattern, cd.guard, compile(cd.rhs, from, lo, TypeRepr.of[UI], taken)))
+                            Match(Ref(params.head.symbol), arms).changeOwner(lo)
+                    ).asExprOf[s => UI]
+                    '{ ReactiveMacro.pickOn[s](${ selProp.asExprOf[UI.Prop[s]] })($f)(using $frame) }.asTerm.changeOwner(to)
+            end match
+        end lazyPickOn
 
         // ---- What each run of a region takes from the reader (UI.Loss) ----
         //
@@ -874,7 +1043,7 @@ private[kyo] object ReactiveMacro:
                         traverseTree(fn)(owner)
                         val handler = handlerArgs(fn, args)
                         channels(fn, args).zip(args).zipWithIndex.foreach { case ((c, a), i) =>
-                            if c.isEmpty && !handler(i) then traverseTree(a)(owner)
+                            if c.isEmpty && handler(i).isEmpty then traverseTree(a)(owner)
                         }
                     case _ => super.traverseTree(tree)(owner)
             .traverseTree(rhs)(lambdaSym)
@@ -894,7 +1063,7 @@ private[kyo] object ReactiveMacro:
                     else (name == "value" || name == "checked") && natives.exists(t.widen <:< _)
                 def mayBeSignal(t: TypeRepr): Boolean = t.widen.dealias match
                     case OrType(a, b) => mayBeSignal(a) || mayBeSignal(b)
-                    case other        => other.baseClasses.contains(signalClass)
+                    case other        => other.baseClasses.contains(signalSymbol)
                 val uiModule                     = TypeRepr.of[UI.type].typeSymbol
                 def isMount(s: Symbol): Boolean  = (s.name == "mounted" || s.name == "mountedWith") && s.owner == uiModule
                 def isKeying(s: Symbol): Boolean = s.name == "keyed" || s.name == "keyedOnSite"
@@ -913,18 +1082,14 @@ private[kyo] object ReactiveMacro:
                     case Apply(f, _)                      => receiver(f)
                     case TypeApply(f, _)                  => receiver(f)
                     case _                                => Absent
+                // Mounts found by their key: a `.keyed` call is an ancestor of the mount it keys, and the walk visits a node before its
+                // children, so the key is recorded before the mount is checked.
                 val keyed = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap[Tree, java.lang.Boolean])
                 new TreeTraverser:
                     override def traverseTree(tree: Tree)(owner: Symbol): Unit =
                         tree match
                             case t: Apply if isKeying(t.symbol) => receiver(t).foreach(r => discard(keyed.add(innermost(strip(r)))))
                             case _                              => ()
-                        super.traverseTree(tree)(owner)
-                    end traverseTree
-                .traverseTree(rhs)(lambdaSym)
-
-                new TreeTraverser:
-                    override def traverseTree(tree: Tree)(owner: Symbol): Unit =
                         tree match
                             case t @ Apply(Select(q, name), List(arg))
                                 if states(q.tpe, name) && channels(t.fun, List(arg)).head.isEmpty && !mayBeSignal(arg.tpe) =>
