@@ -60,6 +60,20 @@ class TagTest extends UicTest:
         yield assert(unset == primary, s"$unset | $primary")
     }
 
+    "a tag with a click is a button to the keyboard through kyo-ui alone: Enter and Space run its action once each" in {
+        for
+            hits <- AtomicInt.init
+            el   <- elementWithClass(uic.Tag("t").onClick(hits.incrementAndGet.unit).render, "p-tag")
+            _    <- press(el, UI.Keyboard.Enter)
+            _    <- press(el, UI.Keyboard.Space)
+            n    <- hits.get
+            html <- renderHtml(uic.Tag("t").onClick(()).render)
+        yield assert(
+            n == 2 && el.attrs.onKeyDown.isEmpty && el.attrs.role.contains("button") && html.contains("""data-kyo-ev="click,keydown""""),
+            s"$n runs, own key handler ${el.attrs.onKeyDown.isDefined}, role ${el.attrs.role}: $html"
+        )
+    }
+
     "a tag holds no instance of its own" in {
         holdsMount(uic.Tag("t").onClick(()).render).map(mount => assert(!mount, s"mount $mount"))
     }

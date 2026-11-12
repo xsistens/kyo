@@ -121,13 +121,7 @@ final class Card private[uic] (private[uic] val p: Card.Props) extends Node, Has
                 el.cssClass("p-uic-card-caption-row--interactive").role("button").tabIndex(0)
             onHeaderClickEff match
                 case Present(e) =>
-                    interactive
-                        .onClick(e)
-                        .onKeyDown { evt =>
-                            evt.key match
-                                case Keyboard.Enter | Keyboard.Space => e
-                                case _                               => ()
-                        }
+                    interactive.onClick(e)
                 case Absent => interactive
             end match
 end Card
