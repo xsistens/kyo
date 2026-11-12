@@ -11,36 +11,36 @@ module's `README.md`.
 
 ## A component is a class over its props
 
-A component the rulebook has reached (`Button`, `ToggleButton`, `Input`, `Password`) also `extends Component(Setters[X.Props, X])` and has its setters
+A component the rulebook has reached (`Button`, `ToggleButton`, `Input`, `Password`, `TextArea`) also `extends Component(Setters[X.Props, X])` and has its setters
 generated from its props (`RULEBOOK.md` rule 11). The rest still write each setter as below, until their wave reaches them.
 
 ```scala
-final class TextArea private[uic] (private[uic] val p: TextArea.Props) extends Node, FormControl[String], HasProps:
+final class InputMask private[uic] (private[uic] val p: InputMask.Props) extends Node, FormControl[String], HasProps:
     import p.*   // reads in the body stay as they are
-    type Self = TextArea
+    type Self = InputMask
 
-    def size(v: Size): TextArea = new TextArea(p.copy(sizeV = v))
+    def size(v: Size): InputMask = new InputMask(p.copy(sizeV = v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new TextArea(p.copy(validityV = v))
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new InputMask(p.copy(validityV = v))
     private[uic] def accessibility: Accessibility               = access
-    private[uic] def withAccessibility(v: Accessibility): Self  = new TextArea(p.copy(access = v))
-    private[uic] def bindRef(ref: SignalRef[String])(using Frame): TextArea    = value(ref)
-    private[uic] def hearBlur(f: String => UI.Action)(using Frame): TextArea   = onBlur(f)
-end TextArea
+    private[uic] def withAccessibility(v: Accessibility): Self  = new InputMask(p.copy(access = v))
+    private[uic] def bindRef(ref: SignalRef[String])(using Frame): InputMask    = value(ref)
+    private[uic] def hearBlur(f: String => UI.Action)(using Frame): InputMask   = onBlur(f)
+end InputMask
 
-object TextArea:
+object InputMask:
     final private[uic] case class Props(
         sizeV: Size = Size.Normal,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         access: Accessibility = Accessibility.none
     )
 
-    def apply(): TextArea = new TextArea(Props())
-end TextArea
+    def apply(): InputMask = new InputMask(Props())
+end InputMask
 ```
 
-So a reader typing `uic.TextArea().` outside this package is offered the setters and what every object has: no field, no `copy`,
+So a reader typing `uic.InputMask().` outside this package is offered the setters and what every object has: no field, no `copy`,
 no `_1`, no `product*`. `NodeSurfaceTest` compiles from outside `kyo.uic` and sweeps every component; a new one belongs in it.
 
 - **Every field lives in `Props`**, the configuration the setters build. A setter is `new X(p.copy(...))`. A component reads
