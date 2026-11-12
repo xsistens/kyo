@@ -37,13 +37,26 @@ private[kyo] object ReactiveMacro:
         else
             given CanEqual[Any, Any]               = CanEqual.derived
             given CanEqual[Chunk[Any], Chunk[Any]] = CanEqual.derived
-            val slots                              = Chunk.from(reads.map {
-                case s: Signal[?] => signals.indexWhere(_ eq s)
-                case _            => -1
-            })
-            Signal.combineLatestAll(signals).map(values =>
-                Chunk.from(reads.indices.map(i => if slots(i) < 0 then reads(i) else values(slots(i))))
-            )
+            val combined                           = Signal.combineLatestAll(signals)
+            // Every read a distinct signal: the combined values already are the reads, in order, so no per-emission copy.
+            if signals.size == reads.size then combined
+            else
+                val slots = reads.map {
+                    case s: Signal[?] => signals.indexWhere(_ eq s)
+                    case _            => -1
+                }.toArray
+                val fixed = reads.toArray[Any]
+                combined.map { values =>
+                    val out = fixed.clone()
+                    var i   = 0
+                    while i < out.length do
+                        val slot = slots(i)
+                        if slot >= 0 then out(i) = values(slot)
+                        i += 1
+                    end while
+                    Chunk.from(out)
+                }
+            end if
         end if
     end combine
 
