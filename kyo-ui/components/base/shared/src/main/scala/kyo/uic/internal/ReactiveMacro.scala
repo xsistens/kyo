@@ -92,6 +92,74 @@ private[kyo] object ReactiveMacro:
         end match
     end draw
 
+    /** A UI block with keys: one region over the reads, compared by the first `compared` reads and the keys `key` gives, so a change
+      * that leaves them as they were runs nothing. `f` gets the reads, then the keys, then the run's [[Gate]]. Over constants it
+      * draws once, with no region.
+      */
+    def drawKeyed(reads: Seq[Any], compared: Int)(key: Chunk[Any] => Chunk[Any])(f: Chunk[Any] => UI)(using Frame): UI =
+        def run(at: Keyed): UI = f(at.raw.concat(at.compared.drop(compared)).append(new Gate(reads, compared, key, at)))
+        combine(reads) match
+            case s: Signal[?] =>
+                given CanEqual[Keyed, Keyed] = CanEqual.derived
+                val keyed                    = s.asInstanceOf[Signal[Chunk[Any]]].map(raw => Keyed(raw, compared, key))
+                UI.Prop.render[Keyed](keyed)(run)
+            case values => run(Keyed(values.asInstanceOf[Chunk[Any]], compared, key))
+        end match
+    end drawKeyed
+
+    /** One value of a keyed region's reads, equal to another where what the region compares is: the reads it compares as they are
+      * and its keys. The region's signal skips a value equal to the one before, so a change that leaves both runs nothing.
+      */
+    final class Keyed private (val raw: Chunk[Any], val compared: Chunk[Any]):
+        override def equals(other: Any): Boolean = other match
+            case k: Keyed => compared.equals(k.compared)
+            case _        => false
+        override def hashCode: Int = compared.hashCode
+    end Keyed
+
+    object Keyed:
+        def apply(raw: Chunk[Any], compared: Int, key: Chunk[Any] => Chunk[Any]): Keyed =
+            new Keyed(raw, raw.take(compared).concat(key(raw)))
+
+    /** What a run of a keyed region holds its channels to. A channel follows its read in place while the region's keys are the ones the
+      * run was drawn for, and keeps the last value it showed while they are not: the region then draws again, and a channel never shows
+      * a value of a moment whose structure the run does not show (a label reading "0%" in a run drawn for a value that is not 0).
+      * A read the region does not read is not held, since no key depends on it.
+      */
+    final class Gate private[internal] (reads: Seq[Any], compared: Int, key: Chunk[Any] => Chunk[Any], drawn: Keyed)(using Frame):
+
+        /** `read` held to the run's keys: a signal the region reads becomes one that moves only while the keys are the run's. */
+        def hold[A](read: A): A = read match
+            case s: Signal[?] =>
+                val slot = reads.indexWhere(r => r.isInstanceOf[Signal[?]] && (r.asInstanceOf[AnyRef] eq s))
+                if slot < 0 then read
+                else
+                    given CanEqual[Any, Any] = CanEqual.derived
+                    // The last value the run showed. Shared by every observer of the held signal and written from the writer's
+                    // stack, so an atomic cell; it starts at the run's own value of the read.
+                    val last                    = new java.util.concurrent.atomic.AtomicReference[Any](drawn.raw(slot))
+                    val signals                 = reads.indices.filter(i => reads(i).isInstanceOf[Signal[?]])
+                    val one                     = signals.forall(i => reads(i).asInstanceOf[AnyRef] eq s)
+                    val heldSignal: Signal[Any] =
+                        if one then
+                            // The region reads this signal alone: a map of it, so a write patches on the writer's stack.
+                            val at = signals.toArray
+                            s.asInstanceOf[Signal[Any]].map { v =>
+                                val now = drawn.raw.toArray
+                                at.foreach(i => now(i) = v)
+                                if Keyed(Chunk.from(now), compared, key) == drawn then last.set(v)
+                                last.get
+                            }
+                        else
+                            combine(reads).asInstanceOf[Signal[Chunk[Any]]].map { now =>
+                                if Keyed(now, compared, key) == drawn then last.set(now(slot))
+                                last.get
+                            }
+                    heldSignal.asInstanceOf[A]
+                end if
+            case _ => read
+    end Gate
+
     /** An optional prop as one prop of an option: `Absent` where it is unset, the value where it is set, a signal inside it followed
       * (as `UI.Live` reads an optional field). What a block's optional read takes out of it.
       */
@@ -542,6 +610,61 @@ private[kyo] object ReactiveMacro:
             case vd: ValDef if vd.symbol.flags.is(Flags.Lazy) => true
             case _                                            => false
 
+        def stablePath(t: Term): Maybe[List[Symbol]] = strip(t) match
+            case id: Ident if isStable(id.symbol)   => Present(List(id.symbol))
+            case Select(q, _) if isStable(t.symbol) => stablePath(q).map(_ :+ t.symbol)
+            // An optional read of a stable path is one read, apart from a plain read of the same path, which yields the option itself.
+            case Apply(Apply(TypeApply(fn, _), List(inner)), _) if fn.symbol == optionalSym => stablePath(inner).map(_ :+ optionalSym)
+            case _                                                                          => Absent
+        def isStable(s: Symbol): Boolean =
+            s.flags.is(Flags.Module) || (s.isValDef && !s.flags.is(Flags.Mutable)) || s.isPackageDef
+        // The stable paths of the reads in `t`, each read's path (a read without one has none to share).
+        def readPaths(t: Tree): List[List[Symbol]] =
+            val out = scala.collection.mutable.ListBuffer.empty[List[Symbol]]
+            new TreeTraverser:
+                override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
+                    case Read(arg) => stablePath(arg).foreach(p => out += p)
+                    case _         => super.traverseTree(tree)(owner)
+            .traverseTree(t)(lambdaSym)
+            out.toList
+        end readPaths
+        // A branch reading what the condition reads takes that value from the block's own run (ISC-36), which a branch compiled apart
+        // cannot do, so such a form stays the block's.
+        def sharesRead(c: Term, y: Term, n: Term): Boolean =
+            val branches = readPaths(y) ++ readPaths(n)
+            readPaths(c).exists(branches.contains)
+        // `a && b` and `a || b` on a `Boolean` are the forms `if a then b else false` and `if a then true else b`, as the compiler's
+        // inlining of them would write (it does not inline them here, so they are written out).
+        def lazyParts(t: Term): Maybe[(Term, Term, Term)] =
+            val parts: Maybe[(Term, Term, Term)] = strip(t) match
+                case If(c, y, n) => Present((c, y, n))
+                case Apply(sel @ Select(a, op), List(b)) if (op == "&&" || op == "||") && sel.symbol.owner == booleanType.typeSymbol =>
+                    if op == "&&" then Present((a, b, Literal(BooleanConstant(false))))
+                    else Present((a, Literal(BooleanConstant(true)), b))
+                case _ => Absent
+            parts.filter { (c, y, n) =>
+                (containsRead(y) || containsRead(n)) && !refersToLocal(c) && !refersToLocal(y) && !refersToLocal(n) && !sharesRead(c, y, n)
+            }
+        end lazyParts
+        // A `match` whose case bodies read: the selector and each case body are props of their own, and only the case the selector
+        // picks is subscribed (`ReactiveMacro.matched`, or `pickOn` where it draws). A case that uses a `val` of the block, a guard
+        // that reads or uses one, and a selector that shares a read with a body stay eager, as a branch form does (ISC-29, ISC-36).
+        def lazyCases(t: Term): Maybe[(Term, List[CaseDef])] = strip(t) match
+            case Match(sel, cases) if cases.exists(cd => containsRead(cd.rhs)) =>
+                def localOutside(x: Tree, own: collection.Set[Symbol]): Boolean = anyIn(x) {
+                    case id: Ident => local.contains(id.symbol) && !own.contains(id.symbol)
+                    case _         => false
+                }
+                val selPaths = readPaths(sel)
+                val ok       = !refersToLocal(sel) && cases.forall { cd =>
+                    val own = definitionsIn(cd, lambdaSym)
+                    !cd.guard.exists(g => containsRead(g) || localOutside(g, own)) &&
+                    !localOutside(cd.rhs, own) &&
+                    readPaths(cd.rhs).forall(p => !selPaths.contains(p))
+                }
+                if ok then Present((sel, cases)) else Absent
+            case _ => Absent
+        end lazyCases
         // ---- Data flow: which of the block's `val`s only reach channels ----
         //
         // A `val` of the block that holds what a read gave is a read itself, to whoever uses it. Where every use is inside a
@@ -577,8 +700,38 @@ private[kyo] object ReactiveMacro:
             }
         end while
 
-        // Each use of a reading `val`: inside a channel argument it needs nothing, inside another reading `val` it needs what that
-        // one needs, anywhere else the region needs it.
+        // ---- Keys: a condition that decides the structure through a value derived from its reads ----
+        //
+        // A condition of an `if`, a `match`'s selector or a guard in the structure of a UI block, whose value can be compared and
+        // which reads (directly, or through `val`s it can be written out of), is a key of the region: the region compares the
+        // key's value, not the reads it is computed from, so a change of the reads that leaves the key as it was runs nothing. Its
+        // uses of a `val` need nothing of the region, so a `val` that otherwise only reaches channels stays a channel, and every
+        // channel of the run is held to the run's keys (`ReactiveMacro.Gate`). A key that is the read itself, or that uses
+        // something it cannot be written out of (a `val` defining something, a pattern's variable, a lazy branch), is not a key.
+        val keyNodes = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap[Tree, java.lang.Boolean])
+        // A reading `val` the key can be written out of: its definition defines nothing and uses only `val`s like it.
+        def inlinable(s: Symbol, seen: Set[Symbol]): Boolean =
+            reading.contains(s) && !seen.contains(s) &&
+                candidates.get(s).flatMap(_.rhs).exists(r => definitionsIn(r, lambdaSym).isEmpty && writtenOut(r, seen + s))
+        def writtenOut(t: Tree, seen: Set[Symbol]): Boolean = !anyIn(t) {
+            case id: Ident if local.contains(id.symbol) => !inlinable(id.symbol, seen)
+            case _                                      => false
+        }
+        // The read itself, through any `val`s that only name it: a key over it compares what the region compares already.
+        def bareRead(t: Term): Boolean = strip(t) match
+            case Read(_)                                  => true
+            case id: Ident if reading.contains(id.symbol) => candidates.get(id.symbol).flatMap(_.rhs).exists(bareRead)
+            case _                                        => false
+        def keyEligible(t: Term): Boolean =
+            TypeRepr.of[T] <:< TypeRepr.of[UI] && !(t.tpe.widen <:< TypeRepr.of[UI]) && canEqualOf(t.tpe.widen).isDefined &&
+                (containsRead(t) || refsTo(reading)(t)) && definitionsIn(t, lambdaSym).isEmpty && writtenOut(t, Set.empty) &&
+                !bareRead(t) && !anyIn(t) {
+                    case x: Term => lazyParts(x).isDefined || lazyCases(x).isDefined
+                    case _       => false
+                }
+
+        // Each use of a reading `val`: inside a channel argument or a key it needs nothing, inside another reading `val` it needs
+        // what that one needs, anywhere else the region needs it.
         val structural = scala.collection.mutable.Set.empty[Symbol]
         val feeds      = scala.collection.mutable.ArrayBuffer.empty[(Symbol, Symbol)] // (used, user)
         final class Uses(inArg: Boolean, inVal: Maybe[Symbol], deferred: Boolean) extends TreeTraverser:
@@ -607,6 +760,18 @@ private[kyo] object ReactiveMacro:
                         if x.isDefined || handler(i).isDefined then Uses(inArg = true, inVal, deferred = false).traverseTree(a)(owner)
                         else traverseTree(a)(owner)
                     }
+                // A key of the structure: its uses need nothing of the region (see Keys above).
+                case If(c, y, n) if !deferred && !inArg && inVal.isEmpty && keyEligible(c) =>
+                    discard(keyNodes.add(c))
+                    traverseTree(y)(owner)
+                    traverseTree(n)(owner)
+                case Match(sel, cases) if !deferred && !inArg && inVal.isEmpty =>
+                    if keyEligible(sel) then discard(keyNodes.add(sel)) else traverseTree(sel)(owner)
+                    cases.foreach { cd =>
+                        traverseTree(cd.pattern)(owner)
+                        cd.guard.foreach(g => if keyEligible(g) then discard(keyNodes.add(g)) else traverseTree(g)(owner))
+                        traverseTree(cd.rhs)(owner)
+                    }
                 case _ => super.traverseTree(tree)(owner)
         end Uses
         Uses(inArg = false, Absent, deferred = false).traverseTree(rhs)(lambdaSym)
@@ -631,26 +796,27 @@ private[kyo] object ReactiveMacro:
         // A read the region around already has: its value of the run, from that region's values.
         final case class Taken(values: Expr[Chunk[Any]], slot: Int)
 
-        def stablePath(t: Term): Maybe[List[Symbol]] = strip(t) match
-            case id: Ident if isStable(id.symbol)   => Present(List(id.symbol))
-            case Select(q, _) if isStable(t.symbol) => stablePath(q).map(_ :+ t.symbol)
-            // An optional read of a stable path is one read, apart from a plain read of the same path, which yields the option itself.
-            case Apply(Apply(TypeApply(fn, _), List(inner)), _) if fn.symbol == optionalSym => stablePath(inner).map(_ :+ optionalSym)
-            case _                                                                          => Absent
-        def isStable(s: Symbol): Boolean =
-            s.flags.is(Flags.Module) || (s.isValDef && !s.flags.is(Flags.Mutable)) || s.isPackageDef
-
         // Whether a handler reads: a read in it, or a channel-only `val` it uses.
         def readsInHandler(t: Tree): Boolean = containsRead(t) || refsTo(channelOnly)(t)
 
         // The reads of a term, hoisted to `to`: one slot per stable path (the first read of a path holds it) and one per other read.
         // Gives each read's stable path, the slot of each read, and the expression that evaluates the kept reads.
-        def slotsOf(reads: List[Term], to: Symbol): (List[Maybe[List[Symbol]]], List[Int], Expr[Seq[Any]]) =
-            val keys    = reads.map(stablePath)
-            val slots   = keys.zipWithIndex.map { (k, i) => k.fold(i)(path => keys.indexWhere(_.contains(path))) }
-            val kept    = slots.distinct
-            val slotOf  = slots.map(kept.indexOf(_))
-            val hoisted = Expr.ofSeq(kept.map(i => reads(i).changeOwner(to).asExprOf[Any]))
+        // Inside the run of a keyed region, every read is held to the run's keys (`Gate.hold`), so a channel never shows a value of
+        // a moment whose keys differ from the run's. Set while that run's term is rewritten, which is where its channels are compiled.
+        var gateNow: Maybe[() => Expr[ReactiveMacro.Gate]] = Absent
+        def held(read: Term): Term                         = gateNow match
+            case Present(gate) =>
+                read.tpe.widen.asType match
+                    case '[a] => '{ ${ gate() }.hold[a](${ read.asExprOf[a] }) }.asTerm
+            case Absent => read
+
+        def slotsOf(reads: List[Term], to: Symbol, atEvent: Boolean = false): (List[Maybe[List[Symbol]]], List[Int], Expr[Seq[Any]]) =
+            val keys   = reads.map(stablePath)
+            val slots  = keys.zipWithIndex.map { (k, i) => k.fold(i)(path => keys.indexWhere(_.contains(path))) }
+            val kept   = slots.distinct
+            val slotOf = slots.map(kept.indexOf(_))
+            // A handler reads each prop's value at its event, which no key holds.
+            val hoisted = Expr.ofSeq(kept.map(i => (if atEvent then reads(i) else held(reads(i))).changeOwner(to).asExprOf[Any]))
             (keys, slotOf, hoisted)
         end slotsOf
 
@@ -701,7 +867,7 @@ private[kyo] object ReactiveMacro:
             end Collector
             Collector(Absent).traverseTree(term)(owner)
 
-            val (_, slotOf, hoisted) = slotsOf(reads.toList, owner)
+            val (_, slotOf, hoisted) = slotsOf(reads.toList, owner, atEvent = true)
 
             (a.asType, eff.asType) match
                 case ('[av], '[ev]) =>
@@ -748,53 +914,6 @@ private[kyo] object ReactiveMacro:
             dd.rhs.map(compileHandler(_, dd.symbol, dd.returnTpt.tpe))
         )
 
-        // The stable paths of the reads in `t`, each read's path (a read without one has none to share).
-        def readPaths(t: Tree): List[List[Symbol]] =
-            val out = scala.collection.mutable.ListBuffer.empty[List[Symbol]]
-            new TreeTraverser:
-                override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
-                    case Read(arg) => stablePath(arg).foreach(p => out += p)
-                    case _         => super.traverseTree(tree)(owner)
-            .traverseTree(t)(lambdaSym)
-            out.toList
-        end readPaths
-        // A branch reading what the condition reads takes that value from the block's own run (ISC-36), which a branch compiled apart
-        // cannot do, so such a form stays the block's.
-        def sharesRead(c: Term, y: Term, n: Term): Boolean =
-            val branches = readPaths(y) ++ readPaths(n)
-            readPaths(c).exists(branches.contains)
-        // `a && b` and `a || b` on a `Boolean` are the forms `if a then b else false` and `if a then true else b`, as the compiler's
-        // inlining of them would write (it does not inline them here, so they are written out).
-        def lazyParts(t: Term): Maybe[(Term, Term, Term)] =
-            val parts: Maybe[(Term, Term, Term)] = strip(t) match
-                case If(c, y, n) => Present((c, y, n))
-                case Apply(sel @ Select(a, op), List(b)) if (op == "&&" || op == "||") && sel.symbol.owner == booleanType.typeSymbol =>
-                    if op == "&&" then Present((a, b, Literal(BooleanConstant(false))))
-                    else Present((a, Literal(BooleanConstant(true)), b))
-                case _ => Absent
-            parts.filter { (c, y, n) =>
-                (containsRead(y) || containsRead(n)) && !refersToLocal(c) && !refersToLocal(y) && !refersToLocal(n) && !sharesRead(c, y, n)
-            }
-        end lazyParts
-        // A `match` whose case bodies read: the selector and each case body are props of their own, and only the case the selector
-        // picks is subscribed (`ReactiveMacro.matched`, or `pickOn` where it draws). A case that uses a `val` of the block, a guard
-        // that reads or uses one, and a selector that shares a read with a body stay eager, as a branch form does (ISC-29, ISC-36).
-        def lazyCases(t: Term): Maybe[(Term, List[CaseDef])] = strip(t) match
-            case Match(sel, cases) if cases.exists(cd => containsRead(cd.rhs)) =>
-                def localOutside(x: Tree, own: collection.Set[Symbol]): Boolean = anyIn(x) {
-                    case id: Ident => local.contains(id.symbol) && !own.contains(id.symbol)
-                    case _         => false
-                }
-                val selPaths = readPaths(sel)
-                val ok       = !refersToLocal(sel) && cases.forall { cd =>
-                    val own = definitionsIn(cd, lambdaSym)
-                    !cd.guard.exists(g => containsRead(g) || localOutside(g, own)) &&
-                    !localOutside(cd.rhs, own) &&
-                    readPaths(cd.rhs).forall(p => !selPaths.contains(p))
-                }
-                if ok then Present((sel, cases)) else Absent
-            case _ => Absent
-        end lazyCases
         // The block, a channel argument in it, or a channel-only `val`, as one value over its reads: every read in tree order (the
         // order the replacement visits them in) taken out, refusing the ones that cannot be, and the term as a function of the
         // values read. A read the region around already has is that region's value of the run. A channel argument or a
@@ -838,9 +957,13 @@ private[kyo] object ReactiveMacro:
             }
             // What this term reads: a read's argument, or the prop of a channel-only `val`.
             val reads = scala.collection.mutable.ArrayBuffer.empty[Term]
+            // The keys of this region, in tree order (see Keys above): only a UI term is a region that compares them.
+            val keysHere = scala.collection.mutable.ArrayBuffer.empty[Term]
+            val keyed    = result <:< TypeRepr.of[UI]
             final class Collector(deferred: Maybe[String]) extends TreeTraverser:
                 override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
-                    case t @ Read(arg) =>
+                    case t: Term if keyed && deferred.isEmpty && keyNodes.contains(t) => keysHere += t
+                    case t @ Read(arg)                                                =>
                         deferred.foreach(what => deferredError(t.pos, what))
                         if refersToLocal(arg) then
                             report.errorAndAbort(
@@ -899,8 +1022,56 @@ private[kyo] object ReactiveMacro:
             end Collector
             Collector(Absent).traverseTree(term)(from)
 
-            // One slot per stable path, and one per other read.
-            val (keys, slotOf, hoisted) = slotsOf(reads.toList, to)
+            // Each key written out of the `val`s it uses, down to its reads, and those reads in the order the key function visits
+            // them. A read the region around already has is its value of that run, and not a read of this region.
+            val writtenKeys = keysHere.toList.map { k =>
+                new TreeMap:
+                    override def transformTerm(tree: Term)(o: Symbol): Term = tree match
+                        case id: Ident if reading.contains(id.symbol) => transformTerm(candidates(id.symbol).rhs.get)(o)
+                        case _                                        => super.transformTerm(tree)(o)
+                .transformTerm(k)(from)
+            }
+            val keyReads = writtenKeys.flatMap { k =>
+                val out = scala.collection.mutable.ListBuffer.empty[Term]
+                new TreeTraverser:
+                    override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
+                        case Read(arg) => if !isTaken(arg) then out += arg
+                        case _         => super.traverseTree(tree)(owner)
+                .traverseTree(k)(from)
+                out.toList
+            }
+
+            // One slot per stable path, and one per other read: the region's own reads first, then what only its keys read.
+            val (keys, slotOf, hoisted) = slotsOf(reads.toList ++ keyReads, to)
+            // The slots the region compares as they are, and the number of slots it reads.
+            val compared = if reads.isEmpty then 0 else slotOf.take(reads.size).max + 1
+            val width    = if slotOf.isEmpty then 0 else slotOf.max + 1
+            // A key node of the term, by identity, at its index among the keys.
+            val keyIndex = new java.util.IdentityHashMap[Tree, Integer]
+            keysHere.zipWithIndex.foreach((k, i) => discard(keyIndex.put(k, i)))
+
+            // The keys as a function of the region's reads, in the slots the run takes them from.
+            def keyFn: Expr[Chunk[Any] => Chunk[Any]] =
+                val mt = MethodType(List("raw"))(_ => List(TypeRepr.of[Chunk[Any]]), _ => TypeRepr.of[Chunk[Any]])
+                Lambda(
+                    to,
+                    mt,
+                    (lambdaOwner, params) =>
+                        val raw     = Ref(params.head.symbol).asExprOf[Chunk[Any]]
+                        var next    = reads.size
+                        val slotted = new TreeMap:
+                            override def transformTerm(tree: Term)(o: Symbol): Term = tree match
+                                case Read(arg) =>
+                                    stablePath(arg).flatMap(p => Maybe.fromOption(taken.get(p))).fold {
+                                        val slot = slotOf(next)
+                                        next += 1
+                                        slotTerm(raw, slot, tree.tpe)
+                                    }(t => slotTerm(t.values, t.slot, tree.tpe))
+                                case _ => super.transformTerm(tree)(o)
+                        val values = writtenKeys.map(k => slotted.transformTerm(k)(from).asExprOf[Any])
+                        '{ Chunk.from(${ Expr.ofSeq(values) }) }.asTerm.changeOwner(lambdaOwner)
+                ).asExprOf[Chunk[Any] => Chunk[Any]]
+            end keyFn
 
             // The term as a function of the read values, each channel argument and channel-only `val` in it replaced by its own
             // value, which takes what this term reads as this term's values of the run.
@@ -911,14 +1082,21 @@ private[kyo] object ReactiveMacro:
                     mt,
                     (lambdaOwner, params) =>
                         val values = Ref(params.head.symbol).asExprOf[Chunk[Any]]
-                        val inner  = taken ++ keys.zip(slotOf).collect { case (Present(path), slot) => path -> Taken(values, slot) }
-                        var next   = 0
+                        // Only the reads the region compares are values of the run: what only its keys read stays a channel's.
+                        val inner =
+                            taken ++ keys.zip(slotOf).take(reads.size).collect { case (Present(path), slot) => path -> Taken(values, slot) }
+                        var next                           = 0
                         def slotValue(tpe: TypeRepr): Term =
                             val slot = slotOf(next)
                             next += 1
                             slotTerm(values, slot, tpe)
                         end slotValue
-                        new TreeMap:
+                        // A keyed run gets its keys after its reads, and its gate after them (`ReactiveMacro.drawKeyed`).
+                        val outerGate = gateNow
+                        if !keysHere.isEmpty then
+                            val at = width + keysHere.size
+                            gateNow = Present(() => '{ ${ values }(${ Expr(at) }).asInstanceOf[ReactiveMacro.Gate] })
+                        val body = new TreeMap:
                             override def transformStatement(tree: Statement)(o: Symbol): Statement = tree match
                                 case dd: DefDef if isHandlerLambda(dd) && dd.rhs.exists(readsInHandler) => compiledHandler(dd)
                                 case vd: ValDef if channelOnly.contains(vd.symbol)                      =>
@@ -930,6 +1108,8 @@ private[kyo] object ReactiveMacro:
                                     ValDef(sym, Some(compile(vd.rhs.get, vd.symbol, sym, tpe, inner)))
                                 case _ => super.transformStatement(tree)(o)
                             override def transformTerm(tree: Term)(o: Symbol): Term = tree match
+                                // A key is the run's value of it, which the region compared.
+                                case _ if keyIndex.containsKey(tree) => slotTerm(values, width + keyIndex.get(tree), tree.tpe)
                                 // A lazy form is the prop the collector took out, a slot like a read.
                                 case _ if lazyNodes.contains(tree) => slotValue(tree.tpe)
                                 case Read(arg)                     =>
@@ -951,18 +1131,22 @@ private[kyo] object ReactiveMacro:
                                                             // A bare read, or a bare channel-only `val`, hands on what it reads.
                                                             case Read(of)
                                                                 if !stablePath(of).exists(inner.contains) && of.tpe.widen <:< params(i) =>
-                                                                of.changeOwner(o)
+                                                                held(of).changeOwner(o)
                                                             case id: Ident if channelOnly.contains(id.symbol) => Ref(propOf(id.symbol))
                                                             case _                                            => compile(a, o, o, x, inner)
                                                     case Absent => transformTerm(a)(o)
                                     }
                                     Apply.copy(tree)(fn1, args1)
                                 case _ => super.transformTerm(tree)(o)
-                        .transformTerm(term)(from).changeOwner(lambdaOwner)
+                        try body.transformTerm(term)(from).changeOwner(lambdaOwner)
+                        finally gateNow = outerGate
                 ).asExprOf[Chunk[Any] => R]
             end lambdaOf
 
             result.asType match
+                case '[r] if result <:< TypeRepr.of[UI] && !keysHere.isEmpty =>
+                    val f = lambdaOf[UI]
+                    '{ ReactiveMacro.drawKeyed($hoisted, ${ Expr(compared) })($keyFn)($f)(using $frame) }.asTerm.changeOwner(to)
                 case '[r] if result <:< TypeRepr.of[UI] =>
                     val f = lambdaOf[UI]
                     '{ ReactiveMacro.draw($hoisted)($f)(using $frame) }.asTerm.changeOwner(to)
