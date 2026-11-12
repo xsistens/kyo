@@ -117,7 +117,7 @@ object FloatLabel:
             // needs no region of its own around it: one drew the whole field again on every keystroke into a ref, and could
             // not know the text of a field nothing binds or the reader's edit of a starting one.
             case Host.In(input)    => labelled(Node.placed(input))
-            case Host.Ta(textArea) => labelled(textArea.render)
+            case Host.Ta(textArea) => labelled(Node.placed(textArea))
 
             case Host.Ac(auto) =>
                 // The AutoComplete stamps p-filled INSIDE its own region, from the text it reads there: a region here would

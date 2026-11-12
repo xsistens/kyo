@@ -518,6 +518,13 @@ class DiscoverabilityTest extends UicTest:
         typeCheckFailure(preamble + """def x = uic.TextArea().growing(true)""")
     }
 
+    "TextArea takes a constant or a signal for each setting, and a description" in {
+        typeCheck(
+            preamble + """def x(n: Signal[Int], on: Signal[Boolean], s: Signal[uic.Size], t: Signal[String]) = uic.TextArea().rows(n).autoResize(on).fluid(on).disabled(on).readonly(on).required(on).size(s).name(t).maxLength(n).accessibleDescription(t)"""
+        )
+        typeCheck(preamble + """def x = uic.TextArea().value("start").placeholder("Write a comment").onInput(_ => ()).onChange(_ => ())""")
+    }
+
     "migrated form fields validate via invalid/invalidMessage, not valueState" in {
         typeCheck(preamble + """def x = uic.Input().invalid(true).invalidMessage("m").variant(uic.FieldVariant.Filled).fluid(true)""")
         typeCheck(preamble + """def x = uic.TextArea().invalid(true).invalidMessage("m").size(uic.Size.Small)""")
