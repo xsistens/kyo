@@ -15,81 +15,73 @@ enum ProgressBarMode derives CanEqual:
   * (width in %) > optional `.p-progressbar-label`), so the extracted `@primeuix`
   * progressbar CSS applies verbatim.
   *
-  * The `value` binds either to a constant `Int` or, like [[Input]]/[[CheckBox]],
-  * reactively to a `SignalRef[Int]` via a const-or-ref carrier; a ref change
-  * re-renders the bar width and `aria-valuenow`. The label shows `NN%` by
-  * default (Prime's `showValue`); `valueTemplate` formats it, `showValue(false)`
-  * hides it. Like Prime, a zero value renders no label.
+  * The label shows `NN%` by default (Prime's `showValue`); `valueTemplate` formats
+  * it, `showValue(false)` hides it. Like Prime, a zero value renders no label. Every
+  * value takes a constant or a signal, and a signal patches its place. It keeps no
+  * state, so it has no instance: a host region that runs again has nothing of it to
+  * lose.
   */
-final class ProgressBar private[uic] (private[uic] val p: ProgressBar.Props) extends Node, HasAccessibleName, HasProps:
-    import p.*
+final class ProgressBar private[uic] (private[uic] val p: ProgressBar.Props)
+    extends Component(Setters[ProgressBar.Props, ProgressBar]), Node, HasAccessibleName, HasElementId:
 
     type Self = ProgressBar
 
-    /** The percentage shown (clamped to 0 to 100 at render). A constant renders the bar statically; any
-      * `Signal[Int]` updates the bar width and `aria-valuenow` on emission.
-      *
-      * A progress bar is never edited by the reader, so the two-way case a writable `SignalRef` would
-      * carry has nothing to write: it reads exactly like a one-way signal here. A derived signal
-      * (`loaded.zip(total).map(pct)`) is the natural binding.
-      */
-    def value(v: Int | Signal[Int]): ProgressBar = new ProgressBar(p.copy(valueBinding = Present(ReactiveValue(v))))
-
-    /** `Determinate` (default) or the endless `Indeterminate` slide. */
-    def mode(v: ProgressBarMode): ProgressBar = new ProgressBar(p.copy(modeV = v))
-
-    /** Shows the value label inside the bar (default true, Prime semantics). */
-    def showValue(v: Boolean): ProgressBar = new ProgressBar(p.copy(showValueFlag = v))
-
-    /** Formats the label from the current value (e.g. `v => s"$v/100"`). */
-    def valueTemplate(f: Int => String): ProgressBar = new ProgressBar(p.copy(valueTemplateV = Present(f)))
-
-    private[uic] def accessibility: Accessibility              = access
+    private[uic] def accessibility: Accessibility              = p.access
     private[uic] def withAccessibility(v: Accessibility): Self = new ProgressBar(p.copy(access = v))
-    private[uic] def render(using Frame): UI                   =
-        modeV match
-            case ProgressBarMode.Indeterminate => indeterminateBody
-            case ProgressBarMode.Determinate   => valueBinding.getOrElse(ReactiveValue.Const(0)).render(determinateBody)
 
-    private def root(using Frame) =
-        var el = div
-            .cssClass("p-progressbar")
-            .cssClass("p-component")
+    /** Draws the bar. Nothing of it decides the structure but whether the label shows: the mode reaches the root through its class
+      * channel, the percent shown (the value clamped to 0 to 100, none while indeterminate) through `aria-valuenow` and the fill's
+      * inline-style channel, the accessible name through `aria-label`, and the label's text through its text channel; an `id` lands
+      * on the root. The label itself is drawn in its own region below the fill, over whether it shows (the value is not zero,
+      * `showValue`, determinate), so a value moving within 1 to 100 patches in place, and constants draw no region.
+      */
+    private[uic] def render(using Frame): UI =
+        val shown: Prop[Maybe[Int]] = UI.reactive {
+            p.mode.read match
+                case ProgressBarMode.Determinate   => Maybe(math.max(0, math.min(100, p.value.read)))
+                case ProgressBarMode.Indeterminate => Maybe.empty[Int]
+        }
+        val fill: Prop[Style]       = UI.reactive(shown.read.fold(Style.empty)(v => Style.width(v.pct)))
+        val text: Prop[String]      = UI.reactive(shown.read.fold("")(p.valueTemplate))
+        val labelled: Prop[Boolean] = UI.reactive(p.showValue.read && shown.read.exists(_ != 0))
+        div.cssClass("p-progressbar", "p-component")
+            .when(p.access.id)(_.id(_))
+            .cssClass.matching(p.mode) {
+                case ProgressBarMode.Determinate   => "p-progressbar-determinate"
+                case ProgressBarMode.Indeterminate => "p-progressbar-indeterminate"
+            }
             .role("progressbar")
-            .aria(
-                Aria.valuemin -> "0",
-                Aria.valuemax -> "100"
+            .aria(Aria.valuemin -> 0, Aria.valuemax -> 100, Aria.valuenow -> shown, Aria.label -> p.access.name)(
+                div.cssClass("p-progressbar-value").inlineStyle(fill)(
+                    UI.reactive(if labelled.read then div.cssClass("p-progressbar-label")(text) else UI.empty)
+                )
             )
-        access.name.foreach(n => el = el.aria(Aria.label -> n))
-        el
-    end root
-
-    private def determinateBody(raw: Int)(using Frame): UI =
-        val pct             = math.max(0, math.min(100, raw))
-        val label: List[UI] =
-            if !showValueFlag || pct == 0 then Nil
-            else List(div.cssClass("p-progressbar-label")(valueTemplateV.map(_(pct)).getOrElse(s"$pct%")))
-        root
-            .cssClass("p-progressbar-determinate")
-            .aria(Aria.valuenow -> pct)(
-                div.cssClass("p-progressbar-value").style(_.width(pct.pct))(UI.children(label)*)
-            )
-    end determinateBody
-
-    private def indeterminateBody(using Frame): UI =
-        root.cssClass("p-progressbar-indeterminate")(
-            div.cssClass("p-progressbar-value")
-        )
+    end render
 end ProgressBar
 
 object ProgressBar:
+    /** What a progress bar holds. Each field is a setter of its name (`uic.ProgressBar().value(40).showValue(false)`), which takes a
+      * constant or a signal where the field is a `Prop` and the function itself for `valueTemplate`; `access` is written by the
+      * shared traits (`accessibleName`, `id`).
+      */
     final private[uic] case class Props(
-        valueBinding: Maybe[ReactiveValue[Int]] = Absent,
-        modeV: ProgressBarMode = ProgressBarMode.Determinate,
-        showValueFlag: Boolean = true,
-        valueTemplateV: Maybe[Int => String] = Absent,
-        access: Accessibility = Accessibility.none
-    )
+        /** The percentage shown, clamped to 0 to 100 when drawn. A signal patches the fill, `aria-valuenow` and the label's text in
+          * place. A progress bar is never edited by the reader, so a writable `SignalRef` reads exactly like a one-way signal here,
+          * and a derived signal (`loaded.zip(total).map(pct)`) is the natural binding.
+          */
+        value: Prop[Int] = 0,
+        /** `Determinate` (default) fills to the value; `Indeterminate` runs the endless slide and shows no value. A signal swaps the
+          * class, the fill and `aria-valuenow` in place.
+          */
+        mode: Prop[ProgressBarMode] = ProgressBarMode.Determinate,
+        /** Shows the value label inside the bar (default true, Prime semantics). A signal draws or drops the label in its region. */
+        showValue: Prop[Boolean] = true,
+        /** Formats the label from the percent shown (default `NN%`, e.g. `v => s"$v/100"`). */
+        valueTemplate: Int => String = percent,
+        @noSetter access: Accessibility = Accessibility.none
+    ) derives CanEqual
 
     def apply(): ProgressBar = new ProgressBar(Props())
+
+    private val percent: Int => String = v => s"$v%"
 end ProgressBar
