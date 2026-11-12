@@ -536,6 +536,132 @@ class ReactiveContractTest extends kyo.test.Test[Any]:
             end for
         }
 
+        "a branch the condition leaves has no observer once the condition flips" in {
+            val runs = new Runs
+            for
+                c <- Signal.initRef(true)
+                a <- Signal.initRef("a")
+                b <- Signal.initRef("b")
+                ui = UI.reactive {
+                    runs.tick()
+                    span.id("out")(if c.read then a.read else b.read)
+                }
+                r <- live(ui) { l =>
+                    for
+                        _        <- observed(c)
+                        _        <- settle(c, false)
+                        _        <- observed(b)
+                        _        <- assertEventually(a.waiters.map(_ == 0), within)
+                        waitingA <- a.waiters
+                        waitingB <- b.waiters
+                        shown    <- l.now
+                    yield (waitingA, waitingB, shown)
+                }
+            yield
+                val (waitingA, waitingB, shown) = r
+                report("cost", "branch left after a flip")(("observers", waitingA, 0))
+                assert(waitingA == 0 && waitingB == 1, s"observers of the left branch $waitingA, of the taken one $waitingB")
+                assert(shown.text == "b", s"after the flip it showed: $shown")
+            end for
+        }
+
+        "a channel in the branch taken patches its attribute in place and draws nothing again" in {
+            for
+                c <- Signal.initRef(true)
+                a <- Signal.initRef(1)
+                ui = UI.reactive(if c.read then span.id("out").title(s"t${a.read}")("x") else span.id("out")("y"))
+                k <- live(ui)(l => observed(a).andThen(cost(l, new Runs)(settle(a, 2).andThen(shows(l)(_.title == "t2")))))
+            yield
+                report("cost", "channel in the branch taken")(("paints", k.paints, 0), ("patches", k.patches, 1))
+                assert(k.paints == 0 && k.patches <= 1, s"$k")
+            end for
+        }
+
+        "a case the selector leaves has no observer once the selector flips" in {
+            val runs = new Runs
+            for
+                k <- Signal.initRef(0)
+                a <- Signal.initRef("a")
+                b <- Signal.initRef("b")
+                ui = UI.reactive {
+                    runs.tick()
+                    span.id("out")(k.read match
+                        case 0 => a.read
+                        case _ => b.read)
+                }
+                r <- live(ui) { l =>
+                    for
+                        _        <- observed(k)
+                        _        <- settle(k, 1)
+                        _        <- observed(b)
+                        _        <- assertEventually(a.waiters.map(_ == 0), within)
+                        waitingA <- a.waiters
+                        waitingB <- b.waiters
+                        shown    <- l.now
+                        k        <- cost(l, runs)(settle(a, "a2"))
+                    yield (waitingA, waitingB, shown, k)
+                }
+            yield
+                val (waitingA, waitingB, shown, k) = r
+                report("cost", "case left after a flip")(("observers", waitingA, 0), ("runs", k.runs, 0), ("paints", k.paints, 0))
+                assert(waitingA == 0 && waitingB == 1, s"observers of the case left $waitingA, of the case taken $waitingB")
+                assert(shown.text == "b", s"after the flip it showed: $shown")
+                assert(k.runs == 0 && k.paints == 0 && k.patches == 0, s"a write to the case left cost $k")
+            end for
+        }
+
+        "a case nested in an element that the selector leaves has no observer, and a write to it draws nothing" in {
+            for
+                k <- Signal.initRef(0)
+                n <- Signal.initRef(2)
+                ui = UI.reactive(span.id("out")(k.read match
+                    case 0 => div(Seq.tabulate(n.read)(i => span(s"$i"))*)
+                    case _ => span("off")))
+                r <- live(ui) { l =>
+                    for
+                        _        <- observed(n)
+                        _        <- settle(k, 1)
+                        _        <- shows(l)(_.text == "off")
+                        _        <- assertEventually(n.waiters.map(_ == 0), within)
+                        waitingN <- n.waiters
+                        c        <- cost(l, new Runs)(settle(n, 3))
+                        _        <- settle(k, 0)
+                        _        <- shows(l)(_.text == "012")
+                    yield (waitingN, c)
+                }
+            yield
+                val (waitingN, c) = r
+                report("cost", "case nested in an element left")(("observers", waitingN, 0), ("paints", c.paints, 0))
+                assert(waitingN == 0 && c.paints == 0 && c.patches == 0, s"observers $waitingN, write cost $c")
+            end for
+        }
+
+        "an untaken UI branch nested in an element has no observer, and a write to it draws nothing" in {
+            for
+                c <- Signal.initRef(true)
+                n <- Signal.initRef(2)
+                ui = UI.reactive(span.id("out")(if c.read then div(Seq.tabulate(n.read)(i => span(s"$i"))*) else span("off")))
+                r <- live(ui) { l =>
+                    for
+                        _        <- observed(n)
+                        _        <- settle(c, false)
+                        _        <- shows(l)(_.text == "off")
+                        _        <- assertEventually(n.waiters.map(_ == 0), within)
+                        waitingN <- n.waiters
+                        k        <- cost(l, new Runs)(settle(n, 3))
+                        _        <- settle(c, true)
+                        _        <- observed(n)
+                        shown    <- l.now
+                    yield (waitingN, k, shown)
+                }
+            yield
+                val (waitingN, k, shown) = r
+                report("cost", "untaken UI branch nested in an element")(("observers", waitingN, 0), ("paints", k.paints, 0))
+                assert(waitingN == 0 && k.paints == 0 && k.patches == 0, s"observers $waitingN, write cost $k")
+                assert(shown.text == "012", s"after the flip it showed: $shown")
+            end for
+        }
+
         "a read behind a condition that reads nothing and is false" in {
             val runs = new Runs
             for
