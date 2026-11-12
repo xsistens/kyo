@@ -8,101 +8,90 @@ import kyo.UI.*
   * `.p-tag-icon` + `span.p-tag-label`), so the extracted `@primeuix` tag CSS
   * applies verbatim.
   *
-  * Without a `severity`, the base `.p-tag` skin renders the primary chip.
+  * The default `Primary` severity renders the base `.p-tag` skin, the primary chip.
   * Prime's tag vocabulary is success/info/warn/danger/secondary/contrast;
-  * `Primary` (and `Help`) keep the unsuffixed base skin. `onClick` is a kyo
+  * `Primary` and `Help` keep the unsuffixed base skin. `onClick` is a kyo
   * extension (Prime's Tag is inert): it adds the pointer cursor and makes the
   * chip a control, `role="button"` and one tab stop answering Enter and Space,
   * since an action only the mouse can reach is not an action for everyone.
+  * It keeps no state, so it has no instance: a host region that runs again has
+  * nothing of it to lose.
   */
-final class Tag private[uic] (private[uic] val p: Tag.Props) extends Node, HasElementId, HasProps:
-    import p.*
+final class Tag private[uic] (private[uic] val p: Tag.Props) extends Component(Setters[Tag.Props, Tag]), Node, HasElementId:
 
     type Self = Tag
 
-    private[uic] def accessibility: Accessibility              = access
+    private[uic] def accessibility: Accessibility              = p.access
     private[uic] def withAccessibility(v: Accessibility): Self = new Tag(p.copy(access = v))
 
-    /** Semantic accent (`.p-tag-<token>`); unset keeps the primary base skin. A `Signal[Severity]` swaps
-      * the class IN PLACE via kyo-ui's class channel on emission (no re-render).
-      */
-    def severity(v: Severity | Signal[Severity]): Tag = new Tag(p.copy(severityV = Present(ReactiveValue(v))))
-
-    /** Fully rounded pill corners (`.p-tag-rounded`). */
-    def rounded(v: Boolean): Tag = new Tag(p.copy(roundedFlag = v))
-
-    /** Leading icon (`.p-tag-icon`), inheriting the chip's text color. */
-    def icon(glyph: IconGlyph): Tag = new Tag(p.copy(iconV = Present(glyph)))
-
-    /** Runs `action` when the tag is clicked (kyo extension; adds the pointer cursor). */
-    def onClick(action: => UI.Action)(using Frame): Tag = new Tag(p.copy(onClickEff = Present(Callback(action))))
-
     /** Adds default-slot children after the label. */
-    def apply(cs: UI*): Tag = new Tag(p.copy(kids = kids ++ cs))
+    def apply(cs: UI*): Tag = new Tag(p.copy(extraChildren = p.extraChildren ++ cs))
 
-    /** The `.p-tag-<token>` suffix for a severity; `Primary`/`Help` render the unsuffixed base skin. */
-    private def tagToken(s: Severity): Maybe[String] = s match
-        case Severity.Success   => Present("success")
-        case Severity.Info      => Present("info")
-        case Severity.Warn      => Present("warn")
-        case Severity.Danger    => Present("danger")
-        case Severity.Secondary => Present("secondary")
-        case Severity.Contrast  => Present("contrast")
-        case _                  => Absent
-
+    /** Draws the tag. Nothing of it decides the structure but what is fixed when the tag is built (a click, an icon, a label, the
+      * children): the severity and `rounded` reach the root through its class channels, the label through its text channel, and an
+      * icon signal swaps the glyph in its own region below the tag, so constants draw no region and a signal patches in place. A tag
+      * that acts on a click is a control, reachable and operable as one: the pointer cursor alone would leave the action to the
+      * mouse. Card, Avatar and Icon carry the same three settings.
+      */
     private[uic] def render(using Frame): UI =
-        var el = span.cssClass("p-tag").cssClass("p-component")
-        access.id.foreach(v => el = el.id(v))
-        severityV match
-            case Present(SeverityValue.Const(s)) => tagToken(s).foreach(t => el = el.cssClass(s"p-tag-$t"))
-            case Present(SeverityValue.Dyn(sig)) =>
-                el = el.cssClass.matching(sig)(s => tagToken(s).map(t => s"p-tag-$t"))
-            case Absent => ()
-        end match
-        if roundedFlag then el = el.cssClass("p-tag-rounded")
-        // A tag that acts on a click is a control, so it is reachable and operable as one: the
-        // pointer cursor alone left the action to the mouse, which is the one reader a chip like
-        // this is easiest to overlook. Card, Avatar and Icon carry the same three lines.
-        onClickEff.foreach { e =>
-            el = el
-                .cssClass("p-uic-clickable")
-                .role("button")
-                .tabIndex(0)
-                .onClick(e)
-                .onKeyDown { evt =>
+        span.cssClass("p-tag", "p-component")
+            .when(p.access.id)(_.id(_))
+            .cssClass.matching(p.severity) {
+                case Severity.Primary   => Absent
+                case Severity.Secondary => "p-tag-secondary"
+                case Severity.Success   => "p-tag-success"
+                case Severity.Info      => "p-tag-info"
+                case Severity.Warn      => "p-tag-warn"
+                case Severity.Danger    => "p-tag-danger"
+                case Severity.Help      => Absent
+                case Severity.Contrast  => "p-tag-contrast"
+            }
+            .when(p.rounded)(_.cssClass("p-tag-rounded"))
+            .when(p.onClick) { (el, act) =>
+                el.cssClass("p-uic-clickable").role("button").tabIndex(0).onClick(act).onKeyDown { evt =>
                     evt.key match
-                        case Keyboard.Enter | Keyboard.Space => e
+                        case Keyboard.Enter | Keyboard.Space => act
                         case _                               => ()
                 }
-        }
-        val iconChild: List[UI]  = iconV.toList.map(g => GlyphSvg(g, "p-tag-icon"))
-        val labelChild: List[UI] = labelV.toList.map {
-            case TextValue.Const(t) => span.cssClass("p-tag-label")(t)
-            // The signal goes in as the label's CHILD, not as a region around the span: a
-            // `Signal[String]` child lifts to a `Reactive` carrying its string signal, which
-            // `ReactiveUI.bindTextRegion` binds straight to the text write. A region around
-            // the span would rebuild the span on every emission to change one character.
-            case TextValue.Dyn(s) => span.cssClass("p-tag-label")(s)
-        }
-        el(UI.children(iconChild ++ labelChild ++ kids)*)
+            }(UI.children(
+                p.icon.map(GlyphSvg(_, "p-tag-icon")),
+                p.label.map(text => span.cssClass("p-tag-label")(text)),
+                p.extraChildren
+            )*)
     end render
 end Tag
 
 object Tag:
-    final private[uic] case class Props(
-        labelV: Maybe[TextValue] = Absent,
-        severityV: Maybe[SeverityValue] = Absent,
-        roundedFlag: Boolean = false,
-        iconV: Maybe[IconGlyph] = Absent,
-        onClickEff: Maybe[UI.Action] = Absent,
-        access: Accessibility = Accessibility.none,
-        kids: List[UI] = Nil
-    )
-
-    /** A tag labelled `label`. A `Signal[String]` patches the label text IN PLACE on emission (kyo-ui's text
-      * channel: no region, no re-render of the label span), e.g. a locale-driven `I18n.t` leaf or a counter.
+    /** What a tag holds. Each field is a setter of its name (`uic.Tag("Done").severity(uic.Severity.Success)`), which takes a
+      * constant or a signal where the field is a `Prop`, the value itself where it is an `Opt`, and `onClick` its action by name;
+      * the children are added through `apply(cs*)`, and `access` is written by the shared trait (`id`).
       */
-    def apply(label: String | Signal[String]): Tag = new Tag(Props(labelV = Present(ReactiveValue(label))))
+    final private[uic] case class Props(
+        /** The label (`span.p-tag-label`). A signal patches the label text in place (kyo-ui's text channel: no region, no new
+          * label span), e.g. a locale-driven `I18n.t` leaf or a counter.
+          */
+        label: Opt[Prop[String]] = Opt.unset,
+        /** Semantic accent (`.p-tag-<severity>`); `Primary` (the default) and `Help` keep the primary base skin. A signal swaps
+          * the class in place via kyo-ui's class channel, with no region.
+          */
+        severity: Prop[Severity] = Severity.Primary,
+        /** Fully rounded pill corners (`.p-tag-rounded`), a signal toggling the class in place. */
+        rounded: Prop[Boolean] = false,
+        /** Leading icon (`.p-tag-icon`), inheriting the chip's text color. A signal swaps the glyph in its own region, below the
+          * tag.
+          */
+        icon: Opt[Prop[IconGlyph]] = Opt.unset,
+        /** What a click (or Enter and Space) runs, a kyo extension: it adds the pointer cursor, `role="button"` and one tab stop.
+          * Its setter takes the action by name, built each time the event comes, and a failure goes to the `onFailure` rules where
+          * it ran.
+          */
+        onClick: Maybe[UI.Action] = Absent,
+        @noSetter access: Accessibility = Accessibility.none,
+        @noSetter extraChildren: List[UI] = Nil
+    ) derives CanEqual
+
+    /** A tag labelled `label`. A signal patches the label text in place on emission. */
+    def apply(label: Prop[String]): Tag = new Tag(Props(label = label))
 
     /** An empty tag; fill the default slot via `apply(cs*)`. */
     def apply(): Tag = new Tag(Props())

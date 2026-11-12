@@ -26,8 +26,8 @@ import kyo.UI.*
   *     and have no reactive path in their render at all. A trait would force the second
   *     group to grow one, which is a behaviour change per component, not a lift.
   *   - `severity`, because its storage disagrees on whether the slot is optional:
-  *     `Maybe[SeverityValue]` in Badge/Tag, a defaulted `SeverityValue` in
-  *     Button/Message/SplitButton, `Maybe[Severity]` in Dialog. Unifying them would
+  *     `Maybe[SeverityValue]` in Badge, a defaulted severity in
+  *     Button/Tag/Message/SplitButton, `Maybe[Severity]` in Dialog. Unifying them would
   *     change what an unset severity means, which is a design-system question, not a
   *     refactor.
   */
