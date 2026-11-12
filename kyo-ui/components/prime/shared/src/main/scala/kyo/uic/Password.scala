@@ -204,12 +204,7 @@ object Password:
             .tabIndex(0)
             .aria(Aria.label -> revealed.map(on => if on then "Hide password" else "Show password"))
             .silent(disabled)
-            .onClick(flip)
-            .onKeyDown { e =>
-                e.key match
-                    case Keyboard.Enter | Keyboard.Space => flip
-                    case _                               => Kyo.unit: UI.Action
-            }(GlyphSvg(revealed.map(on => if on then Icons.eyeSlash else Icons.eye), "p-icon"))
+            .onClick(flip)(GlyphSvg(revealed.map(on => if on then Icons.eyeSlash else Icons.eye), "p-icon"))
 
         UI.reactive {
             val b        = base.read

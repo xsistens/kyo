@@ -724,15 +724,22 @@ abstract class UicTest extends kyo.test.Test[Any]:
         Kyo.foreach(e.children)(walk).map(_.mkString)
     end textNow
 
-    /** Sends one key pressed on `el` itself to its own handlers, as the dispatcher would: the self-only one first. */
+    /** Sends one key pressed on `el` itself to its own handlers, as the dispatcher would: the self-only one first, then, on an
+      * element that says it is a button and takes a click, Enter and Space as that click (kyo-ui's keyboard activation).
+      */
     private[uic] def press(el: UI.Ast.Element, key: UI.Keyboard, mods: UI.Modifiers = UI.Modifiers.none)(
         using Frame
     ): Any < Async =
-        val event = UI.KeyboardEvent(key, mods, el.attrs.identifier)
-        if el.attrs.onKeyDown.isEmpty && el.attrs.onKeyDownSelf.isEmpty then
+        val event  = UI.KeyboardEvent(key, mods, el.attrs.identifier)
+        val clicks = el.attrs.onClick.nonEmpty || el.attrs.onClickEvt.nonEmpty
+        // Such an element lists `keydown`, so every key reaches the dispatcher, and only Enter and Space become its click.
+        val buttonLike = clicks && el.attrs.role.contains("button")
+        val activates  = buttonLike && (key == UI.Keyboard.Enter || key == UI.Keyboard.Space)
+        if el.attrs.onKeyDown.isEmpty && el.attrs.onKeyDownSelf.isEmpty && !buttonLike then
             throw new AssertionError("the element declares no key handler")
         val self: Any < Async = el.attrs.onKeyDownSelf.fold[Any < Async](())(f => handled(f(event)))
         self.andThen(el.attrs.onKeyDown.fold[Any < Async](())(f => handled(f(event))))
+            .andThen(if activates then click(el) else ())
     end press
 
     /** Runs `el`'s click handler, as the dispatcher would.

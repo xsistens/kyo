@@ -94,17 +94,11 @@ final class Icon private[uic] (private[uic] val p: Icon.Props) extends Node, Has
             case Absent     => withA11y
     end implicitMode
 
-    /** Runs `action` on a click and on the two keys a `role="button"` owes the reader.
-      *
-      * A span is not a button, so the browser gives it neither: without this the icon was a tab
-      * stop that answered nothing at all.
+    /** Runs `action` on a click, and so on the two keys a `role="button"` owes the reader, which kyo-ui answers with that
+      * click for an element that carries the role and a click handler.
       */
     private def operable(el: Ast.SpanElement, action: UI.Action)(using Frame): Ast.SpanElement =
-        el.onClick(action).onKeyDown { evt =>
-            evt.key match
-                case Keyboard.Enter | Keyboard.Space => action
-                case _                               => ()
-        }
+        el.onClick(action)
 end Icon
 
 object Icon:

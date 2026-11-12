@@ -94,13 +94,7 @@ final class Avatar private[uic] (private[uic] val p: Avatar.Props) extends Node,
                 val activated = withA11y.tabIndex(0)
                 onClickEff match
                     case Present(e) =>
-                        activated
-                            .onClick(e)
-                            .onKeyDown { evt =>
-                                evt.key match
-                                    case Keyboard.Enter | Keyboard.Space => e
-                                    case _                               => ()
-                            }
+                        activated.onClick(e)
                     case Absent => activated
                 end match
             else withA11y

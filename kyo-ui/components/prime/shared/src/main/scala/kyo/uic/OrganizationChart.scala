@@ -256,16 +256,10 @@ final class OrganizationChart[K] private[uic] (private[uic] val p: OrganizationC
                 val pressable =
                     if expandedSlot.fixed then shell.aria(Aria.disabled -> "true")
                     else
-                        shell
-                            .onClick(toggleNode(node.id))
-                            // Prime's toggle is an anchor with no `href`, which the browser treats as
-                            // ordinary text: it neither focuses it nor turns Enter into a click. The
-                            // tab stop is this component's own, so the keys have to be too.
-                            .onKeyDown { evt =>
-                                evt.key match
-                                    case Keyboard.Enter | Keyboard.Space => toggleNode(node.id)
-                                    case _                               => ()
-                            }
+                        // Prime's toggle is an anchor with no `href`, which the browser treats as ordinary text: it neither
+                        // focuses it nor turns Enter into a click. The tab stop is this component's own; the keys come with
+                        // the button role and the click.
+                        shell.onClick(toggleNode(node.id))
                 List(
                     pressable
                         .stopPropagation(true)(
