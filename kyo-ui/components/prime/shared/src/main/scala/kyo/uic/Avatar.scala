@@ -13,108 +13,98 @@ enum AvatarShape derives CanEqual:
   * the extracted `@primeuix` avatar CSS applies verbatim.
   *
   * Content precedence follows Prime: initials win over `icon`, `icon` wins over
-  * `image`. kyo extensions beyond Prime's surface: `interactive`/`onClick`
-  * (focusable `role="button"`, Enter/Space activation), `disabled`
-  * (`.p-disabled` + `aria-disabled`), and the `badge(UI)` overlay rendered as
-  * `span.p-uic-avatar-badge` (Prime's OverlayBadge arrives later).
+  * `image`. kyo extensions beyond Prime's surface: `onClick` (the avatar becomes a
+  * control: focusable `role="button"`, Enter and Space run the click), `disabled`
+  * (`.p-disabled` + `aria-disabled`; a control is then silent and out of the tab
+  * order), and the `badge` overlay rendered as `span.p-uic-avatar-badge`. Every
+  * value takes a constant or a signal, and a signal patches its place. It keeps no
+  * state, so it has no instance: a host region that runs again has nothing of it to
+  * lose.
   */
-final class Avatar private[uic] (private[uic] val p: Avatar.Props) extends Node, HasProps:
-    import p.*
+final class Avatar private[uic] (private[uic] val p: Avatar.Props) extends Component(Setters[Avatar.Props, Avatar]), Node,
+      HasAccessibleName, HasElementId:
 
     type Self = Avatar
 
-    /** Sets the initials text (Prime's `label`; wins over `icon` and `image`). */
-    def initials(v: String): Avatar = new Avatar(p.copy(initialsV = Present(v)))
+    private[uic] def accessibility: Accessibility              = p.access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Avatar(p.copy(access = v))
 
-    /** Alias for [[initials]] (Prime's property name). */
-    def label(v: String): Avatar = new Avatar(p.copy(initialsV = Present(v)))
-
-    def icon(glyph: IconGlyph): Avatar = new Avatar(p.copy(iconV = Present(glyph)))
-
-    /** Image URL rendered as a native `<img>` (`.p-avatar-image` on the root). */
-    def image(url: String): Avatar = new Avatar(p.copy(imageV = Present(url)))
-
-    /** `Circle` renders `.p-avatar-circle`; `Square` (default) keeps the rounded box. */
-    def shape(v: AvatarShape): Avatar = new Avatar(p.copy(shapeV = v))
-
-    /** Size: `Normal` (default) / `Large` (`.p-avatar-lg`) / `XLarge`
-      * (`.p-avatar-xl`); `Small` falls back to `Normal` (Prime has no small avatar).
+    /** Draws the avatar. What decides the structure is fixed when the avatar is built: which content is set (the initials, else the
+      * icon, else the image), whether it acts on a click, whether a badge is set. Everything else reaches its place through a
+      * channel: the shape and the size through the root's class channels, `disabled` through its class, `aria-disabled`,
+      * silence and, on a control, tab stop channels, the initials through their text channel, the accessible name (the initials
+      * where none is set) through `aria-label` and the image's `alt`, the image through its `src` channel, and an icon signal
+      * swaps the glyph in its own region below the avatar. So constants draw no region, and a signal patches in place.
       */
-    def size(v: ExtendedSize): Avatar = new Avatar(p.copy(sizeV = v))
-
-    /** Greys the avatar out (`.p-disabled` + `aria-disabled`) and suppresses interaction. */
-    def disabled(v: Boolean): Avatar = new Avatar(p.copy(disabledFlag = v))
-
-    /** Makes the avatar a focusable button activated by click/Enter/Space (kyo extension). */
-    def interactive(v: Boolean): Avatar = new Avatar(p.copy(interactiveFlag = v))
-
-    /** Accessible name announced for the avatar (overrides the initials-derived default). */
-    def accessibleName(v: String): Avatar = new Avatar(p.copy(access = access.copy(name = Present(v))))
-
-    /** Overlay badge (e.g. a status dot or counter) rendered as `span.p-uic-avatar-badge`. */
-    def badge(v: UI): Avatar = new Avatar(p.copy(badgeV = Present(v)))
-
-    /** Runs `action` when the avatar is activated. Implies [[interactive]]. */
-    def onClick(action: => UI.Action)(using Frame): Avatar =
-        new Avatar(p.copy(onClickEff = Present(Callback(action)), interactiveFlag = true))
-
     private[uic] def render(using Frame): UI =
-        // The setter takes a constant only; a signal (through a shared setter) has no text to give the image its alt.
-        val accName = access.name.fold(initialsV.getOrElse("Avatar")) {
-            case s: String => s
-            case _         => ""
-        }
-
-        var el = div.cssClass("p-avatar").cssClass("p-component")
-        if shapeV == AvatarShape.Circle then el = el.cssClass("p-avatar-circle")
-        sizeV match
-            case Size.Large               => el = el.cssClass("p-avatar-lg")
-            case Size.XLarge              => el = el.cssClass("p-avatar-xl")
-            case Size.Small | Size.Normal => ()
-        end match
-        val showsImage = initialsV.isEmpty && iconV.isEmpty && imageV.isDefined
-        if showsImage then el = el.cssClass("p-avatar-image")
-        if disabledFlag then el = el.cssClass("p-disabled").aria(Aria.disabled -> "true")
-
-        // Prime content precedence: label > icon > image.
-        val content: UI =
-            (initialsV, iconV, imageV) match
-                case (Present(t), _, _)           => span.cssClass("p-avatar-text")(t)
-                case (Absent, Present(g), _)      => GlyphSvg(g, "p-avatar-icon")
-                case (Absent, Absent, Present(u)) => img(ImgSrc.Path(u), accName)
-                case _                            => span.cssClass("p-avatar-text")("")
-        val badgeChild: List[UI] = badgeV.toList.map(b => span.cssClass("p-uic-avatar-badge")(b))
-
-        val withA11y =
-            if interactiveFlag then el.cssClass("p-uic-clickable").role("button").aria(Aria.label -> accName)
-            else el.role("img").aria(Aria.label                                                   -> accName)
-        // Enter/Space keyboard activation mirrors Button's native behaviour.
-        val withEvt =
-            if interactiveFlag && !disabledFlag then
-                val activated = withA11y.tabIndex(0)
-                onClickEff match
-                    case Present(e) =>
-                        activated.onClick(e)
-                    case Absent => activated
-                end match
-            else withA11y
-        withEvt(UI.children(content :: badgeChild)*)
+        val control            = p.onClick.isDefined
+        val name: Prop[String] = p.access.name.getOrElse(p.initials.getOrElse("Avatar"))
+        val content: UI        = p.initials.map(text => span.cssClass("p-avatar-text")(text): UI)
+            .orElse(p.icon.map(GlyphSvg(_, "p-avatar-icon")))
+            .orElse(p.image.map(url => img(Prop.map[String, ImgSrc](url)(ImgSrc.Path(_)), name): UI))
+            .getOrElse(span.cssClass("p-avatar-text")(""))
+        // A control is a tab stop while it is not disabled, an avatar that is no control never one.
+        val tabStop: Prop[Boolean] = if control then Prop.map[Boolean, Boolean](p.disabled)(!_) else false
+        div.cssClass("p-avatar", "p-component")
+            .when(p.access.id)(_.id(_))
+            .cssClass.matching(p.shape) {
+                case AvatarShape.Square => Absent
+                case AvatarShape.Circle => "p-avatar-circle"
+            }
+            .cssClass.matching(p.size) {
+                case Size.Small  => Absent
+                case Size.Normal => Absent
+                case Size.Large  => "p-avatar-lg"
+                case Size.XLarge => "p-avatar-xl"
+            }
+            .when(p.initials.isEmpty && p.icon.isEmpty && p.image.isDefined)(_.cssClass("p-avatar-image"))
+            .when(p.disabled)(_.cssClass("p-disabled").aria(Aria.disabled -> true))
+            .when(control)(_.cssClass("p-uic-clickable"))
+            .role(if control then "button" else "img")
+            .aria(Aria.label -> name)
+            .when(tabStop)(_.tabIndex(0))
+            .silent(p.disabled)
+            .when(p.onClick)(_.onClick(_))(UI.children(content, p.badge.map(b => span.cssClass("p-uic-avatar-badge")(b)))*)
     end render
 end Avatar
 
 object Avatar:
+    /** What an avatar holds. Each field is a setter of its name (`uic.Avatar().initials("AL").shape(uic.AvatarShape.Circle)`),
+      * which takes a constant or a signal where the field is a `Prop`, the value itself where it is an `Opt`, and `onClick` its action
+      * by name; `access` is written by the shared traits (`accessibleName`, `id`).
+      */
     final private[uic] case class Props(
-        initialsV: Maybe[String] = Absent,
-        iconV: Maybe[IconGlyph] = Absent,
-        imageV: Maybe[String] = Absent,
-        shapeV: AvatarShape = AvatarShape.Square,
-        sizeV: ExtendedSize = Size.Normal,
-        disabledFlag: Boolean = false,
-        interactiveFlag: Boolean = false,
-        access: Accessibility = Accessibility.none,
-        badgeV: Maybe[UI] = Absent,
-        onClickEff: Maybe[UI.Action] = Absent
-    )
+        /** The initials (Prime's `label`, `span.p-avatar-text`); they win over `icon` and `image` and name the avatar where no
+          * accessible name is set. A signal patches the text and the name in place.
+          */
+        initials: Opt[Prop[String]] = Opt.unset,
+        /** The icon (`.p-avatar-icon`), drawn where no initials are set; it wins over `image`. A signal swaps the glyph in its own
+          * region, below the avatar.
+          */
+        icon: Opt[Prop[IconGlyph]] = Opt.unset,
+        /** Image URL rendered as a native `<img>` (`.p-avatar-image` on the root), drawn where neither initials nor an icon are
+          * set. A signal patches the image's `src` in place.
+          */
+        image: Opt[Prop[String]] = Opt.unset,
+        /** `Circle` renders `.p-avatar-circle`; `Square` (default) keeps the rounded box. A signal swaps the class in place. */
+        shape: Prop[AvatarShape] = AvatarShape.Square,
+        /** Size: `Normal` (default), `Large` (`.p-avatar-lg`), `XLarge` (`.p-avatar-xl`); `Small` draws as `Normal` (Prime has no
+          * small avatar). A signal swaps the class in place.
+          */
+        size: Prop[ExtendedSize] = Size.Normal,
+        /** Greys the avatar out (`.p-disabled` + `aria-disabled`); a control is then silent and leaves the tab order. A signal
+          * patches the class, the attribute, the silence and the tab stop in place.
+          */
+        disabled: Prop[Boolean] = false,
+        /** Overlay badge (e.g. a status dot or counter) rendered as `span.p-uic-avatar-badge`. */
+        badge: Opt[UI] = Opt.unset,
+        /** What a click (or Enter and Space) runs, a kyo extension: it makes the avatar a control, `role="button"` with the pointer
+          * cursor and one tab stop. Its setter takes the action by name, built each time the event comes, and a failure goes to the
+          * `onFailure` rules where it ran.
+          */
+        onClick: Maybe[UI.Action] = Absent,
+        @noSetter access: Accessibility = Accessibility.none
+    ) derives CanEqual
 
     def apply(): Avatar = new Avatar(Props())
 end Avatar
