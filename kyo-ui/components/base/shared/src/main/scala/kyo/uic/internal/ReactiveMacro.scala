@@ -404,8 +404,24 @@ private[kyo] object ReactiveMacro:
         // defines) and `V` has a prop instance, the pair becomes `Entry.channel[V](name, value)`, whose `value` takes a `UI.Prop[V]`:
         // the data flow below then decides it as it decides any setter's prop argument, a channel where it only reaches channels,
         // the run's value where the structure also needs it.
+        //
+        // ---- A child text: a string that reads is the text's channel ----
+        //
+        // A `String` reaches an element's children through `HtmlChildVal.liftString`, whose parameter is the string, so a read in it
+        // would be the block's. Where the string reads (a read, or something the block defines), the child becomes
+        // `HtmlChildVal.liftPropString(s)`, whose parameter takes a `UI.Prop[String]`: the data flow below decides it as any setter's
+        // prop argument, a text channel where it only reaches channels, the run's value where the structure also needs it. Over a
+        // constant `liftPropString` is `liftString`, so the text drawn is the same.
+        val childModule    = TypeRepr.of[UI.Ast.HtmlChildVal.type].termSymbol
+        val liftStringSym  = childModule.methodMember("liftString").headOption
+        val liftPropString = childModule.methodMember("liftPropString").headOption.getOrElse(
+            report.errorAndAbort("kyo-ui has no `HtmlChildVal.liftPropString`: the expansion of `UI.reactive` needs it.")
+        )
         val rhs = new TreeMap:
             override def transformTerm(tree: Term)(owner: Symbol): Term = tree match
+                case Apply(Apply(fn, List(text)), frameArgs)
+                    if liftStringSym.contains(fn.symbol) && text.tpe.widen <:< stringType && readsOrDefined(text) =>
+                    Ref(childModule).select(liftPropString).appliedTo(transformTerm(text)(owner)).appliedToArgs(frameArgs)
                 case Apply(Select(Apply(TypeApply(conv, _), _), "apply"), List(pair)) if entryGiven.contains(conv.symbol) =>
                     pairOf(pair) match
                         case Present((name, value)) if readsOrDefined(value) =>

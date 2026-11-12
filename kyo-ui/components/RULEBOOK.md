@@ -192,6 +192,11 @@ UI.reactive {
   it does in a setter that takes a `Prop` (the macro rewrites the call to the `Prop` form). An `f` with a handler, a style or a
   child is structure: the flag becomes the block's, a region, so such a `when` takes only what decides the structure (the `Base`).
 
+- **A text child that reads is a text channel.** `span(s"$pct%")`, a `String` child built from a read or from a `val` that only
+  reaches channels, patches its text node in place: the block draws no region for it and runs nothing again when the read moves.
+  Over a constant it is the plain text, byte for byte. A text over two or more signals repaints only its text node, since the
+  transport writes in place only a text over one.
+
 - **A locked element is silent, never a handler that checks the flag.** `disabled(off)` silences the element by itself;
   a lock that is not native `disabled` (readonly, a fixed value) says `silent(locked)`. A silent element lists no event in
   `data-kyo-ev` and runs no handler, as target or ancestor, and a signal patches that in place, so the handler only does its
