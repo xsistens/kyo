@@ -304,7 +304,7 @@ val stockMix: UI =
 
 ### People
 
-`Avatar` renders initials, a glyph, or an image, in that precedence, and `AvatarGroup` stacks several of them with Prime's overlap. An avatar is announced as an image by default; `interactive(true)`, or an `onClick` which implies it, makes it a focusable button with Enter and Space activation.
+`Avatar` renders initials, a glyph, or an image, in that precedence, and `AvatarGroup` stacks several of them with Prime's overlap. An avatar is announced as an image by default; an `onClick` makes it a focusable button with Enter and Space activation, and `disabled` greys that button out, silent and out of the tab order, until the flag clears.
 
 ```scala
 val reviewers: UI =

@@ -187,7 +187,7 @@ UI.reactive {
 ```
 
 - **`when` over a flag sets only what has a channel.** `el.when(cond)(f)` with `f` calling only the setters of kyo-ui's `Toggle`
-  (classes, `aria` and `data` entries, `role`, `hidden`, `silent`, and `disabled`, `readOnly`, `required` where the element has
+  (classes, `aria` and `data` entries, `role`, `hidden`, `silent`, and `tabIndex`, `disabled`, `readOnly`, `required` where the element has
   them, each with plain values, an entry's value holding no signal) binds each to the flag's channel: a read or a `val` that only reaches channels stays a channel there, as
   it does in a setter that takes a `Prop` (the macro rewrites the call to the `Prop` form). An `f` with a handler, a style or a
   child is structure: the flag becomes the block's, a region, so such a `when` takes only what decides the structure (the `Base`).
