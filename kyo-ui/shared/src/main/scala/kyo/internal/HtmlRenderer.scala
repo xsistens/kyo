@@ -1283,7 +1283,7 @@ private[kyo] object HtmlRenderer:
                 }
             case img: Img =>
                 if !owned("src") then img.src.foreach(src => w(sb, s""" src="${esc(ImgSrc.attrValue(src))}""""))
-                img.alt.foreach(a => w(sb, s""" alt="${esc(a)}""""))
+                if !owned("alt") then img.alt.foreach(a => w(sb, s""" alt="${esc(a)}""""))
             case f: Iframe =>
                 if !owned("src") then f.src.foreach(s => w(sb, s""" src="${esc(s)}""""))
                 if !owned("title") then f.frameTitle.foreach(t => w(sb, s""" title="${esc(t)}""""))
