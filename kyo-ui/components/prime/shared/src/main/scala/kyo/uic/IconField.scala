@@ -48,7 +48,7 @@ final class IconField private[uic] (private[uic] val p: IconField.Props) extends
                 endIconV.toList.map(_ => "p-uic-iconfield-end")
         val field: UI = hostV match
             case IconField.Host.In(i)  => Node.placed(classes.foldLeft(i)(_.extraClass(_)))
-            case IconField.Host.Ta(t)  => classes.foldLeft(t)(_.extraClass(_)).render
+            case IconField.Host.Ta(t)  => Node.placed(classes.foldLeft(t)(_.extraClass(_)))
             case IconField.Host.Sel(s) => classes.foldLeft[Select[?]](s)(_.extraClass(_)).render
         div.cssClass("p-iconfield")(
             UI.children(startSlot ++ List(field) ++ endSlot)*

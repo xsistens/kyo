@@ -14,7 +14,7 @@ import kyo.*
   * neighbour.
   *
   * A control supplies the one-line reader and writer below instead of the setters: its state holds the slots as one `validityV`
-  * ([[FieldValidity.Slots]]), and `type Self = TextArea` fixes the return type, so a control opts in by adding the trait to its
+  * ([[FieldValidity.Slots]]), and `type Self = InputMask` fixes the return type, so a control opts in by adding the trait to its
   * `extends` clause plus those two lines.
   *
   * `size` and `variant` are deliberately NOT here. They are design-system facts, not validation: the PrimeOne sheet defines
@@ -25,7 +25,7 @@ trait HasValidity extends Node, HasElementId:
     /** The slots as they are. Implemented as `validityV`. */
     private[uic] def validitySlots: FieldValidity.Slots
 
-    /** Stores the slots. Implemented as `new TextArea(p.copy(validityV = v))`. */
+    /** Stores the slots. Implemented as `new InputMask(p.copy(validityV = v))`. */
     private[uic] def withValidity(v: FieldValidity.Slots): Self
 
     /** Marks the control invalid (`.p-invalid` + `aria-invalid`). A `Signal[Boolean]` toggles the
