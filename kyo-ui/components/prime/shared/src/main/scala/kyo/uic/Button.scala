@@ -157,8 +157,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
       */
     private def iconOnly(loading: Boolean)(using Frame): Prop[Boolean] =
         if p.extraChildren.nonEmpty || !(p.icon.isDefined || p.endIcon.isDefined || loading) then false
-        else p.label.fold[Prop[Boolean]](true)(l => Prop.map(l)(_.isEmpty))
-    end iconOnly
+        else UI.reactive(p.label.read.forall(_.isEmpty))
 
     /** What the button and the link share, on either element: the class chain, the id, the host's aria, the accessible name and
       * description, the tooltip, the host's role, focus seeding and key handler, and `aria-busy` while loading.
