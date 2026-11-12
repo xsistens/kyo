@@ -125,6 +125,7 @@ Why: every uic component draws once, keeps its state across every host repaint, 
 - [ ] ISC-32: Anti: `rg 'ReactiveValue|BoolValue|TextValue|siteV' kyo-ui` finds nothing on the final tree.
 - [ ] ISC-33: The demo repo `kyo-ui-components` compiles against the new API, every `codeString` byte-matches its `liveUI`.
 - [x] ISC-43 (green: `prime-button-direct3.log`, ButtonTest 28/28, 0 failed): Button's `answering` reads its props in direct style (`p.loading.read.now` under kyo-direct's `direct`, `.read` outside a block as the handler's value); the handler's action runs as `a.now` after the reads, and a blocked click (inert link, loading, disabled) runs nothing; its click gate is unchanged (probe: `ButtonTest` click cases, pending the run).
+- [x] ISC-44: A locked ToggleButton (`readonly`, or a `checked` that is a constant) silences its clicks and keys but still hears blur, so its `onBlur` runs when focus leaves it; `Element.silentExcept(v, names*)` silences every event but the named ones, and a text field that keeps `blur` also keeps `blurtext`, so the blur carries the text it holds (probe: `ToggleButtonTest` "a readonly button still hears its blur ..." and "readonly from a signal ...", `AttrsTest` "a partly silent text field that keeps blur also keeps blurtext ...", and the JS client gate `DomBackendSilentTest` "a text field silent except for blur ...", run with `kyo-uiJS/testOnly kyo.DomBackendSilentTest`).
 
 ### F5 · Test harness that cleans up and waits on state
 Why: the harness proves behavior without time budgets and leaves nothing behind.
@@ -171,6 +172,7 @@ Why: the harness proves behavior without time budgets and leaves nothing behind.
 | ISC-32 | bash | no old carrier or siteV | 0 matches | `! rg -q 'ReactiveValue\|BoolValue\|TextValue\|siteV' kyo-ui -g '!ISA.md'` | derived: one-model |  | liveness |
 | ISC-33 | bash | demo compiles, code strings match | compile success | demo repo compile and `CheckDocs` | literal |  | build |
 | ISC-43 | bun-test | answering reads props in direct style, gate unchanged | Failed 0 | `scripts/sbt.sh test-jvm 'kyo-ui-components-primeJVM/testOnly kyo.uic.ButtonTest'` | literal |  | integrity |
+| ISC-44 | bun-test | locked ToggleButton hears blur; silentExcept keeps blurtext with blur | Failed 0 | `scripts/sbt.sh test-jvm 'kyo-ui-components-primeJVM/testOnly kyo.uic.ToggleButtonTest'` and `kyo-uiJVM/testOnly kyo.AttrsTest`; JS `kyo-uiJS/testOnly kyo.DomBackendSilentTest` | literal |  | integrity |
 | ISC-23 | bun-test | per-component repaint keeps overlay state | Failed 0 | `scripts/sbt.sh test-jvm 'kyo-ui-componentsJVM/test'` | derived: surrounding-code-rule |  | build |
 | ISC-24 | bun-test | uic harness waits on state | 52 suites green | `scripts/sbt.sh test-jvm 'kyo-ui-componentsJVM/test'` | literal |  | integrity |
 | ISC-25 | bun-test | DataTable switch cases | Failed 0 | `scripts/sbt.sh test-jvm 'kyo-ui-componentsJVM/testOnly kyo.uic.DataTableTest'` | literal |  | integrity |
