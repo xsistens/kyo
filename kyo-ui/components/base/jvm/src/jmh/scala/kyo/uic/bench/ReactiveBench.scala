@@ -88,6 +88,23 @@ private object ReactiveBench:
                 def block(using Frame): UI.Prop[Int] = UI.reactive(d.read + x.read)
                 def hand(using Frame): UI.Prop[Int]  = x.map(v => 3 * v)
                 def write(n: Int): Unit              = x.unsafe.set(n)
+        case "three-signals" =>
+            new PropExample:
+                val a                                = ref(0)
+                val b                                = ref(1)
+                val c                                = ref(2)
+                def block(using Frame): UI.Prop[Int] = UI.reactive(a.read + b.read + c.read)
+                def hand(using Frame): UI.Prop[Int]  = Signal.combineLatestAll(Chunk(a, b, c)).map(_.sum)
+                def write(n: Int): Unit              = a.unsafe.set(n)
+        case "four-signals" =>
+            new PropExample:
+                val a                                = ref(0)
+                val b                                = ref(1)
+                val c                                = ref(2)
+                val d                                = ref(3)
+                def block(using Frame): UI.Prop[Int] = UI.reactive(a.read + b.read + c.read + d.read)
+                def hand(using Frame): UI.Prop[Int]  = Signal.combineLatestAll(Chunk(a, b, c, d)).map(_.sum)
+                def write(n: Int): Unit              = a.unsafe.set(n)
         case "fan-in-six" =>
             new PropExample:
                 val rs                               = Chunk.from(Seq.fill(6)(ref(1)))
@@ -274,6 +291,8 @@ class ReactiveChangeBench:
     @Param(Array(
         "one-signal",
         "two-signals",
+        "three-signals",
+        "four-signals",
         "diamond",
         "fan-in-six",
         "optional",
@@ -308,7 +327,7 @@ class ReactiveChangeBench:
     @Setup(Level.Trial)
     def setup(): Unit =
         example match
-            case name if Set("one-signal", "two-signals", "diamond", "fan-in-six", "optional").contains(name) =>
+            case name if Set("one-signal", "two-signals", "three-signals", "four-signals", "diamond", "fan-in-six", "optional").contains(name) =>
                 val ex   = propExample(name)
                 val prop = if form == "block" then ex.block else ex.hand
                 changer = () =>
