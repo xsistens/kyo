@@ -67,6 +67,13 @@ extension [A](self: Signal[A])
   * reaches channel arguments is a channel too, and one the structure also uses (a condition, a value drawn, a lambda) is the
   * region's, as is any read the region already has wherever it appears, with one value per run.
   *
+  * A read that decides the structure only through a condition (an `if` condition, a `match` selector or a guard, of a type with a
+  * `CanEqual`, written over reads and over `val`s that only name what is read) is not the region's read: the region compares the
+  * condition's value instead, so a change of the read that leaves the condition as it was runs nothing and draws nothing, and the
+  * read feeds its channels otherwise (`if pct != 0 then span(s"$pct%")` beside a width over `pct`). While the condition's value
+  * is not the one the run was drawn for, each channel of the run keeps what it showed until the region draws again, so the client
+  * never shows a value of a moment whose structure it does not show. A condition that is the read itself stays the region's read.
+  *
   * A read has to be one the block itself would evaluate, once, while it runs. A read of a value the block defines, inside a lambda,
   * a local `def`, a lazy `val` or a by-name argument (which run later, again or not at all), or through the block's scope handed
   * on, is a compile error that says what to write instead: read into a `val` in the block, and read a callback when its event comes
