@@ -55,6 +55,13 @@ private[kyo] object ReactiveMacro:
             case s: Signal[?] => UI.render(s.asInstanceOf[Signal[Chunk[Any]]])(f)
             case c            => f(c.asInstanceOf[Chunk[Any]])
 
+    /** An optional prop as one prop of an option: `Absent` where it is unset, the value where it is set, a signal inside it followed
+      * (as `UI.Live` reads an optional field). What a block's optional read takes out of it.
+      */
+    def optional[A](m: Maybe[UI.Prop[A]])(using CanEqual[A, A], Frame): UI.Prop[Maybe[A]] = m match
+        case Present(a) => UI.Prop.map(a)(Present(_))
+        case _          => Absent
+
     /** A handler's reads, taken when the handler runs: each prop's value at its event, then the handler over them. */
     def atEvent[A, S](reads: Seq[Any])(f: Chunk[Any] => A < S)(using Frame): A < (S & Sync) =
         if reads.isEmpty then f(Chunk.empty)
@@ -101,9 +108,21 @@ private[kyo] object ReactiveMacro:
 
         val scopeClass = TypeRepr.of[ReactiveScope].typeSymbol
 
-        // A read through the block's own scope: `scope.read[A](arg)`, as the compiler writes a given member's extension.
+        // A read through the block's own scope: `scope.read[A](arg)`, as the compiler writes a given member's extension. An optional
+        // read (over a `Maybe[Prop[A]]`, with its `CanEqual`) reads the prop of an option its receiver makes, `optional(arg)`.
+        val optionalSym = TypeRepr.of[ReactiveMacro.type].termSymbol.methodMember("optional").head
         object Read:
             def unapply(t: Term): Option[Term] = t match
+                case Apply(Apply(fn @ TypeApply(Select(q, "read"), List(a)), List(arg)), List(ce))
+                    if fn.symbol.owner == scopeClass && strip(q).symbol == scopeParam =>
+                    a.tpe.asType match
+                        case '[a] =>
+                            Some('{
+                                ReactiveMacro.optional[a](${ arg.asExprOf[Maybe[UI.Prop[a]]] })(using
+                                    ${ ce.asExprOf[CanEqual[a, a]] },
+                                    $frame
+                                )
+                            }.asTerm)
                 case Apply(fn, List(arg)) =>
                     def sel(f: Term): Option[Term] = f match
                         case TypeApply(inner, _)                               => sel(inner)
@@ -548,7 +567,9 @@ private[kyo] object ReactiveMacro:
         def stablePath(t: Term): Maybe[List[Symbol]] = strip(t) match
             case id: Ident if isStable(id.symbol)   => Present(List(id.symbol))
             case Select(q, _) if isStable(t.symbol) => stablePath(q).map(_ :+ t.symbol)
-            case _                                  => Absent
+            // An optional read of a stable path is one read, apart from a plain read of the same path, which yields the option itself.
+            case Apply(Apply(TypeApply(fn, _), List(inner)), _) if fn.symbol == optionalSym => stablePath(inner).map(_ :+ optionalSym)
+            case _                                                                          => Absent
         def isStable(s: Symbol): Boolean =
             s.flags.is(Flags.Module) || (s.isValDef && !s.flags.is(Flags.Mutable)) || s.isPackageDef
 
