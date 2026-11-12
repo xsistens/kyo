@@ -149,6 +149,30 @@ class UIWhenTest extends kyo.test.Test[Any]:
         end for
     }
 
+    "tabIndex over a signal: the tab stop of the constant in each state, a channel, and no static tabindex beside it" in {
+        val base = UI.div("x").role("button")
+        for
+            on     <- Signal.initRef(true)
+            off    <- Signal.initRef(false)
+            sOn    <- html(base.when(on: Signal[Boolean])(_.tabIndex(0)))
+            sOff   <- html(base.when(off: Signal[Boolean])(_.tabIndex(0)))
+            cOn    <- html(base.when(true)(_.tabIndex(0)))
+            cOff   <- html(base.when(false)(_.tabIndex(0)))
+            kept   <- html(base.tabIndex(-1).when(off: Signal[Boolean])(_.tabIndex(0)))
+            keptOn <- html(base.tabIndex(-1).when(on: Signal[Boolean])(_.tabIndex(0)))
+            toggled = base.when(on: Signal[Boolean])(_.tabIndex(0))
+        yield
+            assert(attrSet(sOn, "div") == attrSet(cOn, "div") && sOn.contains("""tabindex="0""""), s"$sOn / $cOn")
+            assert(attrSet(sOff, "div") == attrSet(cOff, "div") && !sOff.contains("tabindex"), s"$sOff / $cOff")
+            assert(toggled.attrs.tabIndex.isEmpty && toggled.attrs.reactiveMaybeAttrs.contains("tabindex"), s"${toggled.attrs}")
+            // While the condition does not hold, the element keeps the tab index it had.
+            assert(
+                kept.contains("""tabindex="-1"""") && keptOn.split("tabindex").length == 2 && keptOn.contains("""tabindex="0""""),
+                s"$kept / $keptOn"
+            )
+        end for
+    }
+
     "a change patches class, aria and disabled in place, with nothing drawn again" in {
         import kyo.internal.ReactiveUI
         import kyo.internal.RecordingExchange
