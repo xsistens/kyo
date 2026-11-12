@@ -162,15 +162,20 @@ private[kyo] object ReactiveMacro:
         // ---- `when(Boolean)` over toggle setters: the toggle form, so its condition is decided as a channel ----
         //
         // `el.when(cond)(f)` with a `Boolean` condition takes `f: Self => Self`, so a read there is the block's, and the block a
-        // region over it. Where `f` only sets what a `UI.Ast.Toggle` has (classes, `aria` and `data` entries, `role`, `hidden`,
+        // region over it. Where `f` only sets what a `UI.Ast.Toggle` has (classes, `aria` and `data` entries, `role`, `tabIndex`, `hidden`,
         // `silent`, `disabled`, `readOnly`, `required`, each with plain values, for an entry a value of a type with no signal
         // in it) and the condition reads (a read, or something the block defines), the call becomes `when(cond: Prop[Boolean])`
         // with `f` rebuilt on the toggle. That overload takes a `Prop`, so the data flow below decides the condition as it
         // decides any setter's: a read, or a `val` that only reaches
         // channels, is the toggle's channel, and a value the structure also needs stays the region's, where the toggle applies
         // `f` as the constant it is (the bytes of `when(Boolean)`). Any other `f` is left as written, its condition the block's.
-        val elementClass   = TypeRepr.of[UI.Ast.Element].typeSymbol
-        val setterOwners   = Set(elementClass, TypeRepr.of[UI.Ast.HasDisabled].typeSymbol, TypeRepr.of[UI.Ast.TextInput].typeSymbol)
+        val elementClass = TypeRepr.of[UI.Ast.Element].typeSymbol
+        val setterOwners = Set(
+            elementClass,
+            TypeRepr.of[UI.Ast.Interactive].typeSymbol,
+            TypeRepr.of[UI.Ast.HasDisabled].typeSymbol,
+            TypeRepr.of[UI.Ast.TextInput].typeSymbol
+        )
         val cssClassModule = TypeRepr.of[UI.Ast.CssClass.type].termSymbol
         val stringType     = TypeRepr.of[String]
         val booleanType    = TypeRepr.of[Boolean]
@@ -178,6 +183,7 @@ private[kyo] object ReactiveMacro:
         // take entries, each a pair converted where it is written (see `constantEntry`).
         val toggleSetters = Map(
             "role"     -> List(stringType),
+            "tabIndex" -> List(TypeRepr.of[Int]),
             "hidden"   -> List(booleanType),
             "silent"   -> List(booleanType),
             "disabled" -> List(booleanType),
