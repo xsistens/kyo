@@ -355,8 +355,10 @@ object UI:
       */
     def dropdown(options: (String, String)*)(using Frame): Dropdown = Dropdown(options = Chunk.from(options))
 
-    /** An image element. `src` selects the source kind (URL, path, or inline data) and `alt` is the accessibility text. */
-    def img(src: ImgSrc, alt: String)(using Frame): Img = Img(src = Present(src), alt = Present(alt))
+    /** An image element. `src` selects the source kind (URL, path, or inline data) and `alt` is the accessibility text. Each takes
+      * a constant or a signal, and a signal is the attribute's channel, patched in place.
+      */
+    def img(src: ImgSrc | Signal[ImgSrc], alt: String | Signal[String])(using Frame): Img = Img().src(src).alt(alt)
 
     /** An inline frame embedding the document at `src` (a URL or `data:` URI). Give it a size with `.style` and a `.title` for accessibility. */
     def iframe(src: String)(using Frame): Iframe = Iframe(src = Present(src))
@@ -4360,7 +4362,15 @@ object UI:
                     given Frame = frame
                     withReactiveAttr("src", s.map(ImgSrc.attrValue))
                 case i: ImgSrc => copy(src = Present(i))
-            def alt(v: String): Img = copy(alt = Present(v))
+
+            /** The accessibility text, constant or reactive through one setter: a `Signal[String]` is the `alt` channel, patched in
+              * place.
+              */
+            def alt(v: String | Signal[String]): Img = v match
+                case s: Signal[String] @unchecked =>
+                    given Frame = frame
+                    withReactiveAttr("alt", s)
+                case t: String => copy(alt = Present(t))
         end Img
 
         /** An inline frame embedding another document at `src`. `title` names the frame for assistive technology. Size it with `.style`. */
