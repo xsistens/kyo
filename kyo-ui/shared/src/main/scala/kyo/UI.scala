@@ -1836,7 +1836,7 @@ object UI:
               * A `Boolean` applies them as the element's own setters would, or leaves the element as it is, so it is the bytes of
               * `when(cond: Boolean)` with the same setters (a plain `Boolean` picks that overload anyway). A `Signal[Boolean]`
               * binds each one to a channel, so a change patches the element in place and draws nothing again. That is why `f`
-              * only has the setters with a channel: classes, `aria`, `data`, `role`, `hidden`, `silent`, and `disabled`,
+              * only has the setters with a channel: classes, `aria`, `data`, `role`, `hidden`, `silent`, and `tabIndex`, `disabled`,
               * `readOnly` and `required` where the element has them; a handler or a style needs `when(Boolean)` in a region.
               *
               * Inside a `UI.reactive` block a read handed to `when(Boolean)` with such setters is taken as this form's channel,
@@ -2192,7 +2192,7 @@ object UI:
           *
           *   - a class goes on while the signal holds (the class channel); one the element already carries stays on in both
           *     states, and the toggled classes are written after the element's fixed ones, sorted by name;
-          *   - `aria`, `data` and `role` are the attribute's channel, the toggle's value while the signal holds and what the
+          *   - `aria`, `data`, `role` and `tabIndex` are the attribute's channel, the toggle's value while the signal holds and what the
           *     element had (its value, or no attribute) while it does not; an entry whose value is a signal is one channel over
           *     both, its value while the condition holds, and what the element had while the condition does not or the value is
           *     `Absent`, which, as in every entry, sets nothing;
@@ -2233,6 +2233,15 @@ object UI:
             /** The `role` while the condition holds. */
             def role(value: String): Toggle[S] =
                 attr("role", element.attrs.role, value, _.copy(role = Absent))(element.role(value))
+
+            /** The tab index `v` while the condition holds, and the element's own (or none) while it does not: a tab stop that comes
+              * and goes with the condition, patched in place.
+              */
+            def tabIndex(v: Int)(using ev: S <:< Interactive): Toggle[S] =
+                // Unsafe: the toggle's element is its `S`, which the evidence says is an `Interactive`.
+                val el = ev(element.asInstanceOf[S])
+                attr("tabindex", el.attrs.tabIndex.map(_.toString), v.toString, _.copy(tabIndex = Absent))(el.tabIndex(v))
+            end tabIndex
 
             /** `hidden` set to `v` while the condition holds. */
             def hidden(v: Boolean): Toggle[S] =

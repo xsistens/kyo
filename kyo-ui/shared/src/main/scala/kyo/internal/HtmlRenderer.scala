@@ -953,7 +953,7 @@ private[kyo] object HtmlRenderer:
         end if
         // Skipped when a `.hidden(Signal)` channel owns the attribute; see renderElementAttrs on precedence.
         if !attrs.reactiveBoolAttrs.contains("hidden") then attrs.hidden.foreach(v => if v then w(sb, " hidden"))
-        attrs.tabIndex.foreach(n => w(sb, s""" tabindex="$n""""))
+        if !ownsAttr(attrs, "tabindex") then attrs.tabIndex.foreach(n => w(sb, s""" tabindex="$n""""))
         attrs.focusTrap.foreach(v => if v then w(sb, """ data-kyo-focus-trap="1""""))
         attrs.focusGroup.foreach(id => w(sb, s""" data-kyo-focus-group="${esc(id)}""""))
         attrs.focusAuto.foreach(v => if v then w(sb, """ data-kyo-focus-auto="1""""))
