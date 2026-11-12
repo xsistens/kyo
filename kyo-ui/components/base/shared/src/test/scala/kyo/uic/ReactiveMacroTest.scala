@@ -86,6 +86,56 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
         }
     }
 
+    "an optional prop reads as an option of its value, and a signal inside it is followed" - {
+        "a constant inside is a plain value, and an unset prop reads Absent" in {
+            val set: kyo.uic.Opt[Prop[Int]]   = 2
+            val unset: kyo.uic.Opt[Prop[Int]] = kyo.uic.Opt.unset
+            val r                             = UI.reactive((set.read, unset.read))
+            assert(!r.isInstanceOf[Signal[?]], s"$r")
+            Prop.signal(r).current.map(v => assert(v == (Present(2), Absent), s"$v"))
+        }
+
+        "a signal inside is followed" in {
+            for
+                ref <- Signal.initRef(1)
+                o: kyo.uic.Opt[Prop[Int]] = ref
+                r                         = UI.reactive(o.read.map(_ * 10))
+                _ <- ref.set(5)
+                _ <- assertEventually(Prop.signal(r).current.map(_ == Present(50)))
+            yield assert(r.isInstanceOf[Signal[?]], s"$r")
+        }
+
+        "read twice by one path, it is one read, so the block never sees two of its values" in {
+            Scope.run {
+                for
+                    x    <- Signal.initRef(0)
+                    seen <- AtomicRef.init(Chunk.empty[(Maybe[Int], Maybe[Int])])
+                    o: kyo.uic.Opt[Prop[Int]] = x
+                    r                         = Prop.signal(UI.reactive((o.read, o.read)))
+                    _ <- Fiber.init(r.observe(v => seen.getAndUpdate(_.append(v)).unit))
+                    _ <- Kyo.foreachDiscard(1 to 5)(x.set)
+                    _ <- assertEventually(seen.get.map(_.lastMaybe.contains((Present(5), Present(5)))))
+                    s <- seen.get
+                yield assert(s.forall(v => v._1 == v._2), s"seen $s")
+            }
+        }
+
+        "a handler reads it when its event comes" in {
+            for
+                ref <- Signal.initRef(1)
+                hit <- Signal.initRef(0)
+                o: kyo.uic.Opt[Prop[Int]] = ref
+                ui                        = UI.reactive(button("go").onClick(hit.set(o.read.getOrElse(0))))
+                el <- ui match
+                    case b: Button => Kyo.lift(b)
+                    case other     => Kyo.lift(fail(s"a read in a handler drew a region: $other"))
+                _ <- ref.set(7)
+                _ <- Abort.run[Any](el.attrs.onClick.getOrElse(Kyo.unit))
+                v <- hit.get
+            yield assert(v == 7, s"the handler saw $v")
+        }
+    }
+
     "a read in an argument whose parameter takes a prop is that argument's channel, not a read of the block" - {
         "the attribute follows the signal in place and the block draws once, with no region" in {
             for
