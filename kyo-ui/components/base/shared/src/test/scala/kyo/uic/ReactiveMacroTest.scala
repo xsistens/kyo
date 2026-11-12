@@ -27,6 +27,40 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
         yield assert(r.isInstanceOf[Signal[?]], s"$r")
     }
 
+    "a block over one signal alone follows it, value and region alike" in {
+        for
+            ref <- Signal.initRef(1)
+            r = UI.reactive(ref.read + 1)
+            _ <- assertEventually(Prop.signal(r).current.map(_ == 2))
+            _ <- ref.set(5)
+            _ <- assertEventually(Prop.signal(r).current.map(_ == 6))
+        yield assert(r.isInstanceOf[Signal[?]], s"$r")
+    }
+
+    "a block over two distinct signals follows each of them, whichever changes" in {
+        for
+            a <- Signal.initRef(1)
+            b <- Signal.initRef(10)
+            r = UI.reactive(a.read + b.read)
+            _ <- assertEventually(Prop.signal(r).current.map(_ == 11))
+            _ <- a.set(2)
+            _ <- assertEventually(Prop.signal(r).current.map(_ == 12))
+            _ <- b.set(20)
+            _ <- assertEventually(Prop.signal(r).current.map(_ == 22))
+        yield assert(r.isInstanceOf[Signal[?]], s"$r")
+    }
+
+    "a block over one signal read through two names is one signal, its value on both reads" in {
+        for
+            a <- Signal.initRef(3)
+            b = a
+            r = UI.reactive(a.read * b.read)
+            _ <- assertEventually(Prop.signal(r).current.map(_ == 9))
+            _ <- a.set(4)
+            _ <- assertEventually(Prop.signal(r).current.map(_ == 16))
+        yield assert(r.isInstanceOf[Signal[?]], s"$r")
+    }
+
     "a read of a prop built by a function of its own is taken out with that function" in {
         for
             ref <- Signal.initRef(1)

@@ -61,13 +61,36 @@ private[kyo] object ReactiveMacro:
         end if
     end combine
 
-    /** A value block: a constant from constants, else the block mapped over the reads' signal. */
+    /** A value block: a constant from constants, else the block mapped over the reads' signal. A block over one signal, or over two
+      * distinct signals, maps that signal (or their `combineLatest`) once, as a hand-written block does: `combine` would combine them
+      * into a chunk first, and map that again.
+      */
     def value[T](reads: Seq[Any])(f: Chunk[Any] => T)(using CanEqual[T, T], Frame): UI.Prop[T] =
-        UI.Prop.map[Chunk[Any], T](combine(reads))(f)
+        given CanEqual[(Any, Any), (Any, Any)] = CanEqual.derived
+        reads match
+            case Seq(a: Signal[?]) =>
+                UI.Prop.map[Any, T](a.asInstanceOf[Signal[Any]])(v => f(Chunk(v)))
+            case Seq(a: Signal[?], b: Signal[?]) if !(a eq b) =>
+                UI.Prop.map[(Any, Any), T](a.asInstanceOf[Signal[Any]].combineLatest(b.asInstanceOf[Signal[Any]]))((x, y) => f(Chunk(x, y)))
+            case _ => UI.Prop.map[Chunk[Any], T](combine(reads))(f)
+        end match
+    end value
 
-    /** A UI block: drawn once from constants, else one region over the reads' signal, compared by the values read. */
+    /** A UI block: drawn once from constants, else one region over the reads' signal, compared by the values read. A block over one
+      * signal, or over two distinct signals, draws its region over that signal (or their `combineLatest`) directly, as `value` does.
+      */
     def draw(reads: Seq[Any])(f: Chunk[Any] => UI)(using Frame): UI =
-        UI.Prop.render[Chunk[Any]](combine(reads))(f)
+        reads match
+            case Seq(a: Signal[?]) =>
+                UI.Prop.render[Any](a.asInstanceOf[Signal[Any]])(v => f(Chunk(v)))
+            case Seq(a: Signal[?], b: Signal[?]) if !(a eq b) =>
+                given CanEqual[(Any, Any), (Any, Any)] = CanEqual.derived
+                UI.Prop.render[(Any, Any)](a.asInstanceOf[Signal[Any]].combineLatest(b.asInstanceOf[Signal[Any]]))(p =>
+                    f(Chunk(p._1, p._2))
+                )
+            case _ => UI.Prop.render[Chunk[Any]](combine(reads))(f)
+        end match
+    end draw
 
     /** An optional prop as one prop of an option: `Absent` where it is unset, the value where it is set, a signal inside it followed
       * (as `UI.Live` reads an optional field). What a block's optional read takes out of it.
