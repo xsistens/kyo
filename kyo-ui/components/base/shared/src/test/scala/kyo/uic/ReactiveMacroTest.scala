@@ -390,6 +390,13 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
             )
         }
 
+        "a tab index is a toggle setter: the tab stop follows the read in place, with no region" in {
+            for
+                on <- Signal.initRef(false)
+                el <- drawnOnce(UI.reactive(span.role("button").when(!on.read)(_.tabIndex(0))))
+            yield assert(el.attrs.reactiveMaybeAttrs.contains("tabindex") && el.attrs.tabIndex.isEmpty, s"${el.attrs}")
+        }
+
         "a val that only reaches the condition is a channel too, so naming the read changes nothing" in {
             for
                 on <- Signal.initRef(false)
