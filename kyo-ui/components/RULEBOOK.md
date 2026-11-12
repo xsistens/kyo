@@ -242,6 +242,14 @@ a slot a host or a shared trait writes (`@noSetter`). Before keeping an `Opt` or
 `Absent` into the same value at once (`getOrElse(false)`), it is a default.
 
 - **Why:** a `Maybe` that every reader unwraps to one value is a second spelling of that value, and each reader has to repeat it.
+- **The option sits outside the prop: `Opt[Prop[A]]`, never `Prop[Opt[A]]`** (decided 2026-11-12, Skeleton). `Opt` is a `Maybe` to
+  its reader and takes the value itself at its setter (`Opt.set`). Outside, the setter takes `"16px"` and a `Signal[String]` as they
+  are, and only whether the prop is set is fixed when it is built. Inside (`Prop[Opt[A]]`), a signal could also switch the prop off,
+  but the setter takes only an `Opt` or a `Signal[Opt[A]]`: a `Signal[String]`, a `Signal[Maybe[String]]`, `Present(...)` and `Absent`
+  stop compiling, since `Signal` is invariant, a conversion does not reach into one, and `Opt` is no `Maybe` outside its own file
+  (checked with scalac 3.9.0). A signal of the value is the common case, so the option stays outside, and kyo-ui's `aria` and
+  `title` take the same `Maybe[Prop[A]]`. A block reads it in one read: `p.x.read` is a `Maybe[A]` (`props(_.x).read` over a
+  `UI.Live`), `Absent` where unset and a signal inside followed, so a draw over an optional prop needs no `fold` into two blocks.
 - **Order:** the class holds its setters, then the draw with a scaladoc saying what it reads where (no `//` block above it), then
   the private helpers. The companion holds `Props` (a case class that `derives CanEqual`), then the constructors.
 
