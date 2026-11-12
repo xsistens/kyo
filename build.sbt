@@ -4319,7 +4319,13 @@ lazy val `kyo-ui-components-base` =
         .dependsOn(`kyo-ui`)
         .withKyoTest
         .settings(`kyo-settings`)
-        .jvmSettings(mimaCheck(false))
+        .jvmSettings(
+            mimaCheck(false),
+            // The UI.reactive benchmarks (jvm/src/jmh) run on default JVM flags, as kyo-kernel's: Jmh extends Test, which
+            // carries UseCompactObjectHeaders from kyo-settings.
+            Jmh / javaOptions := (Test / javaOptions).value.filterNot(_ == "-XX:+UseCompactObjectHeaders")
+        )
+        .jvmConfigure(_.enablePlugins(JmhPlugin))
         // As in kyo-ui: kyo-net's bundled TLS shim compiles into THIS binary, and nativeConfig does not
         // cross a project dependency, so the test link needs the system OpenSSL flags.
         .nativeSettings(`native-settings`, `openssl-native-settings`)
