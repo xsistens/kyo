@@ -37,6 +37,114 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
         yield assert(r.isInstanceOf[Signal[?]], s"$r")
     }
 
+    "a value picked by a condition shows the branch taken and follows it through each flip" in {
+        for
+            c <- Signal.initRef(true)
+            a <- Signal.initRef("a")
+            b <- Signal.initRef("b")
+            r = UI.reactive(if c.read then a.read else b.read)
+            first <- Prop.signal(r).current
+            _     <- a.set("a2")
+            _     <- assertEventually(Prop.signal(r).current.map(_ == "a2"))
+            _     <- c.set(false)
+            _     <- assertEventually(Prop.signal(r).current.map(_ == "b"))
+            _     <- b.set("b2")
+            _     <- assertEventually(Prop.signal(r).current.map(_ == "b2"))
+            _     <- c.set(true)
+            _     <- assertEventually(Prop.signal(r).current.map(_ == "a2"))
+        yield assert(first == "a", s"$first")
+    }
+
+    "a condition joined with && or || reads its right side only while the left side lets it" in {
+        for
+            g <- Signal.initRef(false)
+            s <- Signal.initRef("x")
+            h <- Signal.initRef(true)
+            both   = UI.reactive(if g.read && s.read.nonEmpty then "on" else "off")
+            either = UI.reactive(if h.read || s.read.isEmpty then "yes" else "no")
+            first <- Prop.signal(both).current
+            _     <- g.set(true)
+            _     <- assertEventually(Prop.signal(both).current.map(_ == "on"))
+            _     <- s.set("")
+            _     <- assertEventually(Prop.signal(both).current.map(_ == "off"))
+            early <- Prop.signal(either).current
+            _     <- s.set("z")
+            _     <- h.set(false)
+            _     <- assertEventually(Prop.signal(either).current.map(_ == "no"))
+        yield assert(first == "off" && early == "yes", s"$first $early")
+    }
+
+    "a branch the constant condition leaves is never built, so its failure does not happen" in {
+        val c: Prop[Boolean] = false
+        val d: Prop[Int]     = 0
+        val r                = UI.reactive(if c.read && (10 / d.read) > 1 then "x" else "y")
+        Prop.signal(r).current.map(v => assert(v == "y", s"$v"))
+    }
+
+    "a read a block takes and a branch takes too is one slot, so the block sees one value of it" in {
+        for
+            a <- Signal.initRef(1)
+            c <- Signal.initRef(true)
+            r = UI.reactive(a.read + (if c.read then a.read else 0))
+            first <- Prop.signal(r).current
+            _     <- a.set(3)
+            _     <- assertEventually(Prop.signal(r).current.map(_ == 6))
+        yield assert(first == 2, s"$first")
+    }
+
+    "a value picked by a match shows the case taken and follows it through each change of the selector" in {
+        for
+            k <- Signal.initRef(0)
+            a <- Signal.initRef("a")
+            b <- Signal.initRef(7)
+            r = UI.reactive(k.read match
+                case 0 => a.read
+                case n => s"$n:${b.read}")
+            first <- Prop.signal(r).current
+            _     <- a.set("a2")
+            _     <- assertEventually(Prop.signal(r).current.map(_ == "a2"))
+            _     <- k.set(3)
+            _     <- assertEventually(Prop.signal(r).current.map(_ == "3:7"))
+            _     <- b.set(8)
+            _     <- assertEventually(Prop.signal(r).current.map(_ == "3:8"))
+            _     <- k.set(0)
+            _     <- assertEventually(Prop.signal(r).current.map(_ == "a2"))
+        yield assert(first == "a", s"$first")
+    }
+
+    "a match guard on a pattern variable decides the case, and the case taken follows the selector" in {
+        for
+            k <- Signal.initRef(4)
+            a <- Signal.initRef("big")
+            r = UI.reactive(k.read match
+                case n if n > 3 => s"$n:${a.read}"
+                case _          => "small")
+            first <- Prop.signal(r).current
+            _     <- k.set(1)
+            _     <- assertEventually(Prop.signal(r).current.map(_ == "small"))
+            _     <- k.set(9)
+            _     <- assertEventually(Prop.signal(r).current.map(_ == "9:big"))
+            _     <- a.set("huge")
+            _     <- assertEventually(Prop.signal(r).current.map(_ == "9:huge"))
+        yield assert(first == "4:big", s"$first")
+    }
+
+    "a UI block that matches a case by a signal draws the case taken in one region" in {
+        for
+            k <- Signal.initRef(1)
+            r = UI.reactive(k.read match
+                case 0 => span("zero")
+                case _ => span("other"))
+        yield assert(r.isInstanceOf[Reactive[?]], s"$r")
+    }
+
+    "a UI block that picks a branch by a signal follows the condition in one region" in {
+        for
+            on <- Signal.initRef(true)
+            r = UI.reactive(if on.read then span("on") else span("off"))
+        yield assert(r.isInstanceOf[Reactive[?]], s"$r")
+    }
+
     "a UI block over constants draws once, with no region" in {
         val on: Prop[Boolean] = true
         val ui                = UI.reactive(if on.read then span("on") else UI.empty)
@@ -508,6 +616,25 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
                 val p: UI.Prop[Int] = 1
                 UI.reactive(List(1, 2).map(_ + p.read).sum)
             """)("inside a lambda")
+        }
+
+        "a read inside a branch is refused where a lambda in it would take it" in {
+            typeCheckFailure("""
+                import kyo.*
+                val c: UI.Prop[Boolean] = true
+                val p: UI.Prop[Int]     = 1
+                UI.reactive(if c.read then List(1).map(_ + p.read).sum else 0)
+            """)("inside a lambda")
+        }
+
+        "a read inside a branch is refused where a by-name argument in it would take it" in {
+            typeCheckFailure("""
+                import kyo.*
+                def later(v: => Int): Int = v
+                val c: UI.Prop[Boolean]   = true
+                val p: UI.Prop[Int]       = 1
+                UI.reactive(if c.read then later(p.read) else 0)
+            """)("inside a by-name argument")
         }
 
         "a read in a by-name argument" in {
