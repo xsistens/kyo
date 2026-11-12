@@ -162,20 +162,20 @@ class ToggleButtonTest extends ReactiveValueContract:
         end for
     }
 
-    "readonly from a signal: on, the button says so and is silent; off again, it answers; nothing is drawn again" in {
+    "readonly from a signal: on, the button says so and hides its clicks; off again, it answers; nothing is drawn again" in {
         for
             ro <- Signal.initRef(false)
             ui = uic.ToggleButton().readonly(ro).render
             (every, since, prior) <- paintedAround(
                 ui,
                 t => elementsWithClass(t, "p-togglebutton").map(_.nonEmpty),
-                t => elementWithClass(t, "p-togglebutton").map(silentNow)
+                t => elementWithClass(t, "p-togglebutton").map(hiddenNow(_, "click"))
             )(_ => setSettled(ro, true))
             b        <- elementWithClass(every, "p-togglebutton")
-            onQuiet  <- silentNow(b)
+            onQuiet  <- hiddenNow(b, "click")
             onAria   <- ariaNow(b, "disabled")
             _        <- setSettled(ro, false)
-            offQuiet <- silentNow(b)
+            offQuiet <- hiddenNow(b, "click")
             offAria  <- ariaNow(b, "disabled")
             redrawn  <- drawnAgain(since, prior, "p-togglebutton")
         yield assert(
@@ -201,6 +201,22 @@ class ToggleButtonTest extends ReactiveValueContract:
     "a fixed constant of true is drawn pressed" in {
         for p <- pressed(uic.ToggleButton().checked(true).render)
         yield assert(p, "the constant is not shown")
+    }
+
+    "a readonly button still hears its blur: the lock silences its clicks and keys, not focus leaving it" in {
+        val mouse = kyo.internal.MouseEventData(UI.Modifiers.none, Absent)
+        for
+            heard <- AtomicRef.init(0)
+            ui = uic.ToggleButton().id("ro-toggle").checked(true).readonly(true).onBlur(_ => heard.getAndUpdate(n => n + 1).unit).render
+            html <- renderHtml(ui)
+            path = pathOf(html, "ro-toggle")
+            _ <- kyo.internal.ReactiveUI.subscribed(ui) { sub =>
+                sub.handle(path, kyo.internal.UIEvent.Focus(path, mouse))
+                    .andThen(sub.handle(path, kyo.internal.UIEvent.Blur(path, mouse)))
+            }
+            got <- heard.get
+        yield assert(got == 1, s"the readonly button's onBlur ran $got times after focus then blur, expected 1")
+        end for
     }
 
 end ToggleButtonTest
