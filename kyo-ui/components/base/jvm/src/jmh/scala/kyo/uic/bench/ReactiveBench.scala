@@ -165,6 +165,51 @@ private object ReactiveBench:
                 def written: SignalRef[?]   = s
                 def write(n: Int): Unit     = s.unsafe.set(s"s$n")
                 def prime(n: Int): Unit     = t.unsafe.set(n)
+        case "flip-if" =>
+            // The condition toggles on every write, so each write flips the branch: a lazy branch subscribes and tears down.
+            new UIExample:
+                val c                       = ref(true)
+                val a                       = ref("a")
+                val b                       = ref("b")
+                def block(using Frame): UI  = UI.reactive(span(if c.read then a.read else b.read))
+                def hand(using Frame): UI   = c.render(on => if on then a.render(span(_)) else b.render(span(_)))
+                def written: SignalRef[?]   = c
+                def write(n: Int): Unit     = c.unsafe.set(n % 2 == 0)
+                def prime(n: Int): Unit     = c.unsafe.set(!c.unsafe.get())
+        case "match-body" =>
+            // The selector stays on one case and the case's read changes on every write: no switch, only the taken case's emissions.
+            new UIExample:
+                val k                       = ref(0)
+                val a                       = ref("a")
+                def block(using Frame): UI  = UI.reactive(span(k.read match
+                    case 0 => a.read
+                    case _ => "other"))
+                def hand(using Frame): UI   = k.render(v => if v == 0 then a.render(span(_)) else span("other"))
+                def written: SignalRef[?]   = a
+                def write(n: Int): Unit     = a.unsafe.set(s"a$n")
+                def prime(n: Int): Unit     = a.unsafe.set(s"p$n")
+        case "flip-match" =>
+            // The selector changes on every write, so each write switches the case: a lazy case subscribes and tears down.
+            new UIExample:
+                val k                       = ref(0)
+                val a                       = ref("a")
+                val b                       = ref("b")
+                def block(using Frame): UI  = UI.reactive(span(k.read match
+                    case 0 => a.read
+                    case _ => b.read))
+                def hand(using Frame): UI   = k.render(v => if v == 0 then a.render(span(_)) else b.render(span(_)))
+                def written: SignalRef[?]   = k
+                def write(n: Int): Unit     = k.unsafe.set(n % 2)
+                def prime(n: Int): Unit     = k.unsafe.set(1 - k.unsafe.get())
+        case "flip-when" =>
+            // The `when` condition toggles on every write; the branch sets a plain attribute, which is not a toggle setter.
+            new UIExample:
+                val hot                     = ref(false)
+                def block(using Frame): UI  = UI.reactive(span.when(hot.read)(_.title("on"))("x"))
+                def hand(using Frame): UI   = hot.render(on => span.when(on)(_.title("on"))("x"))
+                def written: SignalRef[?]   = hot
+                def write(n: Int): Unit     = hot.unsafe.set(n % 2 == 0)
+                def prime(n: Int): Unit     = hot.unsafe.set(!hot.unsafe.get())
         case other => throw new IllegalArgumentException(s"no UI example $other")
 end ReactiveBench
 
@@ -237,14 +282,18 @@ class ReactiveChangeBench:
         "text",
         "output-unchanged",
         "untaken-branch",
-        "false-guard"
+        "false-guard",
+        "flip-if",
+        "flip-match",
+        "match-body",
+        "flip-when"
     ))
     var example: String = uninitialized
 
     @Param(Array("block", "hand"))
     var form: String = uninitialized
 
-    private var n                                 = 0
+    private var n                                = 0
     private var changer: () => Any                = uninitialized
     private var session: Maybe[Fiber[Unit, Any]] = Absent
 
