@@ -97,6 +97,12 @@ class SettersTest extends kyo.test.Test[Any]:
         typeCheckFailure("""kyo.uic.SettersTest.Thing().onCountChange((s: String) => kyo.Kyo.unit)""")
     }
 
+    "a generic class is built with its type argument: a setter of a field over it takes and keeps that type" in {
+        val b = SettersTest.Typed[String]().pick(_.length).size(3)
+        assert(b.p.size == 3 && b.p.pick("abcd") == 4)
+        typeCheckFailure("""kyo.uic.SettersTest.Typed[String]().pick((i: Int) => i)""")
+    }
+
 end SettersTest
 
 object SettersTest:
@@ -130,4 +136,16 @@ object SettersTest:
     object Thing:
         val setters        = Setters[Props, Thing]
         def apply(): Thing = new Thing(Props())
+
+    /** A component over a type argument, as `Select[A]` is. */
+    final case class TypedProps[A](size: Int = 1, pick: A => Int = (_: A) => 0)
+
+    final class Typed[A](val p: TypedProps[A]) extends Selectable:
+        val setters = Setters[TypedProps[A], Typed[A]]
+        type Fields = setters.Fields
+        def selectDynamic(name: String)(using Frame): Any = (v: Any) => setters.make(setters.set(p, name, v))
+    end Typed
+
+    object Typed:
+        def apply[A](): Typed[A] = new Typed(TypedProps[A]())
 end SettersTest

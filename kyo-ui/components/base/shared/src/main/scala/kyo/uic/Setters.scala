@@ -147,8 +147,15 @@ object Setters:
         val atList   = Expr(kept.map(_.at).toArray)
         val kindList = Expr(kept.map(_.kind).toArray)
         val mirror   = Expr.summon[Mirror.ProductOf[P]].getOrElse(report.errorAndAbort(s"${Type.show[P]} is no case class"))
+        // A generic component's constructor takes its type arguments first (`new Select[A](p)`).
         def build(p: Expr[P]): Expr[Self] =
-            New(Inferred(TypeRepr.of[Self])).select(TypeRepr.of[Self].typeSymbol.primaryConstructor).appliedTo(p.asTerm).asExprOf[Self]
+            val self  = TypeRepr.of[Self]
+            val made  = New(Inferred(self)).select(self.typeSymbol.primaryConstructor)
+            val typed = self.dealias match
+                case AppliedType(_, targs) => made.appliedToTypes(targs)
+                case _                     => made
+            typed.appliedTo(p.asTerm).asExprOf[Self]
+        end build
         TypeRepr.of[NamedTuple.NamedTuple].appliedTo(List(names, values)).asType match
             case '[f] =>
                 '{
