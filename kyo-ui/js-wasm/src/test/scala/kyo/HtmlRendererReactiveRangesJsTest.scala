@@ -42,13 +42,13 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
     "embedded unchanged content retains its nodes and nested anchors" in {
         Sync.defer {
             install(
-                "<!--kyo-rs:r--><section id='same'><span><!--kyo-rs:r000000010031-->text<!--kyo-re:r000000010031--></span></section><!--kyo-re:r-->"
+                "<!--kyo-rs:r--><section id='same'><span><!--kyo-rs:r.0-->text<!--kyo-re:r.0--></span></section><!--kyo-re:r-->"
             )
             val result = evalString("""(() => {
                 const before = document.getElementById('same');
                 kyoRangeReplace('r', before.outerHTML);
                 const same = before === document.getElementById('same');
-                kyoRangeReplace('r000000010031', 'updated');
+                kyoRangeReplace('r.0', 'updated');
                 return [same, __kyoRanges.size, document.getElementById('same').textContent].join('|');
             })()""")
             assert(result == "true|2|updated")
@@ -57,7 +57,7 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
 
     "embedded unchanged synthetic table content retains rows but applies changed host attributes" in {
         Sync.defer {
-            val id = "r000000010031"
+            val id = "r.0"
             install(s"<table><tbody data-kyo-range-host='$id' class='rows'><!--kyo-rs:$id-->" +
                 s"<tr id='same-row'><td>row</td></tr><!--kyo-re:$id--></tbody></table>")
             val result = evalString(s"""(() => {
@@ -72,24 +72,30 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
         }
     }
 
-    "embedded same markup still repairs edited form properties" in {
+    // The same markup over fields the reader edited is not left as it is: the state differs, so the range takes the
+    // morph, which reconciles each control by the morph rule (DomBackendMorphParityTest) on the live nodes. A field
+    // with a value attribute and a box the render binds take the render's state; a textarea whose content did not
+    // move, a free box and a select whose options did not move keep the reader's.
+    "embedded same markup over edited form properties reconciles them on the live nodes" in {
         Sync.defer {
             install("<!--kyo-rs:r--><section><input id='text' value='server'><textarea id='area'>server</textarea>" +
-                "<input id='check' type='checkbox' checked><select id='choice'><option value='a' selected>A</option>" +
-                "<option value='b'>B</option></select></section><!--kyo-re:r-->")
+                "<input id='bound' type='checkbox' data-kyo-bound checked><input id='check' type='checkbox' checked>" +
+                "<select id='choice'><option value='a' selected>A</option><option value='b'>B</option></select></section><!--kyo-re:r-->")
             val result = evalString("""(() => {
-                const markup = document.querySelector('section').outerHTML;
+                const section = document.querySelector('section'), markup = section.outerHTML;
                 document.getElementById('text').value = 'typed';
                 document.getElementById('area').value = 'typed';
+                document.getElementById('bound').checked = false;
                 document.getElementById('check').checked = false;
                 document.getElementById('check').indeterminate = true;
                 document.getElementById('choice').selectedIndex = 1;
                 kyoRangeReplace('r', markup);
-                return [document.getElementById('text').value, document.getElementById('area').value,
+                return [section === document.querySelector('section'), document.getElementById('text').value,
+                    document.getElementById('area').value, document.getElementById('bound').checked,
                     document.getElementById('check').checked, document.getElementById('check').indeterminate,
                     document.getElementById('choice').value].join('|');
             })()""")
-            assert(result == "server|server|true|false|a")
+            assert(result == "true|server|typed|true|false|true|b", result)
         }
     }
 
