@@ -129,8 +129,8 @@ object FloatLabel:
                 // (no nested subscription here); a missing placeholder gets an empty one
                 // so the closed native select renders blank instead of the first option.
                 var s: Select[?] = select.inputwrapper
-                if select.p.placeholderV.isEmpty then s = s.placeholder("")
-                labelled(s.render)
+                if select.p.placeholder.isEmpty then s = s.placeholder("")
+                labelled(Node.placed(s))
         end match
     end renderWrapper
 end FloatLabel

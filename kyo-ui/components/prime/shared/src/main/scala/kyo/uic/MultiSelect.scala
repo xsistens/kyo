@@ -162,7 +162,7 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
       * alone, so `filterable(false)` keeps the filter off whatever else is set. Off, the filter input is gone and
       * every option shows, but the query is left as it is: switched back on, the input shows it and filters by it
       * again. A signal never rebuilds the field: closed, only the trigger's role follows it; open, the panel stays
-      * open and only the filter input comes and goes. Same word and same meaning on [[Select.filterable]] and
+      * open and only the filter input comes and goes. Same word and same meaning on [[Select.Props.filterable]] and
       * [[Listbox.filterable]].
       */
     def filterable(v: Boolean | Signal[Boolean]): MultiSelect[A] = new MultiSelect(p.copy(filterableV = Present(ReactiveValue(v))))

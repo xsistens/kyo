@@ -116,6 +116,61 @@ private[uic] object SingleChoice:
             case Absent => ()
 end SingleChoice
 
+/** A single choice as a prop the instance can hold itself ([[kyo.UI.Ownable]]): the [[SingleChoice]] the caller bound, who hears
+  * a change, and where the instance's own choice starts where nothing is bound. Bound by the engine, the instance's own choice is
+  * an option or none (`Optional` over its own ref), whatever shape the caller would have bound.
+  *
+  * @param choice
+  *   what the caller bound: the option itself ([[value]]) or the option or none ([[bind]]); `Absent` where it is the instance's own
+  * @param bound
+  *   the same binding as the option or none it shows, made where it is bound: the engine carries its value over to the instance's
+  *   own ref when a later run stops binding it
+  * @param hearer
+  *   the field's `onChange`, which hears every change with what the field now holds
+  * @param start
+  *   where the instance's own choice starts (none), `Absent` for a field that keeps nothing of its own (a host supplies the held
+  *   option)
+  */
+final private[uic] case class ChoiceSlot[A](
+    choice: Maybe[SingleChoice[A]] = Absent,
+    bound: Maybe[Prop[Maybe[A]]] = Absent,
+    hearer: Maybe[Maybe[A] => UI.Action] = Absent,
+    start: Maybe[Maybe[A]] = Present(Absent)
+) extends UI.Ownable[Maybe[A]]:
+
+    /** The choice bound to the option or none: a ref two way, any other signal one way, a constant. */
+    def bind(v: Prop[Maybe[A]]): ChoiceSlot[A] = copy(choice = Present(SingleChoice.Optional(ReactiveValue(v))), bound = Present(v))
+
+    /** The choice bound to the option itself, which always holds one. */
+    def value(v: Prop[A])(using Frame): ChoiceSlot[A] =
+        given CanEqual[Maybe[A], Maybe[A]] = CanEqual.derived
+        val shown: Prop[Maybe[A]]          = v match
+            case sig: Signal[A] @unchecked => sig.map(a => Present(a): Maybe[A])
+            case a: A @unchecked           => Present(a)
+        copy(choice = Present(SingleChoice.Value(ReactiveValue(v))), bound = Present(shown))
+    end value
+
+    def withHearer(f: Maybe[A] => UI.Action): ChoiceSlot[A] = copy(hearer = Present(f))
+
+    /** The slot with no choice of the instance's own: a host supplies what the field holds. */
+    def unowned: ChoiceSlot[A] = copy(start = Absent)
+
+    /** Something hears a pick: `onChange`, or another event (`onPick`) where `picks` says so. */
+    private def heardBy(picks: Boolean): Maybe[Unit] = if hearer.isDefined || picks then Present(()) else Absent
+
+    /** A constant nobody hears, which the field draws read-only. */
+    def fixed(picks: Boolean): Boolean = choice.exists(_.fixed(heardBy(picks)))
+
+    /** A signal nobody hears, which the field names on a card. */
+    def deaf(picks: Boolean): Boolean = choice.exists(_.deaf(heardBy(picks)))
+
+    /** Whether the binding can hold none, which is what a clear writes. Unbound, the instance's own choice can. */
+    def clearable: Boolean = choice.forall(_.clearable)
+
+    /** What the field holds, as a prop: the option or none the binding shows, none where nothing is bound. */
+    def held: Prop[Maybe[A]] = bound.getOrElse(Absent)
+end ChoiceSlot
+
 /** What a multi-choice field ([[MultiSelect]], [[MultiSelectButton]]) holds its choice in: the set of chosen
   * options, as the module's const-or-reactive [[ReactiveValue]].
   *

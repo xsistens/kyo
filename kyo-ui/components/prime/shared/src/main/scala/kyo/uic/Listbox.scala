@@ -146,7 +146,7 @@ end ListOptionScope
   * Filtering has the two shapes shared by every picker in this module:
   * `filterable(true)` renders Prime's header filter over a query the listbox
   * allocates itself (the same word and the same meaning as
-  * [[Select.filterable]] / [[MultiSelect.filterable]]), and `filterQuery(ref)`
+  * [[Select.Props.filterable]] / [[MultiSelect.filterable]]), and `filterQuery(ref)`
   * renders it over a query the app owns. Either way the options are filtered by
   * a case-insensitive contains on the label at render time.
   *
@@ -232,7 +232,7 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
 
     /** Switches Prime's header filter input (`div.p-listbox-header` > `input.p-listbox-filter.p-inputtext`), over a
       * query the listbox allocates itself unless [[filterQuery]] hands it one: the same word, and the same meaning, as
-      * [[Select.filterable]] and [[MultiSelect.filterable]].
+      * [[Select.Props.filterable]] and [[MultiSelect.filterable]].
       *
       * Without it, [[filterQuery]] turns the header on. Set, constant or signal, it decides alone, so
       * `filterable(false)` keeps the header off with a query bound. Off, the header is gone and every option shows,
