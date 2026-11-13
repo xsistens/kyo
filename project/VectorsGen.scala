@@ -13,7 +13,7 @@ object VectorsGen {
     def generate(vectorsDir: File, outDir: File, pkg: String, module: String): Seq[File] = {
         val pkgDir = pkg.split('.').foldLeft(outDir)(_ / _)
         IO.createDirectory(pkgDir)
-        val sets  = (vectorsDir * DirectoryFilter).get.sortBy(_.getName)
+        val sets  = (vectorsDir * DirectoryFilter).get().sortBy(_.getName)
         val files = sets.flatMap { set =>
             val vendored = VendoredFiles.verified(set, Generator)
             val embedded = vendored.files.toSeq.sortBy(_._1).filterNot { case (name, _) =>

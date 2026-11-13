@@ -48,7 +48,7 @@ object VendoredFiles {
         }
         if (entries.map(_._1).distinct.size != entries.size) fail("lists a file twice")
         val listed   = entries.toMap
-        val present  = (dir * "*").get.map(_.getName).filterNot(_ == "MANIFEST").toSet
+        val present  = (dir * "*").get().map(_.getName).filterNot(_ == "MANIFEST").toSet
         val unlisted = present -- listed.keySet
         if (unlisted.nonEmpty) fail(s"does not list ${unlisted.toSeq.sorted.mkString(", ")}")
         val files = listed.map { case (file, expected) =>

@@ -22,7 +22,8 @@ set -uo pipefail
 
 ALL_TASKS=(kyoJVM/scalafmtAll kyoJS/scalafmtAll kyoNative/scalafmtAll kyoWasm/scalafmtAll scalafmtSbt doctestFormat)
 
-. "$(cd "$(dirname "$0")" && pwd)/sbt-heap-lib.sh"
+here=$(cd "$(dirname "$0")" && pwd)
+. "$here/sbt-heap-lib.sh"
 
 usage() {
     echo "Usage: format.sh [--check] [--changed [<base>]]" >&2
@@ -111,7 +112,9 @@ run_format() {
 
     local before after
     [ "$check" = no ] || before=$(snapshot)
-    sbt "$(sbt_heap tool)" "${tasks[@]}" || {
+    # Through scripts/sbt.sh: it gives the tool role's heap and starts an sbt 2 build in one JVM, where the
+    # default thin client would join the tasks into one command line.
+    "$here/sbt.sh" tool "${tasks[@]}" || {
         echo "format.sh: sbt failed" >&2
         return 2
     }
@@ -142,6 +145,7 @@ self_test() {
     cat > "$dir/bin/sbt" <<'STUB'
 #!/usr/bin/env bash
 case "$1" in -J-Xmx*) printf '%s\n' "$1" >> "$FAKE_SBT_CALLS.heap"; shift ;; esac
+case "$1" in --server | --client) printf '%s\n' "$1" >> "$FAKE_SBT_CALLS.mode"; shift ;; esac
 printf '%s\n' "$*" >> "$FAKE_SBT_CALLS"
 if [ -n "${FAKE_SBT_REWRITES:-}" ]; then
     printf '%s\n' "${FAKE_SBT_CONTENT:-formatted}" > "$FAKE_SBT_REWRITES"
@@ -180,7 +184,7 @@ STUB
     }
     calls() { cat "$dir/calls" 2>/dev/null; }
     run() {
-        rm -f "$dir/calls" "$dir/calls.heap" "$dir/out"
+        rm -f "$dir/calls" "$dir/calls.heap" "$dir/calls.mode" "$dir/out"
         (cd "$repo" && PATH="$dir/bin:$PATH" FAKE_SBT_CALLS="$dir/calls" "$self" "$@" > "$dir/out" 2>&1)
     }
     reset_repo() {
@@ -202,6 +206,13 @@ STUB
     if [ "$(cat "$dir/calls.heap" 2>/dev/null)" = "$(sbt_heap tool)" ]; then
         record ok "the session runs with the tool role's heap"
     else record no "the session runs with the tool role's heap: $(cat "$dir/calls.heap" 2>/dev/null)"; fi
+    # sbt 2 starts a thin client by default, which joins the tasks into one command line it cannot parse;
+    # scripts/sbt.sh runs such a build in one JVM instead. The build is the one this script belongs to.
+    local mode=
+    grep -Eq '^sbt\.version *= *2' "$(dirname "$self")/../project/build.properties" && mode=--server
+    if [ "$(cat "$dir/calls.mode" 2>/dev/null)" = "$mode" ]; then
+        record ok "the session starts the way scripts/sbt.sh starts this build (${mode:-sbt 1, no mode flag})"
+    else record no "the session starts the way scripts/sbt.sh starts this build: got '$(cat "$dir/calls.mode" 2>/dev/null)', want '$mode'"; fi
 
     reset_repo
     (cd "$repo" && printf 'object A { val x = 1 }\n' > mod/src/A.scala && git commit -qam change)
