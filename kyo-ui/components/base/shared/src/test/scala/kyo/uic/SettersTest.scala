@@ -97,6 +97,19 @@ class SettersTest extends kyo.test.Test[Any]:
         typeCheckFailure("""kyo.uic.SettersTest.Thing().onCountChange((s: String) => kyo.Kyo.unit)""")
     }
 
+    "an optional function takes the function itself, and a lambda is typed against it" in {
+        val t = SettersTest.Thing().format(n => s"#$n")
+        typeCheckFailure("""kyo.uic.SettersTest.Thing().format((s: String) => s)""")
+        typeCheckFailure("""val s: Int = kyo.uic.SettersTest.Thing().format""")("(Int => String) =>")
+        assert(t.p.format.map(_(3)) == Present("#3") && SettersTest.Thing().p.format.isEmpty)
+    }
+
+    "a field named like a method Scala.js gives every value is no generated setter: the build says to write it by hand" in {
+        typeCheckFailure(
+            """final case class P(filter: Int = 0); final class T(val p: P) extends Selectable { val setters = kyo.uic.Setters[P, T]; def selectDynamic(n: String): Any = n }"""
+        )("shadowed on Scala.js by UndefOrOps.filter")
+    }
+
     "a generic class is built with its type argument: a setter of a field over it takes and keeps that type" in {
         val b = SettersTest.Typed[String]().pick(_.length).size(3)
         assert(b.p.size == 3 && b.p.pick("abcd") == 4)
@@ -123,7 +136,8 @@ object SettersTest:
         other: Held[Int] = Held(),
         onPick: Maybe[Int => UI.Action] = Absent,
         onMove: Maybe[(Int, Int) => UI.Action] = Absent,
-        onPress: Maybe[UI.Action] = Absent
+        onPress: Maybe[UI.Action] = Absent,
+        format: Opt[Int => String] = Opt.unset
     ) derives CanEqual
 
     final class Thing(val p: Props) extends Selectable:
