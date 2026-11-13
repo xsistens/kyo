@@ -107,6 +107,10 @@ Global / concurrentRestrictions := {
         Tags.limit(Tags.Update, if (updateLimit != "0") updateLimit.toInt else 1),
         Tags.limit(Tags.Test, testLimit),
         Tags.limit(Tags.ForkedTestGroup, forkLimit),
+        // Cap concurrent compiles. Each holds 1.2 to 1.7 GB of compiler state, and a full test compile otherwise runs about 11
+        // at once with peaks at the core count, which overruns the 12 GB driver heap under sbt 2 (measured 2026-11-13).
+        // SBT_COMPILE_LIMIT overrides the default of 8.
+        Tags.limit(Tags.Compile, sys.env.get("SBT_COMPILE_LIMIT").map(_.toInt).getOrElse(8)),
         // Cap concurrent doctest forks. Each fork already uses dotty's internal
         // multi-thread backend; allowing 2 keeps cross-module work overlapping
         // without saturating the host. The plugin adds this same limit via
