@@ -13,7 +13,7 @@ object EmailTestVectorsGen {
     def generateDifferences(dir: File, source: String, outDir: File): Seq[File] = {
         val pkgDir = outDir / "kyo" / "internal" / "email" / "mime"
         IO.createDirectory(pkgDir)
-        val files = (dir * "*.tsv").get.sortBy(_.getName).map { file =>
+        val files = (dir * "*.tsv").get().sortBy(_.getName).map { file =>
             VendoredFiles.writeIfChanged(
                 pkgDir / s"Embedded${VendoredFiles.objectName(file.getName)}.scala",
                 VendoredFiles.emitEmbeddedText(

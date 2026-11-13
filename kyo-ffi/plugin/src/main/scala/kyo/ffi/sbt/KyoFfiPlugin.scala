@@ -99,7 +99,7 @@ object KyoFfiPlugin extends AutoPlugin {
                 "shim compiled with no vendored library staged). Recorded as 'stub' in the library-state " +
                 "manifest so a packaging completeness check can tell a placeholder artifact from a real one."
         )
-        val ffiCodegenClasspath = taskKey[Seq[File]](
+        @transient val ffiCodegenClasspath = taskKey[Seq[File]](
             "Codegen classpath: kyo-ffi-codegen plus its Scala 3 toolchain. Defaults to resolving kyo-ffi-codegen from the project's resolvers; the in-repo integration test overrides it with the codegen project's classpath."
         )
 
@@ -111,37 +111,37 @@ object KyoFfiPlugin extends AutoPlugin {
         val FfiLibrary = kyo.ffi.sbt.FfiLibrary
 
         // Tasks
-        val ffiGenerate       = taskKey[Seq[File]]("Generate platform-specific impl sources from bindings.")
-        val ffiCompile        = taskKey[Seq[File]]("Compile C sources into a platform-native shared library.")
-        val ffiPackage        = taskKey[Seq[File]]("Copy the compiled library into META-INF/native/ in resources.")
-        val ffiClean          = taskKey[Unit]("Clean generated sources + compiled libs.")
-        val ffiCiWorkflow     = taskKey[File]("Emit a starter .github/workflows/ffi-native.yml template.")
-        val ffiPackagingCheck = taskKey[Unit](
+        @transient val ffiGenerate   = taskKey[Seq[File]]("Generate platform-specific impl sources from bindings.")
+        @transient val ffiCompile    = taskKey[Seq[File]]("Compile C sources into a platform-native shared library.")
+        val ffiPackage               = taskKey[Seq[File]]("Copy the compiled library into META-INF/native/ in resources.")
+        val ffiClean                 = taskKey[Unit]("Clean generated sources + compiled libs.")
+        @transient val ffiCiWorkflow = taskKey[File]("Emit a starter .github/workflows/ffi-native.yml template.")
+        val ffiPackagingCheck        = taskKey[Unit](
             "Validate the staged native resource tree: every artifact's binary format and extension match " +
                 "the platform directory it sits in, and every ffiRequiredPlatforms entry has a native for " +
                 "every bundled library."
         )
-        val ffiNpmBundleTemplate    = taskKey[File]("Emit package.json pinning koffi to the supported range (Scala.js consumers).")
-        val ffiNativeLinkingOptions = taskKey[Seq[String]](
+        @transient val ffiNpmBundleTemplate = taskKey[File]("Emit package.json pinning koffi to the supported range (Scala.js consumers).")
+        @transient val ffiNativeLinkingOptions = taskKey[Seq[String]](
             "Scala Native linkingOptions for ffiLibraries: the static-folded SYSTEM link libs " +
                 "(e.g. -Wl,-Bstatic -luring -Wl,-Bdynamic on Linux). The bindings' own C is compiled " +
                 "into the binary by Scala Native, not linked as an archive. Wire into " +
                 "nativeConfig.linkingOptions in a Native project."
         )
-        val ffiNativeCompileOptions = taskKey[Seq[String]](
+        @transient val ffiNativeCompileOptions = taskKey[Seq[String]](
             "Scala Native compileOptions for ffiLibraries: the `-I` include dirs the bundled C is compiled " +
                 "against (e.g. a staged BoringSSL include tree). A downstream Native module that recompiles " +
                 "this module's bundled C needs the same headers, so it resolves the same functions the link " +
                 "libs provide. Wire into nativeConfig.compileOptions in a Native project."
         )
-        val ffiNativeDependencyLinkingOptions = taskKey[Seq[String]](
+        @transient val ffiNativeDependencyLinkingOptions = taskKey[Seq[String]](
             "Scala Native linkingOptions the DEPENDENCIES on this project's classpath declare for their own " +
                 "bundled C, read from the flag manifests they ship. Scala Native compiles a dependency's " +
                 "bundled C into this binary, so this binary is the one that has to link its libraries " +
                 "(e.g. -luring for kyo-net's io_uring shim). nativeConfig does not propagate across a " +
                 "dependency, so wire this into nativeConfig.linkingOptions alongside ffiNativeLinkingOptions."
         )
-        val ffiNativeDependencyCompileOptions = taskKey[Seq[String]](
+        @transient val ffiNativeDependencyCompileOptions = taskKey[Seq[String]](
             "Scala Native compileOptions the DEPENDENCIES on this project's classpath declare for their own " +
                 "bundled C, read from the flag manifests they ship. The counterpart of " +
                 "ffiNativeDependencyLinkingOptions for the compile side; wire into nativeConfig.compileOptions."
@@ -152,7 +152,7 @@ object KyoFfiPlugin extends AutoPlugin {
           * `Seq[String]` per library (in multi-lib mode) with argv elements ready
           * for `ProcessBuilder`. Useful in tests and for debugging build issues.
           */
-        val ffiDumpCcCommand = taskKey[Seq[Seq[String]]]("Return the cc command-line that ffiCompile would invoke.")
+        @transient val ffiDumpCcCommand = taskKey[Seq[Seq[String]]]("Return the cc command-line that ffiCompile would invoke.")
 
         /** The build host's `<os>-<arch>` tag, e.g. `darwin-aarch64`, or `linux-musl-x86_64` on a
           * musl distro. This is the plugin's own host resolver, exposed so a build that has to name
@@ -248,10 +248,10 @@ object KyoFfiPlugin extends AutoPlugin {
             )
             val (finalState, failed) =
                 projects.foldLeft((state, Seq.empty[String])) { case ((st, bad), ref) =>
-                    Project.runTask(ref / ffiCompile, st) match {
-                        case Some((next, Value(_))) => (next, bad)
-                        case Some((next, Inc(_)))   => (next, bad :+ ref.project)
-                        case None                   => (st, bad :+ ref.project)
+                    Project.extract(st).runTaskUnhandled(ref / ffiCompile, st) match {
+                        case Some((next, Result.Value(_))) => (next, bad)
+                        case Some((next, Result.Inc(_)))   => (next, bad :+ ref.project)
+                        case None                          => (st, bad :+ ref.project)
                     }
                 }
             if (failed.nonEmpty)
@@ -280,10 +280,10 @@ object KyoFfiPlugin extends AutoPlugin {
                 // this check its prebuilt pool. Without it the check sees only the natives this host
                 // compiled and reports every other platform missing.
                 val withReq = ex.appendWithSession(Seq(ref / ffiRequiredPlatforms := Nil), st)
-                Project.runTask(ref / ffiPackagingCheck, withReq) match {
-                    case Some((next, Value(_))) => (next, bad)
-                    case Some((next, Inc(_)))   => (next, bad :+ ref.project)
-                    case None                   => (st, bad :+ ref.project)
+                Project.extract(withReq).runTaskUnhandled(ref / ffiPackagingCheck, withReq) match {
+                    case Some((next, Result.Value(_))) => (next, bad)
+                    case Some((next, Result.Inc(_)))   => (next, bad :+ ref.project)
+                    case None                          => (st, bad :+ ref.project)
                 }
             }
         if (failed.nonEmpty)
@@ -323,10 +323,10 @@ object KyoFfiPlugin extends AutoPlugin {
                 // because the format/architecture half is free signal that the producer toolchain
                 // names its artifacts truthfully.
                 // `publish / skip` is a task, not a setting, so it is evaluated rather than read.
-                val (afterSkip, skipped) = Project.runTask(ref / publish / skip, st) match {
-                    case Some((next, Value(v))) => (next, v)
-                    case Some((next, Inc(_)))   => (next, false)
-                    case None                   => (st, false)
+                val (afterSkip, skipped) = Project.extract(st).runTaskUnhandled(ref / publish / skip, st) match {
+                    case Some((next, Result.Value(v))) => (next, v)
+                    case Some((next, Result.Inc(_)))   => (next, false)
+                    case None                          => (st, false)
                 }
                 val ex           = Project.extract(afterSkip)
                 val publishes    = !skipped
@@ -349,10 +349,10 @@ object KyoFfiPlugin extends AutoPlugin {
                     Seq(ref / ffiRequiredPlatforms := requiredKeys),
                     afterSkip
                 )
-                Project.runTask(ref / ffiPackagingCheck, withReq) match {
-                    case Some((next, Value(_))) => (next, bad)
-                    case Some((next, Inc(_)))   => (next, bad :+ ref.project)
-                    case None                   => (st, bad :+ ref.project)
+                Project.extract(withReq).runTaskUnhandled(ref / ffiPackagingCheck, withReq) match {
+                    case Some((next, Result.Value(_))) => (next, bad)
+                    case Some((next, Result.Inc(_)))   => (next, bad :+ ref.project)
+                    case None                          => (st, bad :+ ref.project)
                 }
             }
         // Every failing project is reported, not just the first, so one release run names everything that
@@ -425,11 +425,11 @@ object KyoFfiPlugin extends AutoPlugin {
         ffiLibraryId := "kyo_ffi",
         ffiCSources  := {
             val cDir = (Compile / sourceDirectory).value / "c"
-            if (cDir.exists()) (cDir ** "*.c").get else Nil
+            if (cDir.exists()) (cDir ** "*.c").get() else Nil
         },
         ffiCHeaders := {
             val cDir = (Compile / sourceDirectory).value / "c"
-            if (cDir.exists()) (cDir ** "*.h").get else Nil
+            if (cDir.exists()) (cDir ** "*.h").get() else Nil
         },
         ffiIncludes := {
             val cDir = (Compile / sourceDirectory).value / "c"
@@ -506,7 +506,8 @@ object KyoFfiPlugin extends AutoPlugin {
             val out       = (Compile / sourceManaged).value / "kyo-ffi"
             val genTarget = target.value
             val classesIn = (Compile / classDirectory).value
-            val cp        = (Compile / dependencyClasspath).value.map(_.data.getAbsolutePath).toList
+            val conv      = fileConverter.value
+            val cp        = (Compile / dependencyClasspath).value.map(a => conv.toPath(a.data).toFile.getAbsolutePath).toList
             val codegenCp = ffiCodegenClasspath.value.map(_.getAbsolutePath)
             val platform  = ffiTargetPlatform.value
             // Use unmanagedSources to avoid cyclic dependency with sourceGenerators.
@@ -1019,14 +1020,16 @@ object KyoFfiPlugin extends AutoPlugin {
         // what the manifests exist to bridge.
         ffiNativeDependencyLinkingOptions := {
             val platform = ffiTargetPlatform.value
-            val cp       = (Compile / dependencyClasspath).value.map(_.data)
+            val conv     = fileConverter.value
+            val cp       = (Compile / dependencyClasspath).value.map(a => conv.toPath(a.data).toFile)
             val targetOs = CCompiler.resolveTargetOsArch(ffiTargetOsArch.value)._1
             if (platform != "Native") Nil
             else readNativeFlagManifests(cp, ffiNativeLinkFlagsDir, ffiNativeInBuildLinkFlagsDir, targetOs)
         },
         ffiNativeDependencyCompileOptions := {
             val platform = ffiTargetPlatform.value
-            val cp       = (Compile / dependencyClasspath).value.map(_.data)
+            val conv     = fileConverter.value
+            val cp       = (Compile / dependencyClasspath).value.map(a => conv.toPath(a.data).toFile)
             val targetOs = CCompiler.resolveTargetOsArch(ffiTargetOsArch.value)._1
             if (platform != "Native") Nil
             else readNativeFlagManifests(cp, ffiNativeCompileFlagsDir, ffiNativeInBuildCompileFlagsDir, targetOs)
@@ -1052,7 +1055,7 @@ object KyoFfiPlugin extends AutoPlugin {
         cp.flatMap { entry =>
             val inBuild = inBuildRelDir.foldLeft(entry)(_ / _)
             val dir     = if (inBuild.isDirectory) inBuild else relDir.foldLeft(entry)(_ / _)
-            if (dir.isDirectory) (dir * s"*-$targetOs.flags").get.flatMap(IO.readLines(_)) else Seq.empty[String]
+            if (dir.isDirectory) (dir * s"*-$targetOs.flags").get().flatMap(IO.readLines(_)) else Seq.empty[String]
         }.map(_.trim).filter(_.nonEmpty).distinct
 
     // --- helpers (settings/task fragments) --------------------------------------
@@ -1075,7 +1078,7 @@ object KyoFfiPlugin extends AutoPlugin {
         case Some(d) =>
             if (!d.isDirectory)
                 sys.error(s"[kyo-ffi-plugin] ffiPrebuiltDir is not an existing directory: ${d.getAbsolutePath}")
-            val files = (d ** "*").get.filter(f => f.isFile && !f.getName.startsWith("."))
+            val files = (d ** "*").get().filter(f => f.isFile && !f.getName.startsWith("."))
             files.map { f =>
                 CCompiler.parseArtifactName(f.getName) match {
                     case Some((id, os, arch)) => PrebuiltNative(f, id, os, arch)

@@ -36,12 +36,15 @@ fi
 
 sbt_heap_role_mb() {
     case "$1" in
-        compile)    echo 8192 ;;
-        docs)       echo 12288 ;;
-        classnames) echo 12288 ;;
-        test-jvm)   echo 12288 ;;
+        compile)    echo 12288 ;;
+        docs)       echo 16384 ;;
+        classnames) echo 16384 ;;
+        # sbt 2 holds about 2 GB more than sbt 1 in the driver (settings, task results), so every compiling role gets 4 GB
+        # more than under sbt 1 (compile, link 8 to 12 GB; docs, classnames, test-jvm 12 to 16 GB). The late test modules
+        # take 2.5 to 3 GB each while compiling; a full kyoJVM/Test/compile peaks near 10 GB live (2026-11-13).
+        test-jvm)   echo 16384 ;;
         run)        echo 6144 ;;
-        link)       echo 8192 ;;
+        link)       echo 12288 ;;
         publish)    echo 6144 ;;
         tool)       echo 3072 ;;
         *)          return 1 ;;

@@ -158,7 +158,7 @@ object ClassNameCheck {
             def hasSources(ref: ProjectRef): Boolean =
                 Seq(Compile, Test).exists { config =>
                     extracted.getOpt(ref / config / unmanagedSourceDirectories).toSeq.flatten.exists { dir =>
-                        dir.isDirectory && (dir ** (GlobFilter("*.scala") | GlobFilter("*.java"))).get.nonEmpty
+                        dir.isDirectory && (dir ** (GlobFilter("*.scala") | GlobFilter("*.java"))).get().nonEmpty
                     }
                 }
 
@@ -297,7 +297,7 @@ object ClassNameCheck {
     private def classFilesOf(dir: File): Seq[String] =
         if (!dir.isDirectory) Nil
         else
-            (dir ** "*.class").get
+            (dir ** "*.class").get()
                 .flatMap(file => IO.relativize(dir, file))
                 .filter(_ != "module-info.class")
                 .map(_.replace(File.separatorChar, '/'))
