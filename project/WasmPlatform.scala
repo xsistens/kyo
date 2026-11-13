@@ -1,4 +1,3 @@
-import org.portablescala.sbtplatformdeps.PlatformDepsPlugin.autoImport.platformDepsCrossVersion
 import org.scalajs.linker.interface.ESVersion
 import org.scalajs.linker.interface.ModuleKind
 import org.scalajs.sbtplugin.ScalaJSCrossVersion
@@ -38,7 +37,9 @@ case object WasmPlatform extends Platform {
             // `%%%` dependencies stay on `_sjs1`, since no upstream Scala.js library publishes a wasm build yet and the `_sjs1` artifacts
             // link to WasmGC unchanged.
             crossVersion                     := wasmCrossVersion,
-            platformDepsCrossVersion         := ScalaJSCrossVersion.binary,
+            // sbt 2 lays outputs out by platform, and a wasm row is a Scala.js row (platform sjs1, which `%%` needs to resolve the
+            // `_sjs1` artifacts above). Its own prefix keeps it from sharing the JS row's output directory.
+            sbt.Keys.outputPath := s"wasm/scala-${sbt.Keys.scalaVersion.value}/${sbt.Keys.moduleName.value}",
             sbt.Keys.publish / sbt.Keys.skip := true
         )
 }

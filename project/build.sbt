@@ -15,8 +15,8 @@
 // crossProject in build.sbt.
 Compile / unmanagedSourceDirectories ++= {
     val src = baseDirectory.value.getParentFile / "kyo-compat" / "plugin" / "src" / "main"
-    // scala-2: the plugin's sbt 1 code, as the meta-build runs on sbt 1.
-    Seq(src / "scala", src / "scala-2")
+    // The plugin's sbt-specific code: scala-2 for a meta-build on sbt 1, scala-3 for one on sbt 2.
+    Seq(src / "scala", src / (if (scalaBinaryVersion.value == "3") "scala-3" else "scala-2"))
 }
 
 // Same pattern for the in-tree `sbt-kyo-test` plugin so that build.sbt

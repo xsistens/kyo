@@ -109,7 +109,7 @@ object KyoDoctestPlugin extends AutoPlugin {
           * When an entry here contributes a `scala3-library_3-*.jar`, the plugin drops mismatched copies coming from
           * `Test / fullClasspath` so the fork sees exactly one scala3-library, matching the dotty driver inside this classpath.
           */
-        val doctestExtraClasspath: TaskKey[Seq[File]] = taskKey[Seq[File]](
+        @transient val doctestExtraClasspath: TaskKey[Seq[File]] = taskKey[Seq[File]](
             "Extra jars appended to the doctest fork's classpath (default: empty)."
         )
 
@@ -292,7 +292,8 @@ object KyoDoctestPlugin extends AutoPlugin {
         Def.task {
             val log         = streams.value.log
             val sources     = doctestSources.value
-            val baseCp      = (Test / fullClasspath).value.files
+            val conv        = fileConverter.value
+            val baseCp      = (Test / fullClasspath).value.map(a => conv.toPath(a.data).toFile)
             val extraCp     = doctestExtraClasspath.value
             val classpath   = reconcileClasspath(baseCp, extraCp)
             val scalacOpts  = doctestScalacOptions.value
@@ -322,7 +323,8 @@ object KyoDoctestPlugin extends AutoPlugin {
         Def.task {
             val log         = streams.value.log
             val sources     = doctestSources.value
-            val baseCp      = (Test / fullClasspath).value.files
+            val conv        = fileConverter.value
+            val baseCp      = (Test / fullClasspath).value.map(a => conv.toPath(a.data).toFile)
             val extraCp     = doctestExtraClasspath.value
             val classpath   = reconcileClasspath(baseCp, extraCp)
             val scalacOpts  = doctestScalacOptions.value
