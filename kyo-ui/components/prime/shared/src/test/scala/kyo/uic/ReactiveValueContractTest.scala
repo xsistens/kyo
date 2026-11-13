@@ -55,6 +55,9 @@ abstract class ReactiveValueContract extends UicTest:
       *   for a component that shows its own state's change in place, through an attribute channel rather than by
       *   publishing again: the patch, as `(name, value)`, that says `next` is shown. Absent, a change is seen in what the
       *   component publishes, through `shows`.
+      * @param nextText
+      *   for a component whose change may come as a text channel's patch alone, by the timing of the gestures (Select's label, a
+      *   block of its own): the text that says `next` is shown. Either that patch or a published tree that `shows` next counts.
       * @param fixedOn
       *   for a component whose fixed state is said by another element than the one the gesture lands on (a wrapper that
       *   takes the click around the control the reader focuses): that element. Absent, the control says it.
@@ -109,6 +112,7 @@ abstract class ReactiveValueContract extends UicTest:
         val isFixed: Maybe[UI => Frame ?=> Boolean < Sync] = Absent,
         val ready: Maybe[UI => Frame ?=> Boolean < Sync] = Absent,
         val nextPatch: Maybe[((String, String)) => Boolean] = Absent,
+        val nextText: Maybe[String] = Absent,
         val fixedOn: Maybe[UI => Frame ?=> UI.Ast.Element < Sync] = Absent,
         val startText: Maybe[A] = Absent,
         val keptNatively: Maybe[UI => Frame ?=> Boolean < Sync] = Absent,
@@ -375,7 +379,10 @@ abstract class ReactiveValueContract extends UicTest:
             Abort.run[AssertionError](Abort.catching[AssertionError](s.shows(t))).map(_.toMaybe.exists(_ == s.next))
         s.nextPatch match
             case Present(patch) => attrPatchedAfter(ui, t => s.wired(t))(s.steps*)(patch)
-            case Absent         => publishedAfterReady(ui, t => s.wired(t), until = shown)(s.steps*).map(_.nonEmpty)
+            case Absent         =>
+                s.nextText match
+                    case Present(text) => shownOrTextedAfter(ui, t => s.wired(t))(s.steps*)(shown, text)
+                    case Absent        => publishedAfterReady(ui, t => s.wired(t), until = shown)(s.steps*).map(_.nonEmpty)
         end match
     end changes
 
