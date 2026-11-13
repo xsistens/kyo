@@ -187,11 +187,12 @@ class SelectTest extends ReactiveValueContract:
             (_, _, ui) <- panel(2, filter = false)
             trigger    <- elementWithClass(ui, "p-select")
             list       <- elementWithClass(ui, "p-select-list")
+            announced  <- ariaNow(trigger, "activedescendant")
             rows       <- elementsWithClass(ui, "p-select-option")
         yield
             assert(trigger.attrs.role.contains("combobox"))
             assert(trigger.attrs.ariaAttrs.get("controls").contains("sel-list"))
-            assert(trigger.attrs.ariaAttrs.get("activedescendant").contains("sel-option-2"))
+            assert(announced.contains("sel-option-2"), s"the trigger announces $announced")
             assert(list.attrs.identifier.contains("sel-list"))
             assert(!list.attrs.ariaAttrs.contains("activedescendant"), "the unfocused list says nothing")
             assert(rows(2).attrs.identifier.contains("sel-option-2"), "and the option it names is there")
@@ -202,9 +203,10 @@ class SelectTest extends ReactiveValueContract:
             (_, _, ui) <- panel(2, filter = true)
             trigger    <- elementWithClass(ui, "p-select")
             filterEl   <- elementWithClass(ui, "p-select-filter")
+            onTrigger  <- ariaNow(trigger, "activedescendant")
         yield
             assert(trigger.attrs.role.contains("button"), "the trigger is then the button that reveals it")
-            assert(!trigger.attrs.ariaAttrs.contains("activedescendant"))
+            assert(onTrigger.isEmpty, s"the trigger announces $onTrigger")
             assert(filterEl.attrs.role.contains("combobox"))
             assert(filterEl.attrs.focusAuto.contains(true), "and it is what the panel seeds focus onto")
             assert(filterEl.attrs.ariaAttrs.get("activedescendant").contains("sel-option-2"))
@@ -215,7 +217,8 @@ class SelectTest extends ReactiveValueContract:
         for
             (_, _, ui) <- panel(-1, filter = false)
             trigger    <- elementWithClass(ui, "p-select")
-        yield assert(!trigger.attrs.ariaAttrs.contains("activedescendant"))
+            announced  <- ariaNow(trigger, "activedescendant")
+        yield assert(announced.isEmpty, s"announces $announced")
     }
 
     "Tab closes the panel, in both directions and with a filter header too" in {
@@ -796,7 +799,7 @@ class SelectTest extends ReactiveValueContract:
         end for
     }
 
-    "the wired field is ONE reactive region over everything it reads, open or closed" in {
+    "the field's root is one region and the open panel's rows one region inside it; closed, the field reads nothing of the panel" in {
         for
             on            <- Signal.initRef(true)
             loading       <- Signal.initRef(false)
@@ -807,10 +810,50 @@ class SelectTest extends ReactiveValueContract:
             panel         <- regionsAbove(ui, "p-select-list")
             _             <- open.set(false)
             whenClosed    <- regionsAbove(ui, "p-select")
+            rows          <- elementsWithClass(ui, "p-select-option")
         yield assert(
-            whenOpen == 1 && panel == 1 && whenClosed == 1,
-            s"a pick writes the value and closes the panel; a nested region can repaint the older state: $whenOpen / $panel / $whenClosed"
+            whenOpen == 1 && panel == 2 && whenClosed == 1 && rows.isEmpty,
+            s"regions above the root open / above the rows / above the root closed: $whenOpen / $panel / $whenClosed, rows closed ${rows.size}"
         )
+    }
+
+    // A pick writes two refs (the selection, then the panel), read by two regions, one inside the other. The inner one must not
+    // paint the older state over the outer one's close, and the closed field must leave the panel's state unread.
+    "a pick from the open panel ends on the pick with the panel gone, and nothing paints the panel after it closes" in {
+        val log                                     = new kyo.internal.RecordingExchange
+        def paints: List[UI] < Sync                 = Sync.defer(UicTest.publishedIn(log))
+        def has(t: UI, cls: String): Boolean < Sync =
+            UicTest.walkingLive.let(true)(elementsWithClass(t, cls)).map(_.nonEmpty)
+        for
+            open  <- Signal.initRef(true)
+            hi    <- Signal.initRef(0)
+            q     <- Signal.initRef("")
+            value <- Signal.initRef(Maybe.empty[Fruit])
+            ui = select.selection(value).wired(open, hi, q, Present("sel"))
+            seen <- headlessCommands.map { cmds =>
+                kyo.internal.ReactiveUI.subscribed(UI.div(ui), log, commands = Present(cmds)) { _ =>
+                    for
+                        _      <- waitFor(hi.waiters.map(_ > 0))
+                        before <- paints.map(_.size)
+                        _      <- pickRow(fruit(2))(ui)
+                        _      <- waitFor(open.get.map(!_))
+                        _      <- waitFor(hi.waiters.map(_ == 0))
+                        _      <- waitFor(open.waiters.map(_ > 0))
+                        after  <- paints.map(ps => ps.take(ps.size - before))
+                        // Newest first: the root's close, and whatever came after it.
+                        closing <- Kyo.foreach(after)(t => has(t, "p-select").map(r => (t, r)))
+                        upTo = closing.takeWhile(!_._2).map(_._1) ++ closing.find(_._2).map(_._1).toList
+                        stale <- Kyo.foreach(upTo)(has(_, "p-select-option")).map(_.count(identity))
+                        held  <- value.get
+                        label <- UicTest.walkingLive.let(true)(elementWithClass(ui, "p-select-label")).map(textOf)
+                    yield (held.map(_.name), label, stale)
+                }
+            }
+        yield assert(
+            seen == (Present(fruit(2).name), fruit(2).name, 0),
+            s"(held, label, trees with rows painted from the close on) $seen, expected (${fruit(2).name}, ${fruit(2).name}, 0)"
+        )
+        end for
     }
 
     "opening while the filter is off leaves the query alone; opening while it is on starts a fresh one" in {
@@ -971,6 +1014,8 @@ class SelectTest extends ReactiveValueContract:
             saysFixed = readOnly,
             ready = Present(triggered(_)),
             after = Seq(pickRow(fruit(1))(_)),
+            // The label is a block of its own, so a pick that lands before the panel it came from was painted moves only its text.
+            nextText = Present(fruit(1).name),
             placed = Present(place)
         )
 
@@ -1007,7 +1052,8 @@ class SelectTest extends ReactiveValueContract:
             answers = opens,
             saysFixed = readOnly,
             ready = Present(triggered(_)),
-            after = Seq(pickRow(fruit(1))(_))
+            after = Seq(pickRow(fruit(1))(_)),
+            nextText = Present(fruit(1).name)
         )
 
     holds(valueSlot("selection", (s, f) => s.onPick(f), "onPick"))

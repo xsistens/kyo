@@ -329,6 +329,21 @@ abstract class UicTest extends kyo.test.Test[Any]:
             waitFor(Sync.defer(d.patched.take(d.patched.size - d.patchedBefore).exists(holds))).andThen(true)
         )
 
+    /** Whether, after the gestures, the field shows what `shown` asks for in a tree it publishes, or a text channel patches
+      * `text` in: a component that draws its parts as channels and small regions shows a change either way, by the timing of
+      * the gestures (a pick that lands before the panel it came from was painted closes nothing the client saw, and only the
+      * label's text moves).
+      */
+    private[uic] def shownOrTextedAfter(ui: UI, ready: UI => Boolean < Sync)(acts: (UI => Any < Async)*)(
+        shown: UI => Boolean < Sync,
+        text: String
+    )(using Frame, kyo.test.AssertScope): Boolean < Async =
+        drive(ui, ready, Nil, acts) { d =>
+            def painted: Boolean < Sync =
+                Sync.defer(d.published.size > d.publishedBefore).map(grew => if grew then d.since.map(shown) else Kyo.lift(false))
+            waitFor(Sync.defer(d.texted.contains(text)).map(t => if t then Kyo.lift(true) else painted)).andThen(true)
+        }
+
     /** What [[drive]] hands its `finish`: everything the field published and patched, and how much of each came before
       * the last gesture.
       */
@@ -339,6 +354,9 @@ abstract class UicTest extends kyo.test.Test[Any]:
     )(using Frame):
         def published: List[UI]             = UicTest.publishedIn(log)
         def patched: List[(String, String)] = UicTest.patchedIn(log)
+
+        /** Every text a text channel patched in, newest first. */
+        def texted: List[String] = log.recorded.collect { case op: kyo.internal.RecordingExchange.Op.Text => op.value }.toList.reverse
 
         /** Every tree published, with the path of the region or mount that published it, newest first. */
         def paints: List[(Seq[String], UI)] =

@@ -163,6 +163,7 @@ class ElementIdTest extends UicTest:
             stat  <- owner(sel.render)
             filt  <- owner(sel.filterable(true).wired(open, hi, q, Present("mine")))
             label <- elementWithClass(sel.wired(open, hi, q, Present("mine")), "p-select-label")
+            said  <- ariaNow(live, "activedescendant")
         yield
             assert(live.attrs.role.contains("combobox") && live.attrs.cssClasses.contains("p-select"))
             assert(stat.attrs.cssClasses.contains("p-select"))
@@ -170,7 +171,7 @@ class ElementIdTest extends UicTest:
             assert(label.attrs.identifier.isEmpty, "the label text is not the control")
             // The parts derived from the id still come off the same value.
             assert(live.attrs.ariaAttrs.get("controls").contains("mine-list"))
-            assert(live.attrs.ariaAttrs.get("activedescendant").contains("mine-option-0"))
+            assert(said.contains("mine-option-0"), s"the combobox announces $said")
         end for
     }
 
