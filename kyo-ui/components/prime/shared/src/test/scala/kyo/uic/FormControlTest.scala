@@ -24,7 +24,7 @@ class FormControlTest extends UicTest:
     "a member the class writes is a HasSetter from its companion, where a binding asks for it" in {
         val chosen  = summon[HasSetter[Select[String], "selection", UI.Prop[String]]]
         val integer = summon[HasSetter[InputNumber, "integer", Boolean]]
-        assert(chosen(uic.Select[String](), "a").p.choice.isDefined)
+        assert(chosen(uic.Select[String](), "a").p.selection.choice.isDefined)
         assert(integer(uic.InputNumber(), true).p.integerFlag)
     }
 
