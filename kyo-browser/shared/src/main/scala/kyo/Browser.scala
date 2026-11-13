@@ -510,9 +510,9 @@ object Browser:
             }
         }
 
-    /** Fills the input element matched by the selector with the given text.
+    /** Fills the input, textarea or editable element matched by the selector with the given text.
       *
-      * A single `Runtime.evaluate` JS dispatch sets the element's value via the prototype-resolved native setter
+      * For inputs and textareas, a single `Runtime.evaluate` JS dispatch sets the value via the prototype-resolved native setter
       * (`HTMLInputElement.prototype` / `HTMLTextAreaElement.prototype` / `HTMLSelectElement.prototype`), then dispatches exactly one
       * `input` event and exactly one `change` event (both `bubbles: true`). The native setter bypasses framework-overridden prototype
       * setters (e.g. React's controlled-input monkey-patch) so frameworks still observe a genuine `input` event from a real value mutation.
@@ -520,17 +520,23 @@ object Browser:
       * end of the value.
       *
       * Behavior contract:
-      *   - Exactly one `input` and exactly one `change` event per `fill` call, regardless of prior content.
-      *   - `fill("")` fires exactly one `input` event with empty value.
+      *   - Inputs and textareas receive exactly one `input` and one `change` event per call, regardless of prior content.
+      *   - `fill("")` on an input or textarea fires exactly one `input` event with empty value.
       *   - The input is left focused with caret at end of value.
       *   - All HTML5 input types route through the same shim: date, time, datetime-local, month, week, number, range, color, textarea, and
       *     any other type whose `value` is a `string`.
       *   - SELECT elements take a JS-internal short-circuit that mirrors [[Browser.select]]'s semantics (assign `el.value`, dispatch
       *     `change` only, no readback).
+      *   - Contenteditable elements use native text insertion over their selected contents, including empty replacements. The editor
+      *     receives trusted native input events, without synthetic `change` or keyboard events. Native multiline editing may produce
+      *     several `input` events. Focus loss during `beforeinput` or `textInput` cancels the pending edit and fails with
+      *     [[BrowserElementNotActionableException.Reason.NotFocused]]. The temporary guards belong to the original document and drain
+      *     on success, failure or interruption.
       *
       * After dispatch the value is read back via `Runtime.evaluate`: if the framework or the element type rejected / normalized the value
       * away from `text` (e.g. `<input type="number">` storing `""` for non-numeric input), the enclosing Retry loop catches
       * [[BrowserElementNotActionableException.Reason.FillDesync]] and retries until the schedule exhausts.
+      * Editable readback preserves logical paragraph/line boundaries and treats browser-generated no-break spaces as spaces.
       *
       * Does not fire `compositionstart` / `compositionend` events; IME-aware listeners must subscribe to `input` events instead.
       */
@@ -542,9 +548,12 @@ object Browser:
             Actionability.withActionable(selector, requireFillable = false, requireEnabled = true) { _ =>
                 val fillJs
                     : Unit < (Browser & Abort[BrowserReadException]) =
-                    ProbesJs.fillViaJs(selector, text).map { wasSelect =>
-                        if wasSelect then ()
-                        else ProbesJs.verifyFilledValue(selector, text)
+                    ProbesJs.fillViaJs(selector, text).map {
+                        case ProbesJs.FillTarget.Select      => ()
+                        case ProbesJs.FillTarget.Field       => ProbesJs.verifyFilledValue(selector, text)
+                        case ProbesJs.FillTarget.EditingHost =>
+                            EditableInput.fill(selector, text)
+                                .andThen(ProbesJs.verifyFilledValue(selector, text))
                     }
                 MutationSettlement.afterAction(fillJs)(scopeSelector = Present(selector))
             }
@@ -1754,8 +1763,10 @@ object Browser:
                     val valueExpr = s"JSON.stringify(($jsExpr).map(el => window.__kyoDiscoverProbe(el)))"
                     SettleRead.settle("elements", valueExpr) { raw =>
                         Json.decode[Seq[DiscoverJs.ElementInfoWire]](raw) match
-                            case Result.Success(ws) => Chunk.from(ws).map(toElementInfo)
-                            case _                  => Abort.fail(BrowserProtocolErrorException.decodeFailure("elements", raw))
+                            case Result.Success(ws)      => Chunk.from(ws).map(toElementInfo)
+                            case Result.Failure(problem) =>
+                                Abort.fail(BrowserProtocolErrorException.decodeFailure("elements", problem.problem))
+                            case Result.Panic(error) => Abort.panic(error)
                     }
                 }
         }
@@ -1794,8 +1805,9 @@ object Browser:
             case Result.Success(env)                 =>
                 env.info match
                     case Present(w) => Present(toElementInfo(w))
-                    case Absent     => Abort.fail(BrowserProtocolErrorException.decodeFailure(callee, raw))
-            case _ => Abort.fail(BrowserProtocolErrorException.decodeFailure(callee, raw))
+                    case Absent     => Abort.fail(BrowserProtocolErrorException.decodeFailure(callee, "missing element info"))
+            case Result.Failure(problem) => Abort.fail(BrowserProtocolErrorException.decodeFailure(callee, problem.problem))
+            case Result.Panic(error)     => Abort.panic(error)
 
     /** Returns the flat accessibility node list for the current page. Each entry captures the role, name, and properties for a node Chrome
       * considers exposed to assistive tech. The iframe context honoured is whatever [[withIFrame]] last set; absent that, the top-level
@@ -2689,7 +2701,7 @@ object Browser:
             case other =>
                 Abort.fail(BrowserProtocolErrorException.decodeFailure("recordConsole", s"unknown console type '$other'"))
         levelE.map { lv =>
-            val text     = wire.args.flatMap(a => a.value.orElse(a.description).toChunk).mkString(" ")
+            val text     = wire.args.map(_.text).mkString(" ")
             val location = wire.stackTrace.flatMap(st =>
                 Maybe.fromOption(st.callFrames.headOption).flatMap(cf => cf.url.map(u => u + ":" + cf.lineNumber.getOrElse(0)))
             )
@@ -3326,9 +3338,8 @@ object Browser:
                 }
             case Present(exWire: ExceptionThrownWire) =>
                 val d = exWire.exceptionDetails
-                // CDP reports `text` as the bare "Uncaught" prefix and carries the real error message in
-                // `exception.description`; join them so the message is meaningful.
-                val text = d.exception.flatMap(_.description).map(desc => d.text + " " + desc).getOrElse(d.text)
+                // CDP reports `text` as "Uncaught"; the exception holds a primitive value or an object's description.
+                val text = d.exception.map(_.text).map(value => d.text + " " + value).getOrElse(d.text)
                 // Prefer the top-level `url:line`; fall back to the first stack frame when the throw carries no url.
                 val topFrame = d.stackTrace.flatMap(st => Maybe.fromOption(st.callFrames.headOption))
                 val location =
@@ -3966,7 +3977,8 @@ object Browser:
 
     /** DISCOVER artifact: a resolved element snapshot. Optional fields (`id` / `text` / `role`) are `Maybe`, never null; `classes` is a
       * `Chunk`; `selector` is the generated stable unique CSS path. The companion holds the pure `leaves` filter. `area` delegates to
-      * `bounds.area`.
+      * `bounds.area`. Text is trimmed and limited to 200 UTF-16 units without splitting a surrogate pair; lone DOM surrogates are replaced
+      * by U+FFFD, and empty text is `Absent`.
       */
     final case class ElementInfo(
         selector: String,

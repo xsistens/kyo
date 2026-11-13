@@ -1,8 +1,113 @@
 package kyo
 
+import java.util.concurrent.ConcurrentHashMap
 import kyo.Clock.TimeControl
 
 class StreamCoreExtensionsTest extends kyo.test.Test[Any]:
+
+    "element fiber ownership" - {
+        def init(using Frame) =
+            // Unsafe: each test owns an isolated registry and its stop flag.
+            Sync.Unsafe.defer {
+                val live = new ConcurrentHashMap[Fiber.Unsafe[Any, Nothing], java.lang.Boolean]
+                (new StreamCoreExtensions.ElementFibers(live, AtomicBoolean.Unsafe.init(false)), live)
+            }
+
+        "releases references when a pending fiber completes" in {
+            for
+                state <- init
+                (elements, live) = state
+                promise <- Fiber.Promise.init[Int, Any]
+                _       <- elements.own(promise)
+                held    <- Sync.defer(live.size())
+                _       <- promise.completeDiscard(Result.succeed(42))
+                value   <- promise.get
+                left    <- Sync.defer(live.size())
+            yield
+                assert(held == 1)
+                assert(value == 42)
+                assert(left == 0)
+        }
+
+        "releases references when stop interrupts pending fibers" in {
+            for
+                state <- init
+                (elements, live) = state
+                promise <- Fiber.Promise.init[Int, Any]
+                _       <- elements.own(promise)
+                held    <- Sync.defer(live.size())
+                _       <- elements.stop
+                result  <- promise.getResult
+                left    <- Sync.defer(live.size())
+            yield
+                assert(held == 1)
+                assert(result.isPanic)
+                assert(left == 0)
+        }
+
+        "does not retain an already completed fiber" in {
+            for
+                state <- init
+                (elements, live) = state
+                fiber <- elements.own(Fiber.succeed(42))
+                value <- fiber.get
+                left  <- Sync.defer(live.size())
+            yield
+                assert(value == 42)
+                assert(left == 0)
+        }
+
+        "releases references after an interrupted task finishes" in {
+            for
+                state <- init
+                (elements, live) = state
+                started  <- Latch.init(1)
+                gate     <- Latch.init(1)
+                released <- AtomicInt.init(0)
+                fiber    <- elements.own(Fiber.initUnscoped {
+                    Sync.ensure(released.incrementAndGet.unit)(started.release.andThen(gate.await))
+                })
+                _      <- started.await
+                held   <- Sync.defer(live.size())
+                _      <- elements.stop
+                result <- Sync.ensure(gate.release)(fiber.getResult)
+                _      <- assertEventually(Sync.defer(live.isEmpty()))
+                count  <- released.get
+            yield
+                assert(held == 1)
+                assert(result.isPanic)
+                assert(count == 1)
+        }
+
+        "rejects ownership after stop without evaluating the fork" in {
+            for
+                state <- init
+                (elements, live) = state
+                started <- AtomicInt.init(0)
+                fork = elements.own(started.incrementAndGet.andThen(Fiber.succeed(42)))
+                _      <- elements.stop
+                result <- Abort.run[Closed](fork)
+                count  <- started.get
+                left   <- Sync.defer(live.size())
+            yield
+                assert(result.isFailure)
+                assert(count == 0)
+                assert(left == 0)
+        }
+
+        "interrupts a fiber when stop runs during its fork" in {
+            for
+                state <- init
+                (elements, live) = state
+                promise <- Fiber.Promise.init[Int, Any]
+                fiber   <- elements.own(elements.stop.andThen(promise))
+                result  <- fiber.getResult
+                left    <- Sync.defer(live.size())
+            yield
+                assert(result.isPanic)
+                assert(left == 0)
+        }
+    }
 
     "factory" - {
         "collectAll" in {
@@ -908,6 +1013,25 @@ class StreamCoreExtensionsTest extends kyo.test.Test[Any]:
     }
 
     "stream resource cleanup (#1398)" - {
+        for (name, pure) <- Seq("takeWhile" -> false, "takeWhilePure" -> true) do
+            s"$name releases after delivering its prefix without running the upstream tail" in {
+                AtomicRef.init(Chunk.empty[String]).map { log =>
+                    val stream = Stream:
+                        Sync.ensure(log.updateAndGet(_ :+ "release").unit):
+                            Emit.value(Chunk(1, 2, 3)).andThen(Abort.fail("upstream tail"))
+                    val selected =
+                        if pure then stream.takeWhilePure(_ < 3)
+                        else stream.takeWhile(v => Kyo.lift(v < 3))
+                    Abort.run[String](selected.tap(v => log.updateAndGet(_ :+ v.toString).unit).run).map { result =>
+                        log.get.map { entries =>
+                            assert(result == Result.succeed(Chunk(1, 2)))
+                            assert(entries == Chunk("1", "2", "release"))
+                        }
+                    }
+                }
+            }
+        end for
+
         "Scope.ensure runs after full stream consumption" in {
             AtomicInt.init(0).map { counter =>
                 Scope.run {
@@ -1346,6 +1470,99 @@ class StreamCoreExtensionsTest extends kyo.test.Test[Any]:
             end for
         }
 
+        // Interrupts a consumer of `map` once all four element fibers have started and parked on a gate. The gate opens only on the way
+        // out, so an element fiber the interrupt missed stays parked, never counts as released, and the leaf ends on its timeout.
+        def interruptsEveryElementFiber(map: (Int => Int < Async) => Any < (Abort[Any] & Async))(using kyo.test.AssertScope) =
+            for
+                started  <- Latch.init(4)
+                released <- AtomicInt.init(0)
+                gate     <- Latch.init(1)
+                consumer <- Fiber.initUnscoped {
+                    map { v =>
+                        Sync.ensure(released.incrementAndGet.unit):
+                            started.release.andThen(gate.await).andThen(v)
+                    }
+                }
+                _ <- started.await
+                _ <- consumer.interrupt
+                _ <- consumer.getResult
+                _ <- Sync.ensure(gate.release)(assertEventually(released.get.map(_ == 4)))
+            yield ()
+
+        // one element per chunk, so each gets its own fiber
+        val fourChunks: Stream[Int, Any] =
+            Stream(Emit.valueWith(Chunk(1))(Emit.valueWith(Chunk(2))(Emit.valueWith(Chunk(3))(Emit.value(Chunk(4))))))
+
+        "mapChunkPar interrupted with element fibers buffered interrupts every element fiber" in {
+            interruptsEveryElementFiber(f => fourChunks.mapChunkPar(8)(Kyo.foreach(_)(f)).run).andThen(succeed)
+        }
+
+        "mapParUnordered interrupted with element fibers buffered interrupts every element fiber" in {
+            interruptsEveryElementFiber(f => fourChunks.mapParUnordered(8)(f).run).andThen(succeed)
+        }
+
+        "mapChunkParUnordered interrupted with element fibers buffered interrupts every element fiber" in {
+            interruptsEveryElementFiber(f => fourChunks.mapChunkParUnordered(8)(Kyo.foreach(_)(f)).run).andThen(succeed)
+        }
+
+        // The interrupt can land while an element fiber is being handed over: delivered to the consumer's take but not yet joined, or
+        // forked by the producer but not yet put. Neither the channel nor a join holds it there. Rounds run sixteen at a time so the
+        // scheduler is busy enough to reach those windows; every round must still interrupt every element fiber.
+        "mapPar interrupted mid hand-over interrupts every element fiber" in {
+            Async.foreachDiscard(1 to 2000, 16)(_ => interruptsEveryElementFiber(f => fourChunks.mapPar(8)(f).run)).andThen(succeed)
+        }
+
+        "mapChunkPar interrupted mid hand-over interrupts every element fiber" in {
+            Async.foreachDiscard(1 to 2000, 16)(_ =>
+                interruptsEveryElementFiber(f => fourChunks.mapChunkPar(8)(Kyo.foreach(_)(f)).run)
+            ).andThen(succeed)
+        }
+
+        "mapParUnordered interrupted mid hand-over interrupts every element fiber" in {
+            Async.foreachDiscard(1 to 2000, 16)(_ => interruptsEveryElementFiber(f => fourChunks.mapParUnordered(8)(f).run))
+                .andThen(succeed)
+        }
+
+        "mapChunkParUnordered interrupted mid hand-over interrupts every element fiber" in {
+            Async.foreachDiscard(1 to 2000, 16)(_ =>
+                interruptsEveryElementFiber(f => fourChunks.mapChunkParUnordered(8)(Kyo.foreach(_)(f)).run)
+            ).andThen(succeed)
+        }
+
+        // Element 1 finishes alone and is the one the consumer takes, so the stop always finds the other three holding.
+        def releasesEveryElementWhenTheConsumerStops(map: (Int => Int < Async) => Chunk[Int] < (Abort[Any] & Async))(using
+            kyo.test.AssertScope
+        ) =
+            for
+                started  <- Latch.init(3)
+                released <- AtomicInt.init(0)
+                gate     <- Latch.init(1)
+                res      <- map { v =>
+                    if v == 1 then started.await.andThen(v)
+                    else
+                        Sync.ensure(released.incrementAndGet.unit):
+                            started.release.andThen(gate.await).andThen(v)
+                }
+                _ <- assertEventually(released.get.map(_ == 3))
+                r <- released.get
+            yield
+                assert(res == Chunk(1))
+                assert(r == 3, s"released $r of the 3 element fibers that had acquired")
+            end for
+        end releasesEveryElementWhenTheConsumerStops
+
+        "mapChunkPar releases an element's resource when the consumer stops" in {
+            releasesEveryElementWhenTheConsumerStops(f => fourChunks.mapChunkPar(8)(Kyo.foreach(_)(f)).take(1).run)
+        }
+
+        "mapParUnordered releases an element's resource when the consumer stops" in {
+            releasesEveryElementWhenTheConsumerStops(f => fourChunks.mapParUnordered(8)(f).take(1).run)
+        }
+
+        "mapChunkParUnordered releases an element's resource when the consumer stops" in {
+            releasesEveryElementWhenTheConsumerStops(f => fourChunks.mapChunkParUnordered(8)(Kyo.foreach(_)(f)).take(1).run)
+        }
+
         "the rest of a public peel cannot be forked" in {
             typeCheckFailure(
                 """
@@ -1370,40 +1587,32 @@ class StreamCoreExtensionsTest extends kyo.test.Test[Any]:
 
         // A scope cannot tell a remainder nobody will resume from one someone
         // still intends to resume, so it releases at its own exit: one release, and the late consumer refused.
-        "a rest from splitAt carried to another fiber is released at the peeling scope's exit, and consuming it there is refused" in {
+        "a rest from splitAt first consumed on another fiber after the peeling scope exits is refused" in {
             AtomicInt.init(0).map { released =>
-                Latch.init(1).map { entered =>
-                    Latch.init(1).map { gate =>
-                        Promise.init[Stream[Int, Async], Any].map { handoff =>
-                            val stream: Stream[Int, Async] = Stream:
-                                Sync.ensure(released.incrementAndGet.unit):
-                                    Emit.valueWith(Chunk(1))(entered.release.andThen(gate.await).andThen(Emit.value(Chunk(2))))
-                            for
-                                peeler <- Fiber.initUnscoped {
-                                    Env.run(0) {
-                                        stream.splitAt(1).map { (head, rest) =>
-                                            handoff.complete(Result.succeed(rest)).andThen(entered.await).andThen(head)
-                                        }
-                                    }
-                                }
-                                consumer <- Fiber.initUnscoped(handoff.get.map(_.run))
-                                _        <- entered.await
-                                head     <- peeler.get
-                                atExit   <- released.get
-                                _        <- gate.release
-                                res      <- consumer.getResult
-                                total    <- released.get
-                            yield
-                                val rendered = res.toString
-                                assert(head == Chunk(1))
-                                assert(atExit == 1, s"the peeling scope released $atExit on its way out")
-                                assert(total == 1, s"released $total times in all")
-                                assert(res.isPanic, rendered)
-                                assert(rendered.contains("released when the scope that owned it ended"), rendered)
-                                assert(rendered.contains("Stream.splitAtWith"), rendered)
-                            end for
-                        }
-                    }
+                AtomicBoolean.init(false).map { used =>
+                    val stream: Stream[Int, Async] = Stream:
+                        Sync.ensure(released.incrementAndGet.unit):
+                            Emit.valueWith(Chunk(1))(used.set(true).andThen(Emit.value(Chunk(2))))
+                    for
+                        peeler   <- Fiber.initUnscoped(Env.run(0)(stream.splitAt(1)))
+                        split    <- peeler.get
+                        atExit   <- released.get
+                        consumer <- Fiber.initUnscoped(split._2.run)
+                        res      <- consumer.getResult
+                        total    <- released.get
+                        useRan   <- used.get
+                    yield
+                        val rendered = res.toString
+                        assert(split._1 == Chunk(1))
+                        assert(atExit == 1, s"the peeling scope released $atExit on its way out")
+                        assert(total == 1, s"released $total times in all")
+                        assert(!useRan)
+                        res match
+                            case Result.Panic(_: Closed) => succeed
+                            case other                   => fail(s"expected a closed bracket, got $other")
+                        assert(rendered.contains("released when the scope that owned it ended"), rendered)
+                        assert(rendered.contains("Stream.splitAtWith"), rendered)
+                    end for
                 }
             }
         }

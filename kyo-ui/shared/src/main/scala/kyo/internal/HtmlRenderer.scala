@@ -87,8 +87,9 @@ private[kyo] object HtmlRenderer:
             case KeyedChild(_, child) => bindsSignal(child)
             case m: Mounted           => m.placeholderUI.exists(bindsSignal)
             // A waiting boundary reads its content's signals to learn whether it holds a mount that loads.
-            case _: Bounded           => true
-            case _: Text | _: RawHtml => false
+            case _: Bounded => true
+            // A stylesheet is static CSS: it reads no signal.
+            case _: Text | _: RawHtml | _: StyleElement => false
 
     private[kyo] def renderRegion(ui: UI, path: Seq[String])(using Frame): String < Sync =
         renderRegion(ui, path, ReactiveRegion.RegionIdentity.root(path))
@@ -123,6 +124,7 @@ private[kyo] object HtmlRenderer:
             case _: Fragment[?]       => false
             case _: Text              => false
             case _: RawHtml           => false
+            case _: StyleElement      => false
             case _: Reactive[?]       => false
             case _: Foreach[?, ?]     => false
             case _: Mounted           => false
@@ -494,6 +496,9 @@ private[kyo] object HtmlRenderer:
 
             case UI.Ast.RawHtml(value) =>
                 w(sb, value)
+
+            case node: UI.Ast.StyleElement =>
+                w(sb, s"<style>${node.sheet.render(using node.frame).replace("</", "<\\/")}</style>")
 
             case UI.Ast.Text(value) =>
                 escInto(sb, value)
@@ -1919,6 +1924,30 @@ private[kyo] object HtmlRenderer:
           |    var pair=__kyoRanges.get(key);if(pair&&pair.start===node)found.add(key);}
           |  return found;
           |}
+          |// Markup equality alone misses dirty form properties. An unapplied property carrier still needs the insertion hooks.
+          |function kyoRangeSameElementState(a,b){
+          |  for(var i=0;i<a.attributes.length;i++)if(a.attributes[i].name.indexOf("data-kyo-prop-")===0)return false;
+          |  if(a.namespaceURI!=="http://www.w3.org/1999/xhtml")return true;
+          |  switch(a.tagName){
+          |    case "INPUT":return a.value===b.value&&a.checked===b.checked&&a.indeterminate===b.indeterminate;
+          |    case "TEXTAREA":return a.value===b.value;
+          |    case "SELECT":return a.selectedIndex===b.selectedIndex;
+          |    case "OPTION":return a.selected===b.selected;
+          |    default:return true;
+          |  }
+          |}
+          |function kyoRangeSameNode(a,b){
+          |  if(!a.isEqualNode(b))return false;if(a.nodeType!==1)return true;
+          |  if(!kyoRangeSameElementState(a,b))return false;
+          |  var left=a.querySelectorAll("*"),right=b.querySelectorAll("*");
+          |  for(var i=0;i<left.length;i++)if(!kyoRangeSameElementState(left[i],right[i]))return false;
+          |  return true;
+          |}
+          |function kyoRangeSameContent(start,end,fragment){
+          |  var a=start.nextSibling,b=fragment.firstChild;
+          |  while(a!==end&&b){if(!kyoRangeSameNode(a,b))return false;a=a.nextSibling;b=b.nextSibling;}
+          |  return a===end&&b===null;
+          |}
           |function kyoRangeReplace(id,html){
           |  if(!kyoRangeId(id))kyoRangeFail("malformed replacement id: "+id);
           |  if(!__kyoRanges)kyoRangeFail("registry is closed");var endpoints=__kyoRanges.get(id);
@@ -1953,6 +1982,12 @@ private[kyo] object HtmlRenderer:
           |    if(__kyoTreeRoot(live.start)!==liveRoot)removed.add(key);
           |    else if(!__kyoInPortalTwin(live.start))kyoRangeFail("duplicate id: "+key);});
           |  var oldRoots=kyoRangeRoots(endpoints.start,endpoints.end),newRoots=kyoRangeFragmentRoots(fragment),newSemanticRoots=kyoRangeSemanticRoots(newRoots,id),active=document.activeElement;
+          |  var newHost=newRoots.length===1&&newRoots[0].tagName==="TBODY"&&newRoots[0].getAttribute("data-kyo-range-host")===id;
+          |  // Compare synthetic table hosts separately from their semantic children. Keeping equivalent live nodes preserves a pressed click.
+          |  // Content equal to what the range shows takes the in-place path as a reconciliation that changes nothing.
+          |  var unchanged=synthetic&&newHost?parent.cloneNode(false).isEqualNode(newRoots[0].cloneNode(false))&&
+          |      kyoRangeSameElementState(parent,newRoots[0])&&kyoRangeSameContent(endpoints.start,endpoints.end,newRoots[0])
+          |    :!synthetic&&!newHost&&kyoRangeSameContent(endpoints.start,endpoints.end,fragment);
           |  // The pre-patch reads (focused node, enter and leave path sets, ghost clones of what is about to depart)
           |  // happen before either path touches the DOM, and the post-patch tail below runs for both: a morph is
           |  // still a patch, and a leave transition or a portal re-home has no business depending on which one painted.
@@ -1964,8 +1999,9 @@ private[kyo] object HtmlRenderer:
           |  var oldFocus=kyoFocusPathsRoots(oldRoots);
           |  // Morph only siblings into siblings, as DomReactiveRegions does: rows arriving in a range host move the
           |  // markers into that host below, which a morph of the live nodes into the wrapper would skip.
-          |  var hostWrapped=newRoots.length===1&&newRoots[0].tagName==="TBODY"&&newRoots[0].getAttribute("data-kyo-range-host")===id;
-          |  var finalRoots,morphed=!synthetic&&!hostWrapped&&kyoRangeMorph(endpoints,fragment);
+          |  var hostWrapped=newHost;
+          |  var finalRoots,morphed=unchanged||(!synthetic&&!hostWrapped&&kyoRangeMorph(endpoints,fragment));
+          |  if(unchanged)__kyoMorph.adoptSlots(endpoints.start,endpoints.end);
           |  if(morphed){finalRoots=kyoRangeRoots(endpoints.start,endpoints.end);
           |    removed.forEach(function(key){__kyoRanges.delete(key);});
           |    kyoRangeRescan(id,endpoints).forEach(function(pair,key){__kyoRanges.set(key,pair);});

@@ -1096,6 +1096,38 @@ class HttpServerTest extends BaseHttpTest:
                 }.andThen(assert(called))
             }
         }
+
+        "a chunked request body with malformed framing fails the handler's stream with HttpMalformedBodyException" in {
+            val bytes =
+                "POST /upload HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\nzz\r\nworld\r\n0\r\n\r\n"
+            Promise.init[(String, Result[HttpException, Unit]), Any].map { outcome =>
+                val ep = HttpRoute.postRaw("upload").request(_.bodyStream).response(_.bodyText).handler { req =>
+                    AtomicRef.init("").map { seen =>
+                        Abort.run[HttpException](req.fields.body.foreach(span =>
+                            seen.updateAndGet(_ + new String(span.toArrayUnsafe, "UTF-8"))
+                        ))
+                            .map(result => seen.get.map(text => outcome.completeDiscard(Result.succeed((text, result)))))
+                            .andThen(HttpResponse.ok("done"))
+                    }
+                }
+                withServer(ep) { url =>
+                    Scope.acquireRelease(Sync.Unsafe.defer {
+                        kyo.net.NetPlatform.transport.connect(url.host, url.port).uninterruptible().safe
+                    })(_.getResult.map {
+                        case Result.Success(conn) => Sync.Unsafe.defer(conn.close())
+                        case _                    => ()
+                    }).map(_.use { conn =>
+                        conn.outbound.safe.put(Span.fromUnsafe(bytes.getBytes("UTF-8")))
+                            .andThen(outcome.get).map { (text, result) =>
+                                assert(text == "hello")
+                                result match
+                                    case Result.Failure(_: HttpMalformedBodyException) => ()
+                                    case other => fail(s"Expected HttpMalformedBodyException, got $other")
+                            }
+                    })
+                }
+            }
+        }
     }
 
     "handler errors" - {
@@ -1550,6 +1582,52 @@ class HttpServerTest extends BaseHttpTest:
                 server.closeNow.unit
             }
         }
+    }
+
+    "cancelling an await does not complete the server's lifetime" in {
+        Scope.run {
+            for
+                server <- HttpServer.init(loopback)(HttpRoute.getRaw("alive").response(_.bodyText).handler(_ => HttpResponse.ok("ok")))
+                waiter <- Fiber.init(server.await)
+                _      <- assertEventually(Sync.Unsafe.defer(server.unsafe.awaitFiber.waiters() > 0))
+                _      <- waiter.interruptAwait
+                completedBeforeClose <- Sync.Unsafe.defer(server.unsafe.awaitFiber.done())
+                _                    <- Abort.run[Any](server.closeNow)
+            yield assert(!completedBeforeClose, "cancelling a waiter completed the server's shared lifetime promise")
+        }
+    }
+
+    "closeNow waits for handler finalizers" - {
+        for webSocket <- Seq(false, true) do
+            val kind = if webSocket then "WebSocket" else "HTTP"
+            s"$kind handler parked on an application await" in {
+                Scope.run {
+                    for
+                        entered   <- Latch.init(1)
+                        release   <- Fiber.Promise.init[Unit, Any]
+                        finalized <- Fiber.Promise.init[Unit, Any]
+                        _         <- Scope.ensure(release.completeUnitDiscard)
+                        work    = Sync.ensure(finalized.completeUnitDiscard)(entered.release.andThen(release.get))
+                        handler =
+                            if webSocket then HttpHandler.webSocket("park")((_, _) => work)
+                            else HttpRoute.getRaw("park").response(_.bodyText).handler(_ => work.andThen(HttpResponse.ok("done")))
+                        server <- HttpServer.init(loopback)(handler)
+                        client <- Fiber.init {
+                            Abort.run[Any] {
+                                if webSocket then HttpClient.webSocket(s"ws://127.0.0.1:${server.port}/park")(_ => Async.never)
+                                else HttpClient.getText(s"http://127.0.0.1:${server.port}/park").unit
+                            }
+                        }
+                        _                    <- entered.await
+                        _                    <- server.closeNow
+                        completedBeforeClose <- finalized.done
+                        // Also release a handler the broken implementation did not interrupt, before asserting the failure.
+                        _ <- release.completeUnitDiscard
+                        _ <- finalized.get
+                        _ <- client.interrupt
+                    yield assert(completedBeforeClose, "server close returned before its handler's finalizer completed")
+                }
+            }
     }
 
     "edge cases" - {

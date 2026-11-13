@@ -59,6 +59,7 @@ class KeyedRootParityTest extends kyo.test.Test[Any]:
     check("an svg element", Kyo.lift(Svg.svg(Svg.circle.r(1))))
     check("text", Kyo.lift(UI.Ast.Text("plain")))
     check("raw html", Kyo.lift(UI.rawHtml("<b>x</b>")))
+    check("a stylesheet", Kyo.lift(UI.stylesheet(Stylesheet.empty)))
     check("an empty fragment", Kyo.lift(UI.empty))
     check("a fragment of one", Kyo.lift(UI.fragment(UI.li("only"))))
     check("a fragment of several", Kyo.lift(UI.fragment(UI.li("a"), UI.li("b"))))

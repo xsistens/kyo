@@ -172,6 +172,22 @@ private[kyo] object MorphScript:
           |  __kyoRemoveLogical(parent,fromNode);
           |  return first;
           |}
+          |// A range whose content equals what it already shows is left as it is, which keeps a pressed click on its node. What a
+          |// morph of it would still have done is adopt the mount slots inside it: the pass over a span pair stamps `m` on a
+          |// slot marker (see __kyoPatchLogical), and only an adopted slot is left to its instance by the next repaint of the
+          |// region around it. Content equal to the payload holds no `m` (the server writes only `s`), so every slot in it is one
+          |// the morph would have stamped.
+          |function __kyoAdoptSlot(node){
+          |  var id=__kyoSpanId(node);if(id===null)return;
+          |  var flags=__kyoSpanFlags(node);if(!__kyoHasFlag(flags,"s"))return;
+          |  var k=__kyoFlagKey(flags);node.data="kyo-rs:"+id+(k===null?" m":" m k="+k);
+          |}
+          |function __kyoAdoptSlots(start,end){
+          |  for(var n=start.nextSibling;n&&n!==end;n=n.nextSibling){
+          |    if(n.nodeType===8)__kyoAdoptSlot(n);
+          |    else if(n.nodeType===1){var w=document.createTreeWalker(n,128);while(w.nextNode())__kyoAdoptSlot(w.currentNode);}
+          |  }
+          |}
           |// Reconcile the live logical run [fromStart,fromEnd) of parent toward [toStart,toEnd).
           |// A two-ended keyed pass runs first, then a single cursor over whatever it could not settle. The cursor
           |// alone can only insert IN FRONT of itself, so a key it finds behind itself has to be dragged forward past
@@ -338,7 +354,7 @@ private[kyo] object MorphScript:
           |  h.listAfter(state,target,touched);
           |  return true;
           |}
-          |return {run:__kyoMorphRun,applyList:__kyoApplyListTo,spanId:__kyoSpanId,logicalNext:__kyoLogicalNext,eachSpanNode:__kyoEachSpanNode};
+          |return {run:__kyoMorphRun,adoptSlots:__kyoAdoptSlots,applyList:__kyoApplyListTo,spanId:__kyoSpanId,logicalNext:__kyoLogicalNext,eachSpanNode:__kyoEachSpanNode};
           |""".stripMargin
 
 end MorphScript

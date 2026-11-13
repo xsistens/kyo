@@ -412,9 +412,9 @@ private[kyo] object EventDispatch:
                         case _ => unresolved(seen)
                     end match
                 end if
-            // Text and RawHtml are leaf content with no kyo-addressable Element children, so no event
+            // Text, RawHtml and StyleElement are leaf content with no kyo-addressable Element children, so no event
             // target can resolve through them.
-            case _: Text | _: RawHtml => unresolved(controlBelow)
+            case _: Text | _: RawHtml | _: StyleElement => unresolved(controlBelow)
             // A mount's content lives with its instance, found through the dispatch table like the node's handler finds it, and
             // occupies the node's path. An inert snapshot resolves to nothing, since no event reaches it.
             case m: Mounted if Boundaries.implicitOf(m).nonEmpty =>

@@ -85,6 +85,8 @@ case class Person(name: String, age: Int) derives Schema
 
 **Note:** nearly every method in this module takes an implicit `kyo.Frame` parameter used for source-location reporting in exceptions. The signatures shown throughout this document omit `(using Frame)` for readability; the compiler synthesizes it at the call site from the caller's frame.
 
+Case-class constructor parameters in `using` clauses are supplied from givens in the derivation scope. They stay off the wire, including parameters retained as `using val` members; only case fields are serialized. Decoding supplies the reader's `Frame` in that scope. Builders, conversions and focus setters resolve contextual parameters where their macros expand.
+
 ## Schemas: the single source of truth
 
 Every API in this module reads from a `Schema[A]`. Once you have one, serialization, navigation, validation, and conversion are methods you call on it:
@@ -1009,6 +1011,30 @@ On the text codecs an instant is RFC 3339 text: it is written in UTC (`2016-04-3
 Prefer `kyo.UUID` in new schemas. `Schema.uuidSchema` now names `Schema[kyo.UUID]`: it writes canonical lowercase UUID text through `UUID.show` and reads through `UUID.parse`. Explicit Java UUID schema references should use `Schema.javaUuidSchema`, while ordinary `summon[Schema[java.util.UUID]]` remains available. Both UUID types use a string wire representation, but their runtime schema tags remain type-specific.
 
 Any case class or sealed trait composed of these types derives a `Schema` automatically. Nested case classes work without additional setup.
+
+Generic sum cases are instantiated using the sum's type arguments. Derivation rejects a specialization when a resolved case is not a subtype of the requested sum; supply an explicit schema for that specialization.
+
+A `derives Schema` clause on `Response[A]` asks for a schema for every `A`. If its cases all extend `Response[Int]`, that generic instance cannot safely decode `Response[String]`. Derive only the supported specialization instead:
+
+```scala
+sealed trait Response[A]
+case class Count(value: Int) extends Response[Int]
+
+object Response:
+    given Schema[Response[Int]] = Schema.derived
+
+val schema = summon[Schema[Response[Int]]]
+assert(schema.decodeString[Json]("""{"Count":{"value":1}}""") == Result.succeed(Count(1)))
+```
+
+A `Record` derives as the product of its fields, in the order its type declares them, as a case class with those fields would:
+
+```scala
+val pet: Record["name" ~ String & "age" ~ Int] = "name" ~ "Rex" & "age" ~ 3
+
+val wire = Json.encode(pet) // {"name":"Rex","age":3}
+val back = Json.decode[Record["name" ~ String & "age" ~ Int]](wire)
+```
 
 `OrderedDict[K, V]` serializes in the same shape as `Dict[K, V]` and additionally preserves insertion order across an encode/decode round-trip: encoding walks the map in insertion order, and decoding rebuilds it by inserting entries in wire order.
 
@@ -2067,7 +2093,17 @@ When writing a custom schema for an opaque or wrapper type, you can also constru
 
 ## Exceptions
 
-Errors raised by the schema core and schema codecs extend the sealed `SchemaException` hierarchy. Format-specific helper APIs may define their own error types, for example YAML CST edit operations return `Yaml.Cst.EditException`. The most useful `SchemaException` subtypes:
+Errors raised by the schema core and schema codecs extend the sealed `SchemaException` hierarchy. Use `problem` to relay what went wrong to the author of the input, without advice about changing the schema configuration. The exception's full message keeps that advice and its cause for diagnostics:
+
+```scala doctest:scope=nested
+val failure = MissingFieldException(Seq("user"), "name")
+assert(failure.problem == "Missing required field 'name' at user")
+// The full message also advises adding the field to the input.
+```
+
+JSON parse failures retain a bounded snippet of the input and mark the failure with a caret. `ParseException.position` is the byte offset in the original JSON; `column` is the UTF-16 character index in the decoded snippet, or `-1` when a codec supplies no caret location. The snippet is cut on UTF-8 character boundaries.
+
+Format-specific helper APIs may define their own error types, for example YAML CST edit operations return `Yaml.Cst.EditException`. The most useful `SchemaException` subtypes:
 
 | Exception | Raised when |
 |-----------|-------------|

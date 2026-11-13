@@ -233,6 +233,8 @@ The interaction surface:
 | `typeText(text)` | `Unit` | Send a character sequence to the page-level active element |
 | `focus(selector)` | `Unit` | Move keyboard focus to the target |
 
+`fill` on a contenteditable editor uses native input so the editor's own model sees the edit. It preserves line boundaries and verifies the resulting text. Empty replacements use the same input path; no Delete key or synthetic `change` is sent. Focus loss during `beforeinput` or `textInput` cancels the pending edit and reports `NotFocused`. Temporary guards are released in the original document, including when the call is interrupted or the tab navigates.
+
 ### Browser.Key
 
 `press`, `keyDown`, and `keyUp` accept a `Browser.Key` value. The named constants cover all common non-printable keys; `Key(char)` wraps a single character for printable input:
@@ -287,6 +289,14 @@ yield (title, heading, items)
 end for
 ```
 
+Discovery reads return `ElementInfo` snapshots with geometry, flags and a text preview. `element` and `elementAt` return `Absent` when no element matches; `elements` returns snapshots in document order. Preview text is trimmed and limited to 200 UTF-16 units without splitting a surrogate pair. Lone DOM surrogates become U+FFFD, and empty text is `Absent`. A malformed snapshot reports the schema decoder's problem and location instead of the full reply.
+
+```scala
+Browser.elements(Browser.Selector.css("button, a")).map { infos =>
+    infos.map(info => (info.selector, info.text))
+}
+```
+
 The read surface:
 
 | Method | Returns | Notes |
@@ -301,11 +311,15 @@ The read surface:
 | `countNow(selector)` | `Int` | Point-in-time matched-element count (no retry, returns `0` when nothing matches) |
 | `selectionStart(selector)` | `Int` | Cursor position inside an `<input>` / `<textarea>` |
 | `boundingBox(selector)` | `Maybe[BoundingBox]` | Page-relative geometry |
+| `element(selector)` / `elementAt(x, y)` | `Maybe[Browser.ElementInfo]` | Settled discovery snapshot, or `Absent` |
+| `elements(selector)` | `Chunk[Browser.ElementInfo]` | Settled discovery snapshots in document order |
 | `role(selector)` / `accessibleName(selector)` | `Maybe[String]` | ARIA role / accessible name from the AX tree |
 | `url` / `title` | `String` | Page-level location and `<title>` |
 | `readableContent` | `String` | Text of the page's main content, one line per block element, after a Readability-style strip of navigation, ads and other chrome |
 | `accessibilityNodes` | `Chunk[Browser.AxNode]` | Flat AX tree of the current frame |
 | `consoleLogs` / `consoleLogs(level)` | `Chunk[Browser.ConsoleMessage]` | Console buffer captured since the tab attached. `ConsoleMessage` carries `level: Browser.ConsoleLevel`, `text: String`, and the source frame; the level-filtered overload returns only matching messages |
+
+`onConsole` and `recordConsole` preserve primitive arguments in their message text, including booleans, `null`, `undefined`, special numbers and bigints. Thrown primitive values are retained in error messages too.
 
 `screenshot` and `screenshotElement` return a `Browser.Image`. The type exposes: `binary: Span[Byte]` (raw bytes), `base64: String` (Base64-encoded), `writeFileBinary(path)` / `writeFileBase64(path)` (write to disk), and `renderToConsole(charsWidth, charsHeight)` (terminal sixel/block rendering for debugging). `pdf` returns raw `Span[Byte]` PDF bytes directly (not a `Browser.Image`); it only works in headless Chrome. The capture methods take a format and quality: `screenshot(width, height, format, quality)` and `screenshotElement(selector, format, quality)`, where `format` is a `Browser.ScreenshotFormat` (`Png`, `Jpeg`, or `Webp`, default `Png`) and `quality` (0 to 100) applies only to the lossy formats (`Jpeg` and `Webp`) and is ignored for `Png`.
 
