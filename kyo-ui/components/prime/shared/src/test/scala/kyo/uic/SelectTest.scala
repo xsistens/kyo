@@ -953,7 +953,8 @@ class SelectTest extends ReactiveValueContract:
     private def maybeSlot(
         name: String,
         hear: (uic.Select[Fruit], Maybe[Fruit] => UI.Action) => Frame ?=> uic.Select[Fruit],
-        event: String
+        event: String,
+        place: uic.Select[Fruit] => (Frame, UI.MountSite) ?=> UI = (s: uic.Select[Fruit]) => s.toUI
     ) =
         new SlotCase[uic.Select[Fruit], Maybe[Fruit]](
             name = name,
@@ -969,12 +970,26 @@ class SelectTest extends ReactiveValueContract:
             answers = opens,
             saysFixed = readOnly,
             ready = Present(triggered(_)),
-            after = Seq(pickRow(fruit(1))(_))
+            after = Seq(pickRow(fruit(1))(_)),
+            placed = Present(place)
         )
 
     // A pick is reported to onChange, then to onPick: each of them hears it.
     holds(maybeSlot("selection over Maybe", (s, f) => s.onChange(f), "onChange"))
     heardBy(maybeSlot("selection over Maybe, heard by onPick", (s, f) => s.onPick(a => f(Present(a))), "onPick"))
+    // The wrappers that place a Select keep its instance on their own place too.
+    holdsThroughHostRuns(maybeSlot(
+        "selection over Maybe, in a FloatLabel",
+        (s, f) => s.onChange(f),
+        "onChange",
+        uic.FloatLabel(_, "Fruit").toUI
+    ))
+    holdsThroughHostRuns(maybeSlot(
+        "selection over Maybe, in an IconField",
+        (s, f) => s.onChange(f),
+        "onChange",
+        uic.IconField(_).iconStart(uic.Icons.search).toUI
+    ))
 
     private def valueSlot(name: String, hear: (uic.Select[Fruit], Fruit => UI.Action) => Frame ?=> uic.Select[Fruit], event: String) =
         new SlotCase[uic.Select[Fruit], Fruit](
@@ -1032,7 +1047,8 @@ class SelectTest extends ReactiveValueContract:
         shows = elementsWithClass(_, "p-select-overlay").map(_.nonEmpty),
         answers = opens,
         saysFixed = readOnly,
-        ready = Present(triggered(_))
+        ready = Present(triggered(_)),
+        placed = Present(_.toUI)
     ))
 
     /** The select as its mount publishes it, the trigger wired. */
@@ -1095,7 +1111,8 @@ class SelectTest extends ReactiveValueContract:
         },
         ready = Present(elementsWithClass(_, "p-select-filter").map(_.nonEmpty)),
         startText = Present("ch"),
-        mountDraws = true
+        mountDraws = true,
+        placed = Present(_.toUI)
     ))
 
     private def shownRows(t: UI)(using Frame): Chunk[String] < Sync = elementsWithClass(t, "p-select-option").map(_.map(textOf))

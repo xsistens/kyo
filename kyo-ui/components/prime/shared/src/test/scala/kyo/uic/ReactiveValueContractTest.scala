@@ -511,7 +511,7 @@ abstract class ReactiveValueContract extends UicTest:
       * reader did is still shown after a host region around it runs again and hands it new props. Each run gives it a hearer of its
       * own, so the props of the run differ from the ones before whatever else the component takes.
       */
-    private def holdsThroughHostRuns[C, A](s: SlotCase[C, A]): Unit =
+    def holdsThroughHostRuns[C, A](s: SlotCase[C, A]): Unit =
         for
             place <- s.placed
             bare  <- s.bare
