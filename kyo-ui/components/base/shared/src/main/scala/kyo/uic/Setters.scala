@@ -27,6 +27,8 @@ object Setters:
       *   - A field of a [[kyo.UI.Ownable]] type binds what the setter is handed (`checked(v: Prop[A])`), and has a second setter,
       *     its event, which hears every change: `on<Field>Change`, or the name `@eventName` gives.
       *   - A callback field (`Maybe[A => UI.Action]`, `Maybe[(A, B) => UI.Action]`) takes the function itself.
+      *   - An optional function (`Opt[A => B]`, a key, a template, a matcher) takes the function itself, so a lambda is typed
+      *     against it as it would be against the function.
       *   - An action field (`Maybe[UI.Action]`) takes the action by name (`onClick(action: => UI.Action)`), so it is built
       *     when its event comes, each time, and not where the setter is called.
       *   - Any other field takes its own type.
@@ -43,6 +45,35 @@ object Setters:
     final private[kyo] val KindCall1   = 3
     final private[kyo] val KindCall2   = 4
     final private[kyo] val KindAction  = 5
+    final private[kyo] val KindOptFn   = 6
+
+    /** The methods Scala.js's `UndefOrOps` (scalajs-library 1.22) gives every value, which no generated setter may be named. */
+    final private[kyo] val undefOrOps: Set[String] = Set(
+        "collect",
+        "contains",
+        "exists",
+        "filter",
+        "filterNot",
+        "flatMap",
+        "flatten",
+        "fold",
+        "forall",
+        "foreach",
+        "get",
+        "getOrElse",
+        "isDefined",
+        "isEmpty",
+        "iterator",
+        "map",
+        "nonEmpty",
+        "orElse",
+        "orNull",
+        "toLeft",
+        "toList",
+        "toOption",
+        "toRight",
+        "withFilter"
+    )
 
     /** The step every generated setter runs: the field's new value, `value` as a setter of kind `kind` writes it over `old`. Public,
       * since the setters are generated where the component is.
@@ -63,7 +94,8 @@ object Setters:
                 // A by-name argument reaches the setter as the thunk the compiler made of it.
                 val thunk = value.asInstanceOf[() => UI.Action]
                 Present(UI.attempt(thunk()))
-            case _ => value
+            case KindOptFn => Present(value)
+            case _         => value
     end write
 
     private[kyo] def applyImpl[P: Type, Self: Type](using Quotes): Expr[Setters[P, Self]] =
@@ -75,6 +107,7 @@ object Setters:
         val named                      = TypeRepr.of[eventName].typeSymbol
         val ownable                    = TypeRepr.of[UI.Ownable[Any]].typeSymbol
         val maybe                      = TypeRepr.of[Maybe[Any]].typeSymbol
+        val opt                        = TypeRepr.of[Opt[Any]].typeSymbol
         val action                     = TypeRepr.of[UI.Action]
         val all                        = props.primaryConstructor.paramSymss.flatten.filterNot(_.isTypeParam)
 
@@ -107,6 +140,13 @@ object Setters:
                         case _ => Absent
                 case _ => Absent
 
+        // An optional function, `Opt[A => B]`: its setter takes the function, so a lambda handed to it is typed against it. The
+        // opaque `Opt` keeps its own symbol here, so a `Maybe` callback never reaches this case.
+        def optFunction(t: TypeRepr): Maybe[TypeRepr] =
+            t match
+                case AppliedType(o, List(fn)) if o.typeSymbol == opt && fn.isFunctionType => Present(fn)
+                case _                                                                    => Absent
+
         // An action field, `Maybe[UI.Action]`, and what its setter takes: `=> UI.Action` as `UI.attempt` declares it, read rather than
         // quoted for the reason `taken` gives (a quoted `=> UI.Action` prints as the computation type it stands for).
         def isAction(t: TypeRepr): Boolean =
@@ -128,9 +168,10 @@ object Setters:
                 case _ =>
                     if f.hasAnnotation(named) then report.errorAndAbort(s"@eventName on ${f.name}, which is no UI.Ownable field")
                     callback(t) match
-                        case Present((arity, fn)) => List(One(f.name, i, if arity == 1 then KindCall1 else KindCall2, fn))
-                        case _ if isAction(t)     => List(One(f.name, i, KindAction, byNameAction))
-                        case _                    => List(One(f.name, i, KindReplace, t))
+                        case Present((arity, fn))          => List(One(f.name, i, if arity == 1 then KindCall1 else KindCall2, fn))
+                        case _ if isAction(t)              => List(One(f.name, i, KindAction, byNameAction))
+                        case _ if optFunction(t).isDefined => List(One(f.name, i, KindOptFn, optFunction(t).get))
+                        case _                             => List(One(f.name, i, KindReplace, t))
                     end match
             end match
         }
@@ -138,6 +179,15 @@ object Setters:
             report.errorAndAbort(s"two setters of ${Type.show[P]} are named $n")
         )
         val kept = made.filterNot(s => declared.contains(s.name))
+        // Scala.js reads every value as a `js.UndefOr` of itself and gives it `UndefOrOps`, an extension that a call picks over a
+        // generated setter: `select.filter(f)` compiles on the JVM and calls `UndefOrOps.filter` on JS. Such a name is refused here,
+        // on every platform, so it is written in the class or the field is `@noSetter`.
+        kept.find(s => Setters.undefOrOps.contains(s.name)).foreach(s =>
+            report.errorAndAbort(
+                s"the setter ${s.name} of ${Type.show[P]} would be shadowed on Scala.js by UndefOrOps.${s.name}; write it in the class, " +
+                    "or mark the field @noSetter"
+            )
+        )
 
         def tuple(ts: List[TypeRepr]): TypeRepr =
             ts.foldRight(TypeRepr.of[EmptyTuple])((t, rest) => TypeRepr.of[*:].appliedTo(List(t, rest)))
