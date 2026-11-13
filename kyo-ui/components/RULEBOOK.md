@@ -276,6 +276,10 @@ says decides the setter:
 - **A `UI.Ownable` field** (`Controlled[A]`) binds: `checked(v: Prop[Boolean])`, a ref two way and anything else one way, and it
   has an event setter that hears every change, `onCheckedChange`, or the name `@eventName("onChange")` gives.
 - **A callback field** (`Maybe[A => UI.Action]`, `Maybe[(A, B) => UI.Action]`) takes the function itself: `onBlur(f)`.
+- **An optional function** (`Opt[A => B]`, a key, a template, a matcher) takes the function itself, so a lambda is typed against
+  it: Select's `optionKey(_.id)`.
+- **A name Scala.js gives every value** (`filter`, `map`, `get`, `contains` and the rest of `UndefOrOps`) is no generated setter:
+  on JS the extension wins the call, so `Setters` refuses the field and the class writes it (Select's `filter`).
 - **An action field** (`Maybe[UI.Action]`) takes the action by name: Button's `onClick(action: => UI.Action)`, built each time
   its event comes and never where the setter is called.
 - A function handed to an event or a callback, and an action, runs under `UI.attempt`, so its failure reaches the `onFailure`
