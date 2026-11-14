@@ -17,7 +17,9 @@ class RadioButtonTest extends ReactiveValueContract:
         input = "p-radiobutton-input",
         root = "p-radiobutton",
         checkedClass = "p-radiobutton-checked",
-        fixedAria = "disabled"
+        fixedAria = "disabled",
+        // As an app places it, which keys an instance on the place.
+        placed = Present(_.toUI)
     ))
 
     private def radio(ui: UI)(using Frame): UI.Ast.Radio < Sync =
