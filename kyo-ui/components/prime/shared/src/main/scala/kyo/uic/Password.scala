@@ -24,10 +24,10 @@ import kyo.UI.*
   * digit] and at least 6 chars; strong = all three and at least 8 chars;
   * anything else weak; empty shows `promptLabel`.
   *
-  * The text is the reader's: unbound, the instance keeps it in a ref of its own from an empty start, and a constant is where
-  * that ref starts, so the meter judges what was typed and a reveal or a host region that runs again keeps it. A `SignalRef`
-  * binds two way; any other `Signal[String]` binds one way, the field and the meter show it, and an edit only reports through
-  * `onInput` and `onChange`. Validation is Prime's `.p-invalid` model: `invalid` plus the optional `invalidMessage` row below
+  * The text is the reader's unbound or from a `defaultValue`: the instance keeps it in a ref of its own from an empty start or
+  * the default, so the meter judges what was typed and a reveal or a host region that runs again keeps it. A bound value holds
+  * the field (see [[kyo.UI.Bound]]): a `SignalRef` binds two way; a constant or any other `Signal[String]` is what the field and
+  * the meter show, and an edit only reports through `onInput` and `onChange`, put back where the owner does not take it. Validation is Prime's `.p-invalid` model: `invalid` plus the optional `invalidMessage` row below
   * the field and the meter.
   */
 final class Password private[uic] (private[uic] val p: Password.Props) extends Component(Setters[Password.Props, Password]), Node,
@@ -50,8 +50,13 @@ final class Password private[uic] (private[uic] val p: Password.Props) extends C
     def onChange(f: String => UI.Action)(using Frame): Password =
         new Password(p.copy(onChange = Present(Callback.of(f)), value = p.value.heardToo))
 
+    /** The text the field starts with; the reader owns it from there, in the instance's own ref. A bound `value` still holds the
+      * field.
+      */
+    def defaultValue(v: String): Password = new Password(p.copy(value = p.value.startAt(v)))
+
     /** One instance per place, drawn once: it holds the reader's text (unbound in the instance's own ref from an empty start,
-      * from a constant in that ref from the constant) and the reveal, and a host region that runs again hands it the run's
+      * from a default in that ref from the default) and the reveal, and a host region that runs again hands it the run's
       * props instead of starting it over (see [[Password.drawnWith]]).
       */
     private[uic] def render(using Frame): UI =
@@ -72,11 +77,11 @@ object Password:
         /** The value. A `SignalRef` binds TWO-WAY: an edit writes it, and its changes update the field and the meter. Any other
           * signal binds ONE-WAY: the field and the meter show it, and an edit writes nothing and only reports through `onInput`
           * and `onChange`, so the app writes its own state and the field follows; with neither, a card says the reader cannot
-          * change it. A constant is where the text starts. Unbound or from a constant, the instance keeps the text in a ref of
-          * its own: the meter judges what the reader typed, and a reveal or a host region that runs again keeps it.
+          * change it. A constant holds the field at that text. Unbound or from a `defaultValue`, the instance keeps the text in a
+          * ref of its own: the meter judges what the reader typed, and a reveal or a host region that runs again keeps it.
           * `ref.readOnly` opts a ref out. Its event `onInput` fires with the text after every keystroke.
           */
-        @eventName("onInput") value: Controlled[String] = Controlled(start = Present(""), constantStarts = true),
+        @eventName("onInput") value: Controlled[String] = Controlled(start = Present("")),
         /** Adds the eye toggle that reveals and masks the typed text (Prime's `toggleMask`). */
         toggleMask: Boolean = false,
         /** Shows the strength meter below the field (inline; see the class doc). */
@@ -110,7 +115,7 @@ object Password:
         fluid: Prop[Boolean] = false,
         onChange: Maybe[String => UI.Action] = Absent,
         /** Fires on focus loss (native `blur`) with the text the field holds as focus leaves it: what the reader typed, also
-          * unbound or from a constant, with the meter and the reveal on or off. Unlike `onChange` it fires even when the text
+          * unbound or from a default, with the meter and the reveal on or off. Unlike `onChange` it fires even when the text
           * was not edited. The form-validation layer wires its `Blur` trigger here.
           */
         onBlur: Maybe[String => UI.Action] = Absent,
