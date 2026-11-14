@@ -1250,8 +1250,9 @@ private[kyo] object ReactiveMacro:
         // ---- What each run of a region takes from the reader (UI.Loss) ----
         //
         // A run draws the block's content again over the page, and the engine keeps every element it can. What the content itself
-        // says to start over it cannot keep: a native field's value stated as a constant is put back by every run, and a mount with
-        // no key starts a new instance. Both are refused where the block writes them; what the block cannot see (a component, a
+        // says to start over it cannot keep: a native field's default that reads starts the field over whenever a run moves it, and a
+        // mount with no key starts a new instance. A binding is no loss (UI.Bound): the field shows it on every run, and kyo-ui puts back
+        // an edit nobody takes. Both losses are refused where the block writes them; what the block cannot see (a component, a
         // helper, a prop whose runtime class decides) is the runtime check's, `UI.RenderKind.Lost`.
         if TypeRepr.of[T] <:< TypeRepr.of[UI] then
             // The block draws a region when the structure reads: a read, or a `val` that holds one, outside every channel argument.
@@ -1279,14 +1280,16 @@ private[kyo] object ReactiveMacro:
                     TypeRepr.of[UI.Ast.RangeInput],
                     TypeRepr.of[UI.Ast.Opt]
                 )
-                // Whether `.name` on a `t` sets what the reader changes: an option's `value` is the value it stands for, its
-                // `selected` the reader's choice; every other native field's `value` or `checked` is the reader's.
-                def states(t: TypeRepr, name: String): Boolean =
-                    if t.widen <:< TypeRepr.of[UI.Ast.Opt] then name == "selected"
-                    else (name == "value" || name == "checked") && natives.exists(t.widen <:< _)
-                def mayBeSignal(t: TypeRepr): Boolean = t.widen.dealias match
-                    case OrType(a, b) => mayBeSignal(a) || mayBeSignal(b)
-                    case other        => other.baseClasses.contains(signalSymbol)
+                // Whether `.name` on a `t` gives what the reader changes a default (UI.Bound.Default): an option's
+                // `defaultSelected`, every other native field's `defaultValue` or `defaultChecked`. A binding (`value`, `checked`,
+                // `selected`) is no loss: the field shows it on every run, which is what it says.
+                def defaults(t: TypeRepr, name: String): Boolean =
+                    if t.widen <:< TypeRepr.of[UI.Ast.Opt] then name == "defaultSelected"
+                    else (name == "defaultValue" || name == "defaultChecked") && natives.exists(t.widen <:< _)
+                def bindingOf(name: String): String = name match
+                    case "defaultChecked"  => "checked"
+                    case "defaultSelected" => "selected"
+                    case _                 => "value"
                 val uiModule                     = TypeRepr.of[UI.type].typeSymbol
                 def isMount(s: Symbol): Boolean  = (s.name == "mounted" || s.name == "mountedWith") && s.owner == uiModule
                 def isKeying(s: Symbol): Boolean = s.name == "keyed" || s.name == "keyedOnSite"
@@ -1315,14 +1318,14 @@ private[kyo] object ReactiveMacro:
                             case _                              => ()
                         tree match
                             case t @ Apply(Select(q, name), List(arg))
-                                if states(q.tpe, name) && channels(t.fun, List(arg)).head.isEmpty && !mayBeSignal(arg.tpe) =>
+                                if defaults(q.tpe, name) && (containsRead(arg) || refsTo(reading.toSet)(arg)) =>
                                 report.errorAndAbort(
-                                    s"""`.$name` states a native field's $name as a constant in a `UI.reactive` block that draws a region,
-                                       |and every run of the block puts it back over what the reader typed or ticked, as soon as
-                                       |anything else the block reads changes.
+                                    s"""`.$name` gives a native field a default that reads, in a `UI.reactive` block that draws a region,
+                                       |and every run that moves the default draws it over what the reader typed or ticked: a
+                                       |default is the reader's field from its start, so a new one starts the field over.
                                        |
-                                       |Hand the field its $name as an argument that reads (`.$name(prop.read)`), which follows the
-                                       |prop in place, or as a signal built outside the block, so the field is never drawn again:
+                                       |Bind the field instead (`.${bindingOf(name)}(prop.read)` or a signal), which the field shows
+                                       |and kyo-ui puts back after an edit, or give the default a value that does not read:
                                        |$example
                                        |""".stripMargin,
                                     t.pos

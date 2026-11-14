@@ -788,25 +788,25 @@ object UI:
     /** What a region that runs again takes from the reader, at the place where its content says so.
       *
       * A run draws its content again over what is on the page, and the engine keeps every element it can: focus, a caret, the text
-      * typed into a field with no `value` and the tick of a box with no `checked` all survive it. Two things do not, because the
-      * content itself says to start them over, and the engine reports each to a [[kyo.UI.devtools]] sink as a
-      * [[kyo.UI.RenderKind.Lost]]:
+      * typed into a field the reader owns and the tick of such a box all survive it. Two things do not, because the content itself
+      * says to start them over, and the engine reports each to a [[kyo.UI.devtools]] sink as a [[kyo.UI.RenderKind.Lost]]:
       *
-      *   - a native field whose `value`, `checked` or `selected` the content states as a constant: every run puts it back, so what the
-      *     reader typed or ticked is gone the moment anything else in the region changes, and kept as long as nothing does. A field
-      *     that follows a `Signal`, or binds a `SignalRef`, is compared after each edit instead, and is never reported;
+      *   - a native field whose default (`defaultValue`, `defaultChecked`, `defaultSelected`) the run moves: the reader owns the field
+      *     from its default, and a new default starts it over. A run that draws the same default again keeps what the reader did. A
+      *     field bound with `value`, `checked` or `selected` (a constant, a signal or a ref) is no loss: it shows its binding on every
+      *     run, which is what it says, and kyo-ui puts back an edit nobody takes (see [[kyo.UI.Bound]]);
       *   - a mount with no key: every run starts a new instance, which draws again and allocates its state anew. A keyed mount keeps
       *     its instance.
       *
-      * The fix is the same for both: what the region does not have to draw again goes outside it, a field's value through a signal
-      * and a mount with a key.
+      * The fix: a default that has to move belongs outside the region (or the field binds what it shows instead), and a mount gets a
+      * key.
       *
       * @param frame
       *   where the field or the mount was written
       */
     enum Loss derives CanEqual:
-        /** A native field (`input`, `textarea`, `select`, `checkbox`, `radio`, an `option`'s `selected`) states `attribute` as a
-          * constant. `element` names it as a selector would: its tag, then its id or its classes.
+        /** A native field (`input`, `textarea`, `select`, `checkbox`, `radio`, an `option`'s `selected`) whose default for `attribute`
+          * the run moved to another value. `element` names it as a selector would: its tag, then its id or its classes.
           */
         case StatedValue(element: String, attribute: String, frame: Frame)
 

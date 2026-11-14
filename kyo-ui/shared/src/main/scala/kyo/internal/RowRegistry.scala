@@ -472,13 +472,18 @@ private[kyo] object RowRegions:
                                             plan.listRows
                                         )
                                 }
-                                // A row the list had before and draws again is a run of that row: what it states is put back over
-                                // what the reader left in it. A whole-list paint draws every row again, a patch only the rebuilt ones.
+                                // A row the list had before and draws again is a run of that row, compared with what it drew before: a default
+                                // it moves starts the reader's field over. A whole-list paint draws every row again, a patch only the rebuilt ones.
                                 _ <- reportLosses(
                                     rui,
                                     Chunk.from(if kept then plan.rebuilt.toSeq else 0 until plan.size)
                                         .filter(i => prevByKey.contains(plan.keys(i)))
-                                        .map(i => if plan.built(i) != null then plan.built(i).rowUI else renderFn(i, plan.items(i))),
+                                        .map(i =>
+                                            (
+                                                Maybe.fromOption(prevByKey.get(plan.keys(i))).map(_.rowUI),
+                                                if plan.built(i) != null then plan.built(i).rowUI else renderFn(i, plan.items(i))
+                                            )
+                                        ),
                                     UI.RenderCause.Signal
                                 )
                                 // A repaint of the kept rows replaced what their subscriptions had painted into them, a

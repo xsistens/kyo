@@ -853,28 +853,28 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
     }
 
     "a UI block that draws a region refuses what each of its runs takes from the reader (UI.Loss)" - {
-        "a native field's value stated as a constant" in {
+        "a native field's default that reads" in {
             typeCheckFailure("""
                 import kyo.*
                 val n: UI.Prop[Int] = 1
-                UI.reactive(UI.div(UI.span.id(s"n${n.read}"), UI.input.value("start")))
-            """)("every run of the block puts it back")
+                UI.reactive(UI.div(UI.span.id(s"n${n.read}"), UI.input.defaultValue(s"start ${n.read}")))
+            """)("a new one starts the field over")
         }
 
-        "a checkbox's tick stated as a constant" in {
+        "a checkbox's default tick from a read" in {
             typeCheckFailure("""
                 import kyo.*
                 val n: UI.Prop[Int] = 1
-                UI.reactive(UI.div(UI.span.id(s"n${n.read}"), UI.checkbox.checked(false)))
-            """)("every run of the block puts it back")
+                UI.reactive(UI.div(UI.span.id(s"n${n.read}"), UI.checkbox.defaultChecked(n.read == 1)))
+            """)("a new one starts the field over")
         }
 
-        "an option's selection from a read" in {
+        "an option's default selection from a read" in {
             typeCheckFailure("""
                 import kyo.*
                 val n: UI.Prop[Int] = 1
-                UI.reactive { val k = n.read; UI.select(UI.option.value("1").selected(k == 1)("one")) }
-            """)("every run of the block puts it back")
+                UI.reactive { val k = n.read; UI.select(UI.option.value("1").defaultSelected(k == 1)("one")) }
+            """)("a new one starts the field over")
         }
 
         "a mount with no key" in {
@@ -885,16 +885,21 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
             """)("every run of the block starts it over")
         }
 
-        "and allows what a run keeps: a value that reads, a signal, a keyed mount, and a block with no region" in {
+        "and allows what a run keeps: a binding, a constant default, a keyed mount, and a block with no region" in {
             for
                 n    <- Signal.initRef(1)
                 text <- Signal.initRef("text")
                 // The value reads, so it is a channel of its own and the field follows it.
                 follows = UI.reactive(UI.div(UI.span.id(s"n${n.read}"), UI.input.value(n.read.toString)))
-                // A signal is followed, and a keyed mount keeps its instance.
+                // A signal is followed, a constant binds (UI.Bound), a default that does not read never moves, and a keyed mount
+                // keeps its instance.
                 kept = UI.reactive(UI.div(
                     UI.span.id(s"n${n.read}"),
                     UI.input.value(text.readOnly),
+                    UI.input.value("start"),
+                    UI.checkbox.checked(false),
+                    UI.select(UI.option.value("1").selected(true)("one")),
+                    UI.input.defaultValue("start"),
                     UI.mounted(Sync.defer(UI.span("own"))).keyed("k")
                 ))
                 // Every read reaches a channel, so the block draws once and nothing in it runs again.

@@ -1318,7 +1318,7 @@ private[kyo] object ReactiveUI:
                     _.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, painted)
                 )
                 // A run after the first draws over what the reader left in the last one.
-                _ <- if previous.isEmpty then Kyo.unit else reportLosses(rui, Chunk(current), cause)
+                _ <- if previous.isEmpty then Kyo.unit else reportLosses(rui, Chunk((previous, current)), cause)
                 _ <- release()
                 _ <- subscribeWalked(rui.path, current, newKids, pass, regionMounts, through, signalChangeTime, dispatch)
             yield ()
@@ -1403,11 +1403,13 @@ private[kyo] object ReactiveUI:
     /** What `drawnAgain`, content `rui` draws over what it drew before, takes from the reader, one [[kyo.UI.RenderKind.Lost]] per
       * place. The walk runs only with a sink installed, so the off path reads one `Local` and walks nothing.
       */
-    private[internal] def reportLosses(rui: ReactiveUI, drawnAgain: Chunk[UI], cause: UI.RenderCause)(using Frame): Unit < Sync =
+    private[internal] def reportLosses(rui: ReactiveUI, drawnAgain: Chunk[(Maybe[UI], UI)], cause: UI.RenderCause)(using
+        Frame
+    ): Unit < Sync =
         Devtools.sink.use { local =>
             if local.isEmpty || drawnAgain.isEmpty then Kyo.unit
             else
-                Kyo.foreach(drawnAgain)(RerunLosses.of).map(found =>
+                Kyo.foreach(drawnAgain)((before, after) => RerunLosses.of(before, after)).map(found =>
                     Kyo.foreachDiscard(found.flattenChunk)(loss =>
                         report(rui, UI.RenderKind.Lost(loss), cause, Absent, Duration.Zero, alsoWasted = false)
                     )

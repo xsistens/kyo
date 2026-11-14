@@ -317,7 +317,7 @@ class DevtoolsReportTest extends kyo.test.Test[Any]:
             case UI.RenderEvent(_, _, _, UI.RenderKind.Lost(UI.Loss.UnkeyedMount(_)), _, _, _, _) => "unkeyed mount"
         }
 
-    "a region that runs again reports what it puts back and what it starts over, and its first draw reports nothing" in {
+    "a region that runs again reports a default it moves and a mount it starts over, never a binding, and its first draw reports nothing" in {
         Scope.run {
             for
                 tick    <- Signal.initRef(0)
@@ -335,6 +335,11 @@ class DevtoolsReportTest extends kyo.test.Test[Any]:
                         UI.checkbox.id("box").checked(false),
                         UI.checkbox.id("free"),
                         UI.select.id("pick")(UI.option.value("a").selected(true)("a"), UI.option.value("b")("b")),
+                        // Defaults: the reader owns these, so only a run that moves the default takes something from the reader.
+                        UI.input.id("kept").defaultValue("same"),
+                        UI.input.id("moved").defaultValue(s"start $n"),
+                        UI.checkbox.id("ticked").defaultChecked(n % 2 == 1),
+                        UI.select.id("chosen")(UI.option.value("a").defaultSelected(true)("a"), UI.option.value("b")("b")),
                         UI.mounted(Sync.defer(UI.span("unkeyed"))),
                         UI.mounted(Sync.defer(UI.span("keyed"))).keyed("k")
                     )
@@ -349,8 +354,7 @@ class DevtoolsReportTest extends kyo.test.Test[Any]:
             yield
                 assert(seen._1.isEmpty, s"the first draw reported ${seen._1}")
                 assert(
-                    seen._2.sorted ==
-                        Vector("input#box checked", "input#start value", "option selected", "textarea.note value", "unkeyed mount"),
+                    seen._2.sorted == Vector("input#moved value", "input#ticked checked", "unkeyed mount"),
                     s"after one run: ${seen._2}"
                 )
             end for
@@ -362,7 +366,9 @@ class DevtoolsReportTest extends kyo.test.Test[Any]:
         for
             rows <- Signal.initRef(Chunk("a" -> "1", "b" -> "1"))
             rec = new Recording(keepsRows = keepsRows)
-            ui  = UI.ul(rows.foreachKeyed(_._1)((key, text) => UI.li(UI.input.id(key).value(text))))
+            ui  = UI.ul(rows.foreachKeyed(_._1)((key, text) =>
+                UI.li(UI.input.id(key).defaultValue(text), UI.input.id(s"$key-bound").value(text))
+            ))
             seen <- observed(rec, ui, parkedOn(rows)) {
                 for
                     _ <- rows.set(Chunk("a" -> "2", "b" -> "1", "c" -> "1"))
@@ -371,15 +377,15 @@ class DevtoolsReportTest extends kyo.test.Test[Any]:
             }
         yield seen
 
-    "a keyed row drawn again for a new value reports its losses, and a new row reports none" in {
+    "a keyed row drawn again for a new value reports the default it moves, and a new row reports none" in {
         Scope.run {
             for
                 patched <- listLosses(keepsRows = true)
                 whole   <- listLosses(keepsRows = false)
             yield
                 assert(patched == Vector("input#a value"), s"a backend that patches rows, after a changed and c added: $patched")
-                // A backend with no row patch paints the whole list, so the unchanged row b is drawn again too.
-                assert(whole.sorted == Vector("input#a value", "input#b value"), s"a backend that paints the whole list: $whole")
+                // A backend with no row patch paints the whole list, so the unchanged row b is drawn again too, with the default it had.
+                assert(whole == Vector("input#a value"), s"a backend that paints the whole list: $whole")
         }
     }
 
