@@ -301,7 +301,8 @@ class AutoCompleteTest extends ReactiveValueContract:
             case _                   => false
         },
         ready = Present(wiredField(_)),
-        startText = Present("Ams")
+        startText = Present("Ams"),
+        defaults = Present((c, t) => c.defaultValue(t))
     )
 
     holds(valueSlot)
@@ -363,10 +364,31 @@ class AutoCompleteTest extends ReactiveValueContract:
     // opens the panel, which is a render.
     "a starting text the reader types over is not drawn back over what they typed" in {
         for
-            after <- publishedAfterReady(plain.value("Ams").render, wiredField(_), until = t => input(t).map(textIn).map(_ == "Ber"))(t =>
-                input(t).map(typed(_, "Ber", commit = false))
-            )
+            after <-
+                publishedAfterReady(plain.defaultValue("Ams").render, wiredField(_), until = t => input(t).map(textIn).map(_ == "Ber"))(t =>
+                    input(t).map(typed(_, "Ber", commit = false))
+                )
         yield assert(after.nonEmpty, "the field was drawn with the starting text again")
+    }
+
+    // A constant is a binding (UI.Bound): the field shows it, and kyo-ui puts back what the reader types over it.
+    "a constant text binds the field to the constant" in {
+        for
+            t <- readyTree(plain.value("Ams").onInput(_ => ()).render)(wiredField(_))
+            f <- input(t)
+        yield f match
+            case field: UI.Ast.TextInput =>
+                assert(field.value.exists(_.isInstanceOf[UI.Bound.Const[?]]), s"the field is bound as ${field.value}")
+            case other => fail(s"not a text field: $other")
+    }
+
+    "a constant text nobody hears offers no clear, one somebody hears does" in {
+        for
+            fixed <- readyTree(plain.showClear(true).value("Ams").render)(wiredField(_))
+            heard <- readyTree(plain.showClear(true).value("Ams").onChange(_ => ()).render)(wiredField(_))
+            none  <- elementsWithClass(fixed, "p-autocomplete-clear-icon")
+            some  <- elementsWithClass(heard, "p-autocomplete-clear-icon")
+        yield assert(none.isEmpty && some.size == 1, s"clear without a hearer: ${none.size}, with one: ${some.size}")
     }
 
     "a text bound one way names each edit that reaches nobody: typing, a pick, a clear" in {
