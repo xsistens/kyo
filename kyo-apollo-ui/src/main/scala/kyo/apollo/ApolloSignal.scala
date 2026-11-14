@@ -23,7 +23,7 @@ import kyo.apollo.network.ApolloResponse
   *   - `call.watchSignal` — a `kyo-ui` [[Signal]] of [[QueryState]] that seeds
   *     `Loading`, then re-emits on every watcher push (network reply *and* later
   *     cache change) and unsubscribes when its `Scope` is released;
-  *   - `call.watchStream` — the raw [[ApolloResponse]] effect-[[Stream]] for
+  *   - `call.watchStream` — the raw [[kyo.apollo.network.ApolloResponse ApolloResponse]] effect-[[Stream]] for
   *     non-UI consumers who want the untransformed responses.
   *
   * Both drive off `core`'s cold `call.watch()` cache-watcher [[Stream]], so `core`
@@ -35,7 +35,7 @@ import kyo.apollo.network.ApolloResponse
 enum QueryState[+D] derives CanEqual:
 
     /** No fetch has been requested yet — the initial value of a lazy query
-      * ([[useLazyQuery]]) before its `load` effect is invoked. Distinct from
+      * ([[Apollo.lazyQuery]]) before its `load` effect is invoked. Distinct from
       * [[Loading]], which means a fetch is in flight.
       */
     case Idle
@@ -141,8 +141,8 @@ object QueryState:
             case Result.Success(b) => Present(b)
             case _                 => Absent
 
-    /** Project an [[ApolloResponse]] onto a [[QueryState]] — the same total
-      * projection [[watchSignal]] applies internally (see [[ApolloSignal.project]]),
+    /** Project an [[kyo.apollo.network.ApolloResponse ApolloResponse]] onto a [[QueryState]] — the same total
+      * projection [[Apollo.watchSignal]] applies internally (see [[ApolloSignal.project]]),
       * exposed publicly so an app can drive its own `Signal[QueryState[D]]` from a
       * one-shot `.response` or a subscription stream without re-deriving the
       * exception/errors/absent-data taxonomy.
@@ -173,9 +173,9 @@ end SkipMode
 
 extension [D](call: ApolloCall[D])
 
-    /** Watch this operation as a raw [[ApolloResponse]] effect-[[Stream]].
+    /** Watch this operation as a raw [[kyo.apollo.network.ApolloResponse ApolloResponse]] effect-[[Stream]].
       *
-      * The non-UI counterpart to [[watchSignal]]: emits each watcher response
+      * The non-UI counterpart to [[Apollo.watchSignal]]: emits each watcher response
       * verbatim (no [[QueryState]] projection) as a `Stream[ApolloResponse[D],
       * Async & Scope]`. The watcher pushes into an unbounded [[Channel]] whose
       * `streamUntilClosed` drives the stream; the `Scope` finalizer both cancels
@@ -211,7 +211,7 @@ extension [D](sig: Signal[QueryState[D]])
       *
       * The first-settled await rides a scoped observer torn down as soon as the seed resolves (`Scope.run`);
       * the follow observer lives in the CALLER's `Scope`, so releasing it stops the following (the same
-      * lifetime contract as [[watchSignal]]/[[subscribeSignal]]).
+      * lifetime contract as [[Apollo.watchSignal]]/[[Apollo.subscribe]]).
       */
     def dataSignal(otherwise: UI.Reaction)(using
         Frame,
