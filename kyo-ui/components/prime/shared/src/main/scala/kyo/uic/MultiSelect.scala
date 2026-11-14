@@ -175,10 +175,16 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
     def filter(f: (A, String) => Boolean): MultiSelect[A] = new MultiSelect(p.copy(filterF = Present(f)))
 
     /** Renders the same header filter over a query the APP holds, as [[Select.filterQuery]] does: a `SignalRef` is written
-      * by typing, a plain `Signal` filters the panel and typing is only reported and painted back, a constant is the
-      * starting text. Turns the header filter on unless [[filterable]] says otherwise.
+      * by typing, a plain `Signal` filters the panel and typing is only reported and painted back, and a constant holds the
+      * query at that text the same way (see [[kyo.UI.Bound]]). For a query the reader starts from and owns, use
+      * [[defaultFilterQuery]]. Turns the header filter on unless [[filterable]] says otherwise.
       */
     def filterQuery(v: String | Signal[String]): MultiSelect[A] = new MultiSelect(p.copy(filterQuerySlot = filterQuerySlot.bind(v)))
+
+    /** The query the header filter starts with; the reader owns it from there, in the instance, as [[Select.defaultFilterQuery]].
+      * Turns the header filter on unless [[filterable]] says otherwise.
+      */
+    def defaultFilterQuery(v: String): MultiSelect[A] = new MultiSelect(p.copy(filterQuerySlot = filterQuerySlot.startAt(v)))
 
     /** Fired with the query the reader types, and with the empty query a new open starts from. */
     def onFilterQueryChange(f: String => UI.Action)(using Frame): MultiSelect[A] =
@@ -255,7 +261,7 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
       * [[FieldValidity]]; without one, a [[filter]] or an app-owned [[filterQuery]] turns it on.
       */
     private def filterOn: BoolValue =
-        filterableV.getOrElse(BoolValue.Const(filterF.isDefined || filterQuerySlot.binding.isDefined))
+        filterableV.getOrElse(BoolValue.Const(filterF.isDefined || filterQuerySlot.binding.isDefined || filterQuerySlot.start.isDefined))
 
     /** How an option matches the query: [[filter]], else a contains on the label projection. */
     private def matcher: (A, String) => Boolean = filterF.getOrElse(Filter.contains(labelF))
@@ -317,9 +323,9 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
                 // Unbound, the field keeps the panel state itself, starting closed.
                 open <- openSlot.owned(false)
                 hi   <- Signal.initRef(-1)
-                // An app-owned query takes over the slot the component would otherwise allocate for itself; a constant query
-                // is the starting text, kept here like an unbound one.
-                q <- filterQuerySlot.ownedFrom("")
+                // An app-owned query, a constant among them, takes over the slot the component would otherwise allocate for
+                // itself; unbound it starts from the default query, else empty.
+                q <- filterQuerySlot.owned(filterQuerySlot.start.getOrElse(""))
                 // Unbound, the field keeps the options the reader picks itself.
                 own <-
                     if choice.isEmpty then Signal.initRef(Set.empty[A]).map(r => Present(r))
