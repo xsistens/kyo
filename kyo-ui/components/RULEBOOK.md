@@ -209,6 +209,10 @@ UI.reactive {
   `data-kyo-ev` and runs no handler, as target or ancestor, and a signal patches that in place, so the handler only does its
   job (`onClick(toggle)`) and the element draws nothing again. A click that has to stay while the element looks locked
   (Button's `ariaDisabled`, which routes the press to a form submit) is simply not silenced.
+- **A fixed value needs no handler to stay, only a lock on the native edit.** A native element bound to a constant shows it after every
+  edit (kyo-ui puts back what its owner does not take, `UI.Bound`), but only an edit the client reports comes back: a silent element
+  reports none. So a box that must not move also says `preventActivation` (CheckBox's readonly), and a text field says native
+  `readonly`, below; silence alone would leave the browser's own change on screen.
 - **A text field's native `readonly` is not silenced either** (Input). The browser already refuses the edit, and the field
   stays a place the reader reaches and leaves: `silent` would drop its blur too, and the form layer's `Blur` trigger listens
   there. So `readOnly(locked)` alone says it, and the handlers stay.

@@ -168,20 +168,19 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   `MultiSelect`/`MultiSelectButton`/`Listbox`/`TreeSelect`/`Tree` followed with the state slots below. The fields'
   own values came last: `checked(Boolean | Signal[Boolean])` on the four boolean fields and `value(String | Signal[String])`
   on the text fields (`TextArea`, `Password`, `InputMask`, `InputOtp`, `AutoComplete`, `ColorPicker`), and `Input`'s generated
-  `value` takes the same `Prop[String]`. A text
-  field's CONSTANT is the starting text, the HTML `value` attribute: the reader's edit stays in the field, so it gets
-  no card. A boolean field's constant is FIXED, as below. The edit stays only while nothing draws the field again: every
-  render gives a field its `value` attribute back (`__kyoMorphAttrs` in kyo-ui's client), and a field drawn with no
-  `value` keeps what was typed. `Input` is an instance: a constant starts its own ref, which holds the reader's text
-  through a host region that runs again, and a host that states the text itself and draws it in its own region (InputOtp's
+  `value` takes the same `Prop[String]`. Every field's value is a BINDING, the HTML/React `value` (kyo-ui's K4, see
+  `UI.Bound`): a constant, a signal or a ref is what the field shows, and kyo-ui puts back an edit its owner does not take. A
+  text the reader owns from a start is the field's `defaultValue` (Input, TextArea, Password: `Controlled.startAt`, the slot's
+  `start`), the HTML `defaultValue`. A boolean field's constant nobody hears is FIXED, as below. `Input` is an instance where a
+  default starts its own ref, which holds the reader's text through a host region that runs again, and a host that states the text itself and draws it in its own region (InputOtp's
   cells, Paginator's jump field, DataTable's filter fields) calls its `renderInPlace`. So a plain field leaves an unbound text to the browser, but a field that draws anything
   from its text after the page is shown (AutoComplete's suggestions, Password's meter and reveal) or builds its value
   from several controls (InputOtp's cells, ColorPicker's sliders) keeps the text itself, unbound and from a constant
-  (`Controlled.owningFrom`; Password, which the rulebook reached, through a `Controlled` whose `start` the engine binds, with or
+  (`Controlled.owningFrom`, which still takes a constant as the start for these; Input, TextArea and Select's `filterQuery` bind it; Password, which the rulebook reached, through a `Controlled` whose `start` the engine binds, with or
   without its meter and eye), and its handlers read the value live, since a keystroke can land before the render of the one
   before it. `ReactiveValueContract.nativeText` and the `startText`/`keptNatively` slot fields hold them to it. A text
   field's `onBlur` reports the text kyo-ui's blur carries (kyo-ui's two-parameter `onBlur((e, text) => ...)`, read off the field as focus leaves it), never
-  its binding: unbound or from a constant the binding does not have the reader's text at all. `ReactiveValueContract.blurs`
+  its binding: unbound or from a default the binding does not have the reader's text at all. `ReactiveValueContract.blurs`
   holds Input, TextArea, InputMask, Password and AutoComplete to it. A blur whose value is not the field's own text keeps
   reading what is held: InputOtp's code (a cell carries one character), ColorPicker's colour, DatePicker's parsed value,
   InputNumber's ref when bound to one. With no ref InputNumber reads the carried text as a number (clamped where it is
@@ -208,8 +207,10 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   the component already has (beside its ids and highlights: a mount around it would be a mount inside a mount for every instance,
   which `UicTest.mountsAbove` holds), `slot.ownedFrom(unbound)` the same where a constant is only where it starts, `Controlled.owning` a mount
   of its own, and `Controlled.draw` that with the card in front, for a container.
-  `Controlled.drawField` is what a field with native state draws from. A region around it that re-renders ends the instance and starts the
-  state over, which a native control under a morph would not do; a parent that repaints and has to keep it binds the slot or gives
+  `Controlled.drawField` is what a field with native state draws from. CheckBox, RadioButton and ToggleSwitch are one instance per place
+  (`Controlled.instance`, a `mountedWith`), as ToggleButton is, so an unbound box keeps its tick through a host region that runs again.
+  Elsewhere a region around a component that re-renders ends the instance and starts the state over, which a native control under a morph
+  would not do; a parent that repaints and has to keep it binds the slot or gives
   the component a key. So a component that draws itself again for `disabled` reads that signal below the mount that holds its state,
   never around it (`SlotCase.disable` holds the fields that do). A host that supplies the held value itself (DataTable's filter selects through `Select.current`) is bound
   and keeps nothing of its own, and so does a paginator a table or a view embeds. A hearer turns `contextMenuRow` on as well
@@ -233,16 +234,16 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   when unbound, like an HTML `dialog` with `open`, and shows until the reader closes it; one with its own opener
   (SpeedDial, a Popover with a trigger, the pickers) starts closed.
 - **A field with NATIVE state binds it through kyo-ui, which puts back what its owner did not take.** The browser moves a tick,
-  a caret's text, a range thumb or a radio before the report reaches the owner, and an owner that declines leaves the signal where it was,
-  so no emission would ever reach the control. A one-way signal goes straight to the native element's setter (`value`, `checked`), which
-  stores it as `UI.Bound.Follow`: the element shows it through an attribute channel, in place, and after an edit the kernel compares what the
-  signal holds with what the event carried and sends the patch when they differ. A commit always counts, a keystroke only where `onInput` is
-  set; a radio's group gets its selection back with it. A field whose chrome draws nothing from the value (Input, TextArea, Password without
+  a caret's text, a range thumb or a radio before the report reaches the owner, and an owner that declines leaves its binding where it was,
+  so no emission would ever reach the control. Every binding of the native element (`value`, `checked`, `selected`: a constant, a signal or
+  a ref, see `UI.Bound`) is controlled: after an edit, once the handlers and the regions they woke have run, the kernel reads the binding of
+  the element then at that place, compares it with what the event carried and sends the patch when they differ (`indeterminate` goes back
+  with a click). A commit always counts, a keystroke only where `onInput` is set; a radio's group gets its selection back with it. Only
+  `defaultValue`/`defaultChecked`/`defaultSelected` (or no value) leave the control to the reader. A field whose chrome draws nothing from the value (Input, TextArea, Password without
   feedback) has no region around it, so a keystroke renders nothing; one whose chrome does (CheckBox, RadioButton, ToggleSwitch, Slider, Rating,
   InputNumber, InputOtp, Password with feedback) draws the chrome in a region over the signal and binds the native element to the signal inside
-  it. A constant somebody hears follows `Signal.initConst` (`ReactiveValue.native`): that covers the boolean fields, Slider, InputNumber's
-  `value` and Rating; a text field's constant is excluded, since it is the starting text the reader goes on editing, never a value to put
-  back. A constant nobody hears is fixed. A two-way ref needs none of it, and a field that draws everything itself (ToggleButton, ColorPicker,
+  it. A constant somebody hears is put back like any binding (the boolean fields, Slider, InputNumber's `value`, Rating and the text
+  fields alike; `ReactiveValue.native` still hands it on as `Signal.initConst`, which kyo-ui treats the same). A constant nobody hears is fixed. A two-way ref is put back too, where a hearer writes back another value than the edit, and a field that draws everything itself (ToggleButton, ColorPicker,
   Knob, the pickers) has nothing native to fall out of step.
 - **A `SignalRef` in a slot is a CAPABILITY demand, not a data hand-over.** It asks every
   caller for write access so that the callers who want write-back can have it. Reading needs
