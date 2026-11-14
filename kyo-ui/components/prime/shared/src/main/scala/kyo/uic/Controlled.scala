@@ -29,28 +29,19 @@ import kyo.UI.*
   * @param start
   *   where the instance's own value starts, for a slot the component holds itself where the caller binds nothing (a
   *   [[kyo.UI.Ownable]] prop the engine binds to the instance's own ref); `Absent` where it holds none
-  * @param constantStarts
-  *   a constant handed to [[bind]] is where the instance's own value starts rather than a binding: a text field's starting
-  *   text, which the reader goes on editing
   */
 final private[uic] case class Controlled[A](
     bound: Maybe[Prop[A]] = Absent,
     hearer: Maybe[A => UI.Action] = Absent,
     heardElsewhere: Boolean = false,
     quiet: Boolean = false,
-    start: Maybe[A] = Absent,
-    constantStarts: Boolean = false
+    start: Maybe[A] = Absent
 ) extends UI.Ownable[A]:
-    /** The slot bound as the caller says: a ref two way, a signal one way, anything else a constant; where a constant only
-      * starts the slot ([[constantStarts]]), a constant is its start and a signal binds, keeping the start, so an instance still
-      * holds a value of its own to carry on from when a later run stops binding it.
+    /** The slot bound as the caller says: a ref two way, a signal one way, anything else a constant. Every binding holds the slot
+      * (see [[kyo.UI.Bound]]): what the component shows is what the binding says. A start the slot already has stays, so an instance
+      * still holds a value of its own to carry on from when a later run stops binding it.
       */
-    def bind(v: Prop[A]): Controlled[A] =
-        if !constantStarts then copy(bound = Present(v))
-        else
-            v match
-                case s: Signal[A] @unchecked => copy(bound = Present(s))
-                case a: A @unchecked         => copy(bound = Absent, start = Present(a))
+    def bind(v: Prop[A]): Controlled[A] = copy(bound = Present(v))
 
     /** The slot with `a` as where the instance's own value starts, for a value the reader owns from there: the `defaultValue` of a
       * field. A binding, where there is one, still holds the slot.
