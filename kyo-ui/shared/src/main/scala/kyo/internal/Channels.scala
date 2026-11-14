@@ -93,26 +93,60 @@ private[kyo] object Channels:
         end if
     end silencedEvents
 
-    /** What puts `el` back after the edit `event`, for an element that follows a signal: compares, once the event has finished bubbling, what
-      * the signal holds with what the event carried, and sends the patch when they differ; when they are the same the owner took it. A commit
-      * always counts. A keystroke counts only where `onInput` is set, so a field with no such handler keeps what is typed until its commit.
+    /** What puts the control `el` back after the edit `event` (see [[kyo.UI.Bound]]): compares what its binding holds with what the edit
+      * carried and sends the patch where they differ; where they are the same the owner took the edit, and nothing is written. Any binding
+      * counts: a constant, a followed signal, a ref (which the edit wrote first, so a handler that wrote it back is answered). A box that
+      * states `indeterminate` gets it back too, since a click always clears it. A default or no value leaves the control to the reader:
+      * Absent. A commit always counts; a keystroke only where `onInput` is set, so a field with no such handler keeps what is typed until
+      * its commit.
+      *
+      * The caller reads `el` once the handlers of the edit and the regions they woke have run, as the element then standing at the place
+      * of the edit's target, so a control a region rebuilt with another binding is compared with that binding.
       */
     def putBack(el: Element, event: UIEvent, path: Seq[String])(using Frame): Maybe[UIExchange => Unit < Async] =
-        def text(carried: String): Maybe[UIExchange => Unit < Async] =
-            followedValue(el).map(held =>
-                exchange => held.current.map(v => if v == carried then Kyo.unit else exchange.onAttrPatch(path, "value", v))
-            )
+        def held[A](b: Maybe[UI.Bound[A]]): Maybe[A < Sync] = b match
+            case Present(UI.Bound.Const(v))    => Present(Kyo.lift(v))
+            case Present(UI.Bound.Follow(sig)) => Present(sig.current)
+            case Present(UI.Bound.Ref(ref))    => Present(ref.get)
+            case _                             => Absent
+        // A select bound by none of its own value binds through an option whose selection is a constant.
+        def chosen(sel: Select): Maybe[String < Sync] =
+            held(sel.value).orElse(Maybe.fromOption(sel.children.toSeq.collectFirst {
+                case opt @ Opt(_, _, _, Present(UI.Bound.Const(true))) => Kyo.lift(opt.value.getOrElse(""))
+            }))
+        val text: Maybe[String < Sync] =
+            el match
+                case ci: ConstrainedInput => held(ci.value).map(v => ci.inputMask.fold(v)(m => v.map(InputMasking.maskNormalize(m, _))))
+                case ti: TextInput        => held(ti.value)
+                case sel: Select          => chosen(sel)
+                case pi: PickerInput      => held(pi.value)
+                case h: HiddenInput       => held(h.value)
+                case ri: RangeInput       => held(ri.value).map(_.map(NumberFormat.double))
+                case _                    => Absent
+        def textBack(carried: String): Maybe[UIExchange => Unit < Async] =
+            text.map(now => exchange => now.map(v => if v == carried then Kyo.unit else exchange.onAttrPatch(path, "value", v)))
         event match
             case e: UIEvent.Input =>
                 el match
-                    case ti: TextInput if ti.onInput.nonEmpty => text(e.value)
+                    case ti: TextInput if ti.onInput.nonEmpty => textBack(e.value)
                     case _                                    => Absent
-            case e: UIEvent.Change        => text(e.value)
-            case e: UIEvent.ChangeNumeric => text(NumberFormat.double(e.value))
+            case e: UIEvent.Change        => textBack(e.value)
+            case e: UIEvent.ChangeNumeric => textBack(NumberFormat.double(e.value))
             case e: UIEvent.ChangeChecked =>
-                followedChecked(el).map(held =>
-                    exchange => held.current.map(v => if v == e.checked then Kyo.unit else exchange.onBoolAttrPatch(path, "checked", v))
-                )
+                el match
+                    case bi: BooleanInput =>
+                        val indeterminate                             = bi.attrs.jsProps.get("indeterminate").contains("true")
+                        def mixed(exchange: UIExchange): Unit < Async =
+                            if indeterminate then exchange.onBoolAttrPatch(path, "indeterminate", true) else Kyo.unit
+                        held(bi.checked) match
+                            case Present(now) =>
+                                Present(exchange =>
+                                    now.map(v => (if v == e.checked then Kyo.unit else exchange.onBoolAttrPatch(path, "checked", v)))
+                                        .andThen(mixed(exchange))
+                                )
+                            case Absent => if indeterminate then Present(mixed) else Absent
+                        end match
+                    case _ => Absent
             case _ => Absent
         end match
     end putBack

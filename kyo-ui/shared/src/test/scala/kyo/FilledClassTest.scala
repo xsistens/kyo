@@ -83,8 +83,8 @@ class FilledClassTest extends UITest:
         }
     }
 
-    "a field started from a constant the reader empties loses the class" in {
-        withUI(UI.div(UI.input.id("i").value("x").filledClass("p-filled"))) {
+    "a field started from a default the reader empties loses the class" in {
+        withUI(UI.div(UI.input.id("i").defaultValue("x").filledClass("p-filled"))) {
             for
                 before <- has("i", "p-filled")
                 _      <- Browser.fill(Selector.id("i"), "")
@@ -117,7 +117,7 @@ class FilledClassTest extends UITest:
                 n.map(k =>
                     UI.div(
                         UI.input.id("bare").filledClass("p-filled"),
-                        UI.input.id("const").value("x").filledClass("p-filled"),
+                        UI.input.id("start").defaultValue("x").filledClass("p-filled"),
                         UI.span(k.toString).id("n")
                     )
                 ),
@@ -126,15 +126,15 @@ class FilledClassTest extends UITest:
         withUI(app) {
             for
                 _     <- Browser.fill(Selector.id("bare"), "Anna")
-                _     <- Browser.fill(Selector.id("const"), "")
+                _     <- Browser.fill(Selector.id("start"), "")
                 _     <- Browser.click(Selector.id("again"))
                 _     <- Browser.assertText(Selector.id("n"), "1")
                 bare  <- has("bare", "p-filled")
-                const <- has("const", "p-filled")
-                texts <- Browser.evalJson[Seq[String]]("[document.getElementById('bare').value,document.getElementById('const').value]")
+                start <- has("start", "p-filled")
+                texts <- Browser.evalJson[Seq[String]]("[document.getElementById('bare').value,document.getElementById('start').value]")
             yield assert(
-                (bare, const) == (texts(0).nonEmpty, texts(1).nonEmpty),
-                s"bare filled $bare over '${texts(0)}', const filled $const over '${texts(1)}'"
+                (bare, start) == (texts(0).nonEmpty, texts(1).nonEmpty),
+                s"bare filled $bare over '${texts(0)}', start filled $start over '${texts(1)}'"
             )
         }
     }

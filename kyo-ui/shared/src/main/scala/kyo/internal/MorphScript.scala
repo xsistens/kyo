@@ -56,10 +56,12 @@ private[kyo] object MorphScript:
           |  // user types, so writing the attribute alone is invisible on any field that has been typed into. The
           |  // attribute may even be unchanged (both empty) when a ref write clears it, so the property is written on
           |  // every pass. The focused field is the exception below: its own echo must not move the caret.
+          |  // A default (data-kyo-default) is the reader's field: its value is written only when the default itself moved.
+          |  var dfltKeep=to.hasAttribute("data-kyo-default")&&from.getAttribute("value")===to.getAttribute("value");
           |  for(var i=0;i<to.attributes.length;i++){var a=to.attributes[i];
           |    if(!own[a.name]){
           |      if(from.getAttribute(a.name)!==a.value)from.setAttribute(a.name,a.value);
-          |      if(!activeInput)h.syncField(from,a.name,a.value);}}
+          |      if(!activeInput&&!(dfltKeep&&a.name==="value"))h.syncField(from,a.name,a.value);}}
           |  // A textarea carries its value as content, never as a value attribute, so the walk above cannot reach its
           |  // property: mirror the content instead, under the same focus rule. Only a content that moved is a value
           |  // write; an unbound textarea renders the same content on every pass and keeps what the user typed. The
@@ -68,8 +70,8 @@ private[kyo] object MorphScript:
           |  for(var j=from.attributes.length-1;j>=0;j--){var n=from.attributes[j].name;
           |    if(!own[n]&&!to.hasAttribute(n))from.removeAttribute(n);}
           |  // A checkbox, a radio and an option show their PROPERTY once toggled by the reader, so a render that
-          |  // turns the control on or off writes it. A box the render binds (data-kyo-bound) shows the render's state
-          |  // on every pass, so a repaint takes back a tick the app did not accept. A free one is written only on a
+          |  // turns the control on or off writes it. A box or option the render binds (data-kyo-bound) shows the render's state
+          |  // on every pass, as the put-back after an edit does (kyo.UI.Bound). A free or default one is written only on a
           |  // change: it renders no attribute when off, and a repaint must keep its tick.
           |  if(tg){var on=to.hasAttribute(tg);if(to.hasAttribute("data-kyo-bound")?from[tg]!==on:on!==wasOn)from[tg]=on;}
           |  __kyoRestoreProps(from,to);
@@ -77,7 +79,7 @@ private[kyo] object MorphScript:
           |  // the focused field's live value (its caret) with its own echo; assign only a genuine external change.
           |  // A bound field says so as the unfocused path reads it (an input's value attribute, a textarea's moved
           |  // content); an unbound field carries neither and keeps what the reader typed.
-          |  if(activeInput){var v=tag==="TEXTAREA"?(from.textContent!==to.textContent?to.textContent:null):to.getAttribute("value");
+          |  if(activeInput&&!dfltKeep){var v=tag==="TEXTAREA"?(from.textContent!==to.textContent?to.textContent:null):to.getAttribute("value");
           |    if(v!==null&&from.value!==v)from.value=v;}
           |}
           |// Reconcile the live sibling run of `parent` from `fromStart` up to (not including) `fromEnd`, null meaning

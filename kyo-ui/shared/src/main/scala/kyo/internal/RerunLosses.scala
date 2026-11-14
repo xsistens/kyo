@@ -42,7 +42,7 @@ private[kyo] object RerunLosses:
             case p: PickerInput if const(p.value)    => loss("value")
             case b: BooleanInput if const(b.checked) => loss("checked")
             case r: RangeInput if const(r.value)     => loss("value")
-            case o: Opt if o.selected.nonEmpty       => loss("selected")
+            case o: Opt if const(o.selected)         => loss("selected")
             case _                                   => Chunk.empty
         end match
     end stated

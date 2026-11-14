@@ -6105,7 +6105,9 @@ class GoldenRenderTest extends UicTest:
             assert(html.contains("p-terminal-prompt"), "prompt row")
             assert(html.contains("p-terminal-prompt-value"), "bare prompt input")
             assert(html.contains("change"), "handler registers the change commit")
-            assert(!inert.contains("change"), "no handler/history: input inert")
+            // No handler and no history: the input binds the constant "" (UI.Bound), so it still reports its commit and kyo-ui
+            // puts the empty value back; nothing else hears it.
+            assert(inert.contains("data-kyo-ev=\"change\""), "no handler/history: the bound input reports its commit for the put-back")
     }
 
     "Theme carries the kyo remainder for orderlist/picklist/carousel/galleria/fileupload/treetable/orgchart/terminal" in {

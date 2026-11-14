@@ -1493,6 +1493,31 @@ final private[kyo] class MountSession(audited: Boolean = false):
 
     def isOpen: Boolean = open.get() > 0
 
+    // Every region watch of the session, and what wakes a reader waiting for them to catch up (see awaitRegions).
+    private val regionWatches = AtomicRef.Unsafe.init(Set.empty[RegionWatch])(using AllowUnsafe.embrace.danger)
+    private val regionsMoved  = AtomicRef.Unsafe.init(Promise.Unsafe.init[Unit, Any]()(using AllowUnsafe.embrace.danger))(using
+        AllowUnsafe.embrace.danger
+    )
+
+    private[internal] def watchAdded(w: RegionWatch)(using AllowUnsafe): Unit   = discard(regionWatches.getAndUpdate(_ + w))
+    private[internal] def watchRemoved(w: RegionWatch)(using AllowUnsafe): Unit = discard(regionWatches.getAndUpdate(_ - w))
+
+    /** A region of the session moved (a pass recorded, a rest, an end): wakes whoever waits in [[awaitRegions]]. */
+    private[internal] def regionMoved()(using AllowUnsafe): Unit =
+        regionsMoved.getAndSet(Promise.Unsafe.init[Unit, Any]()).completeDiscard(Result.succeed(()))
+
+    /** Where every region of the session stands now: what [[awaitRegions]] waits on. */
+    def regionsNow(using Frame): Chunk[(RegionWatch, Long, Long)] < Sync =
+        Sync.Unsafe.defer(Chunk.from(regionWatches.get().iterator.map(w => (w, w.started, w.restedSoFar))))
+
+    /** Waits until every region of `at` has seen every write made since `at` was taken: the moment the regions a handler woke have run. */
+    def awaitRegions(at: Chunk[(RegionWatch, Long, Long)])(using Frame): Unit < Async =
+        Sync.Unsafe.defer {
+            val moved = regionsMoved.get()
+            if at.forall((w, p, r) => w.caughtUp(p, r)) then Kyo.unit
+            else moved.safe.get.andThen(awaitRegions(at))
+        }
+
     def enter()(using AllowUnsafe): Unit = discard(open.incrementAndGet())
 
     /** Ends one batch; the last one to end lets every waiting table take its cut. */
@@ -1719,9 +1744,11 @@ final private[kyo] class MountTable(
         Sync.Unsafe.defer {
             val watch = new RegionWatch(scope)
             discard(watches.getAndUpdate(_ + watch))
+            session.watchAdded(watch)
             discard(session.counters.registered.incrementAndGet())
             Scope.ensure(Sync.Unsafe.defer {
                 discard(watches.getAndUpdate(_ - watch))
+                session.watchRemoved(watch)
                 discard(session.counters.unregistered.incrementAndGet())
                 watch.end()
             }).andThen(watch)
@@ -1729,6 +1756,7 @@ final private[kyo] class MountTable(
 
     /** Wakes the settling fiber, if one waits. Callable from any thread, without effects. */
     def recheck()(using AllowUnsafe): Unit =
+        session.regionMoved()
         decide()
         if running.get() then wake.getAndSet(Promise.Unsafe.init[Unit, Any]()).completeDiscard(Result.succeed(()))
     end recheck

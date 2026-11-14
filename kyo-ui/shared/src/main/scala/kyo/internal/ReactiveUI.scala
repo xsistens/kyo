@@ -800,7 +800,7 @@ private[kyo] object ReactiveUI:
             // the server-push session through `handleValidated` (UIServer). Wrapping either one alone
             // suppresses the browser's activation on both while replacing it on only one, which is a
             // button that stops working rather than one that works twice.
-            activating = activatingHandle(assertingHandle(rui.handle, exchange))
+            activating = activatingHandle(assertingHandle(rui.handle, exchange, session))
             dragging   = dragHandle(activating, dragSessions, dragMutex, expiryWake, dragLimits)
             // A handler runs in the session, so a UI.batch inside it finds it; the handler itself is no change of its own (see MountTable).
             validatedHandle: ValidatedHandler = (path, event) => MountSession.current.let(Present(session))(dragging(path, event))
@@ -835,20 +835,35 @@ private[kyo] object ReactiveUI:
             }
         }
 
-    /** Puts back an edit its owner did not take on an element that follows a signal. The browser changed the control before the event got here,
-      * and an owner that declines leaves the signal as it was, so no emission would ever reach the control. Compares once the event has
-      * finished bubbling, and sends through the session's own exchange: content a boundary holds back takes no event, so there is nothing to
-      * wait for. Only an edit records, so every other event goes straight through.
+    /** Puts back an edit on a bound control that the control no longer shows (see [[kyo.UI.Bound]]). The browser changed the control
+      * before the event got here, and an owner that declines, filters or reverts leaves a binding that no emission would ever bring back
+      * to the control.
+      *
+      * The edit runs its handlers first, noting whether its target is a bound control. Only then, once every region the handlers woke has
+      * seen their writes ([[MountSession.awaitRegions]] over the regions as they stood before the edit), the edit is dispatched a second
+      * time without handlers, to read the binding of the element that now stands at the target's place, and the difference to what the
+      * edit carried is sent through the session's own exchange. Comparing after the regions keeps an accepted edit free of writes, and
+      * makes a control a region rebuilt answer with its new binding. Only an edit records, so every other event goes straight through.
       */
-    private def assertingHandle(handle: Handler, exchange: UIExchange)(using Frame): Handler =
+    private def assertingHandle(handle: Handler, exchange: UIExchange, session: MountSession)(using Frame): Handler =
         (path, event) =>
             event match
                 case _: (UIEvent.Input | UIEvent.Change | UIEvent.ChangeChecked | UIEvent.ChangeNumeric) =>
                     for
-                        recorded <- AtomicRef.init(Maybe.empty[UIExchange => Unit < Async])
-                        keep     <- followEdit.let(Present(recorded))(handle(path, event))
-                        send     <- recorded.get
-                        _        <- send.fold(Kyo.unit)(_(exchange))
+                        before <- session.regionsNow
+                        edited <- AtomicBoolean.init(false)
+                        keep   <- controlEdited.let(Present(edited))(handle(path, event))
+                        bound  <- edited.get
+                        _      <-
+                            if !bound then Kyo.unit
+                            else
+                                for
+                                    _     <- session.awaitRegions(before)
+                                    probe <- AtomicRef.init(Maybe.empty[UIExchange => Unit < Async])
+                                    _     <- putBackProbe.let(Present(probe))(handle(path, event))
+                                    send  <- probe.get
+                                    _     <- send.fold(Kyo.unit)(_(exchange))
+                                yield ()
                     yield keep
                 case _ => handle(path, event)
 

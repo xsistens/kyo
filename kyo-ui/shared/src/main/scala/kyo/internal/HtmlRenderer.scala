@@ -477,7 +477,7 @@ private[kyo] object HtmlRenderer:
                             case _            => ()
                         end match
                         var i = 0
-                        elem.children.foreach { child =>
+                        childrenOf(elem).foreach { child =>
                             renderTo(
                                 sb,
                                 child,
@@ -758,6 +758,7 @@ private[kyo] object HtmlRenderer:
             case Present(Bound.Const(s))    => w(sb, esc(masked(ta.inputMask, s)))
             case Present(Bound.Ref(ref))    => w(sb, esc(masked(ta.inputMask, SignalNow(ref))))
             case Present(Bound.Follow(sig)) => w(sb, esc(masked(ta.inputMask, SignalNow(sig))))
+            case Present(Bound.Default(s))  => w(sb, esc(masked(ta.inputMask, s)))
             case _                          => ()
 
     // ---- Dropdown (custom div-based overlay) ----
@@ -1108,6 +1109,7 @@ private[kyo] object HtmlRenderer:
                             case Present(Bound.Const(v))    => masked(mask, v)
                             case Present(Bound.Ref(ref))    => masked(mask, SignalNow(ref))
                             case Present(Bound.Follow(sig)) => masked(mask, SignalNow(sig))
+                            case Present(Bound.Default(v))  => masked(mask, v)
                             case _                          => ""
                         if FilledClass.filled(text) then Seq(name) else Seq.empty
                     case None => Seq.empty
@@ -1216,6 +1218,7 @@ private[kyo] object HtmlRenderer:
                     case Present(Bound.Const(d))    => w(sb, s""" value="${fmtD(d)}"""")
                     case Present(Bound.Ref(ref))    => w(sb, s""" value="${fmtD(SignalNow(ref))}"""")
                     case Present(Bound.Follow(sig)) => w(sb, s""" value="${fmtD(SignalNow(sig))}"""")
+                    case Present(Bound.Default(d))  => w(sb, s""" value="${fmtD(d)}" data-kyo-default""")
                     case _                          => ()
                 end match
                 r.min.foreach(v => w(sb, s""" min="${fmtD(v)}""""))
@@ -1262,11 +1265,13 @@ private[kyo] object HtmlRenderer:
                     case Present(Bound.Const(s))    => bound(s)
                     case Present(Bound.Ref(ref))    => bound(SignalNow(ref))
                     case Present(Bound.Follow(sig)) => bound(SignalNow(sig))
-                    case _                          =>
-                        // Fall back to first Opt child with selected(true)
+                    // The reader's pick from the start: the option it names carries `selected` (see selectChildren), which the
+                    // browser shows on creation and the morph moves only when the default moves.
+                    case Present(Bound.Default(s)) => w(sb, s""" value="${esc(s)}" data-kyo-default""")
+                    case _                         =>
+                        // Fall back to first Opt child that is selected, bound or by default
                         val selected = Maybe.fromOption(sel.children.toSeq.collectFirst {
-                            case opt: Opt if opt.selected == Present(true) =>
-                                opt.value.getOrElse("")
+                            case opt: Opt if optSelected(opt) => opt.value.getOrElse("")
                         })
                         selected match
                             case Present(v) if v.nonEmpty => w(sb, s""" value="${esc(v)}"""")
@@ -1274,7 +1279,13 @@ private[kyo] object HtmlRenderer:
                 end match
             case opt: Opt =>
                 opt.value.foreach(v => w(sb, s""" value="${esc(v)}""""))
-                boolAttr(sb, "selected", opt.selected)
+                // A bound option shows the render's state on every pass (data-kyo-bound, as a bound box); a default one only
+                // when it moves.
+                opt.selected match
+                    case Present(Bound.Const(on))   => w(sb, " data-kyo-bound"); if on then w(sb, " selected")
+                    case Present(Bound.Default(on)) => if on then w(sb, " selected")
+                    case _                          => ()
+                end match
             case a: Anchor =>
                 if !owned("href") then a.href.foreach(href => w(sb, s""" href="${esc(Href.attrValue(href))}""""))
                 a.download.foreach(name => w(sb, s""" download="${esc(name)}""""))
@@ -1317,6 +1328,7 @@ private[kyo] object HtmlRenderer:
             case Present(Bound.Const(b))    => w(sb, " data-kyo-bound"); if b then w(sb, " checked")
             case Present(Bound.Ref(ref))    => w(sb, " data-kyo-bound"); if SignalNow(ref) then w(sb, " checked")
             case Present(Bound.Follow(sig)) => w(sb, " data-kyo-bound"); if SignalNow(sig) then w(sb, " checked")
+            case Present(Bound.Default(b))  => if b then w(sb, " checked")
             case _                          => ()
 
     /** Render a value attribute, reading SignalRef if needed. */
@@ -1343,6 +1355,7 @@ private[kyo] object HtmlRenderer:
             case Present(Bound.Const(s))    => w(sb, s""" value="${esc(masked(mask, s))}"""")
             case Present(Bound.Ref(ref))    => w(sb, s""" value="${esc(masked(mask, SignalNow(ref)))}"""")
             case Present(Bound.Follow(sig)) => w(sb, s""" value="${esc(masked(mask, SignalNow(sig)))}"""")
+            case Present(Bound.Default(s))  => w(sb, s""" value="${esc(masked(mask, s))}" data-kyo-default""")
             case _                          => ()
 
     private def renderPickerAttrs(sb: StringBuilder, pi: PickerInput)(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
@@ -1357,8 +1370,36 @@ private[kyo] object HtmlRenderer:
 
     /** Whether the client has to forward the commit of an edit: to write a ref, or to put back what a followed signal's owner did not take. */
     private def bindsEdit(value: Maybe[Bound[?]]): Boolean = value match
-        case Present(_: Bound.Ref[?] | _: Bound.Follow[?]) => true
-        case _                                             => false
+        case Present(_: Bound.Ref[?] | _: Bound.Follow[?] | _: Bound.Const[?]) => true
+        case _                                                                 => false
+
+    /** Whether an option is selected as it renders, bound or by default. */
+    private def optSelected(opt: Opt): Boolean = opt.selected match
+        case Present(Bound.Const(on))   => on
+        case Present(Bound.Default(on)) => on
+        case _                          => false
+
+    /** Whether a select's options bind their selection: an option bound to a constant makes the pick a controlled one. */
+    private[kyo] def optionsBind(sel: Select): Boolean =
+        sel.children.exists {
+            case opt: Opt => opt.selected.exists(_.isInstanceOf[Bound.Const[?]])
+            case _        => false
+        }
+
+    /** The children an element renders: those of a select whose value is a default carry that default as the `selected` of the option it
+      * names, so the browser shows it on creation and the reader owns the pick from there. Every other element renders its own.
+      */
+    private[kyo] def childrenOf(elem: Element): Chunk[UI] =
+        elem match
+            case sel: Select =>
+                sel.value match
+                    case Present(Bound.Default(v)) =>
+                        sel.children.map {
+                            case opt: Opt if opt.value.contains(v) && opt.selected.isEmpty => opt.defaultSelected(true)
+                            case child                                                     => child
+                        }
+                    case _ => sel.children
+            case _ => elem.children
 
     /** Writes `data-kyo-ev` with every event the element's handlers and bindings make the client forward, and
       * answers whether there was one. A silent element (see UI.Element.silent) writes none: the bytes of the
@@ -1475,7 +1516,7 @@ private[kyo] object HtmlRenderer:
             case ni: NumberInput if ni.onChangeNumeric.nonEmpty || bindsEdit(ni.value) => add("change")
             case ri: RangeInput if ri.onChange.nonEmpty || bindsEdit(ri.value)         => add("change")
             case fi: FileInput if fi.onChange.nonEmpty || attrs.onFileSelect.nonEmpty  => add("change")
-            case sel: Select if bindsEdit(sel.value)                                   => add("change")
+            case sel: Select if bindsEdit(sel.value) || optionsBind(sel)               => add("change")
             case _                                                                     =>
         end match
         elem match
@@ -2234,7 +2275,7 @@ private[kyo] object HtmlRenderer:
            |    // Regions carry no element of their own (comment markers), so the path resolves uniquely to the content element.
            |    var sapp=op.SetAttrByPath.path.join(".");var sapel=document.querySelector(__kyoPathSel(sapp));if(sapel){sapel.setAttribute(op.SetAttrByPath.name,op.SetAttrByPath.value);__kyoSyncField(sapel,op.SetAttrByPath.name,op.SetAttrByPath.value);}
            |  }else if(op.SetBoolAttrByPath){
-           |    var sbpp=op.SetBoolAttrByPath.path.join(".");var sbpel=document.querySelector(__kyoPathSel(sbpp));if(sbpel){if(op.SetBoolAttrByPath.value){sbpel.setAttribute(op.SetBoolAttrByPath.name,'');}else{sbpel.removeAttribute(op.SetBoolAttrByPath.name);}if(op.SetBoolAttrByPath.name==="checked"&&sbpel.tagName==="INPUT")__kyoSyncChecked(sbpel,op.SetBoolAttrByPath.value);}
+           |    var sbpp=op.SetBoolAttrByPath.path.join(".");var sbpel=document.querySelector(__kyoPathSel(sbpp));if(sbpel){if(op.SetBoolAttrByPath.name==="indeterminate"){if(sbpel.indeterminate!==op.SetBoolAttrByPath.value)sbpel.indeterminate=op.SetBoolAttrByPath.value;}else{if(op.SetBoolAttrByPath.value){sbpel.setAttribute(op.SetBoolAttrByPath.name,'');}else{sbpel.removeAttribute(op.SetBoolAttrByPath.name);}if(op.SetBoolAttrByPath.name==="checked"&&sbpel.tagName==="INPUT")__kyoSyncChecked(sbpel,op.SetBoolAttrByPath.value);}}
            |  }else if(op.SetClassByPath){
            |    // Path-addressed reactive class: toggle in place so CSS transitions fire. Not owned: the render carries its value.
            |    var scpp=op.SetClassByPath.path.join(".");var scpel=document.querySelector(__kyoPathSel(scpp));if(scpel){scpel.classList.toggle(op.SetClassByPath.name,op.SetClassByPath.on);}
@@ -2326,7 +2367,7 @@ private[kyo] object HtmlRenderer:
            |// the other radios when the reader clicked this one, so each bound radio of the group shows what its attribute says again; a free
            |// radio's tick stays. Twin of syncChecked in DomBackend.
            |function __kyoSyncChecked(el,on){
-           |  el.checked=on;
+           |  if(el.checked!==on)el.checked=on;
            |  if(el.type==="radio"&&el.name){var rs=document.querySelectorAll("input[type=radio][data-kyo-bound]");
            |    for(var i=0;i<rs.length;i++){var r=rs[i];if(r.name===el.name&&r.form===el.form)r.checked=r.hasAttribute("checked");}}
            |}

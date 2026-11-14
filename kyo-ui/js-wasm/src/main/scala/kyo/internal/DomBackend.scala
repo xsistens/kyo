@@ -312,7 +312,8 @@ private[kyo] object DomBackend:
       */
     private def syncChecked(el: dom.Element, on: Boolean): Unit =
         val dyn = el.asInstanceOf[js.Dynamic]
-        dyn.checked = on
+        // A control that already shows the value takes no write: an accepted edit costs none.
+        if dyn.checked.asInstanceOf[Boolean] != on then dyn.checked = on
         val name = dyn.name.asInstanceOf[String]
         if dyn.selectDynamic("type").asInstanceOf[String] == "radio" && name.nonEmpty then
             val radios = document.querySelectorAll("input[type=radio][data-kyo-bound]")
@@ -888,8 +889,15 @@ private[kyo] object DomBackend:
         private def boolAttrPatchNow(path: Seq[String], name: String, value: Boolean): Unit =
             val el = queryByPath(path)
             if el != null then
-                if value then el.setAttribute(name, "") else el.removeAttribute(name)
-                if name == "checked" && el.tagName == "INPUT" then syncChecked(el, value)
+                // indeterminate is a property with no attribute; the put-back of a click writes it alone.
+                if name == "indeterminate" then
+                    val dyn = el.asInstanceOf[js.Dynamic]
+                    if dyn.indeterminate.asInstanceOf[Boolean] != value then dyn.indeterminate = value
+                else
+                    if value then el.setAttribute(name, "") else el.removeAttribute(name)
+                    if name == "checked" && el.tagName == "INPUT" then syncChecked(el, value)
+                end if
+            end if
         end boolAttrPatchNow
 
         // Toggle in place (so CSS transitions fire) rather than re-render.

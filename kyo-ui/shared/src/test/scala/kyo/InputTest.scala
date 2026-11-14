@@ -402,12 +402,12 @@ class InputTest extends UITest:
         }
     }
 
-    "a text field's blur reports the edit of a field started from a constant, not the constant" in {
+    "a text field's blur reports the edit of a field started from a default, not the default" in {
 
         val app: UI < Async =
             for ref <- Signal.initRef("none")
             yield UI.div(
-                UI.input.id("i").value("x").onBlur((_, v) => ref.set(s"[$v]")),
+                UI.input.id("i").defaultValue("x").onBlur((_, v) => ref.set(s"[$v]")),
                 UI.button("other").id("other"),
                 ref.map(v => UI.span(v).id("v"))
             )
