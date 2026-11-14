@@ -95,10 +95,12 @@ region that runs again must not start a component over and take the reader's sta
   channel (the instance's own ref, or the caller's binding, never a stated constant), its `type` follows the reveal through kyo-ui's
   `textType` channel (the package-private `Input.revealing`, which needs no number flag and so no region), and only what is drawn from the text (the meter) is a region, a sibling of
   the field. SplitButton builds both segments once and draws only its menu panel as a region.
-- **Nothing under a region that runs again may state what the reader changes** (T13, `UI.Loss`). A run keeps every element in place
-  (focus, caret, typed text and ticks survive it), but a native field's `value`, `checked` or `selected` stated as a constant is put
-  back by every run, and a mount with no key starts over. Hand a field its value as a channel (an argument that reads, or a signal)
-  and give a mount a key. `UI.reactive` refuses both where it can see them; kyo-ui reports the rest to a devtools sink
+- **Nothing under a region that runs again may start over what the reader changes** (T13, `UI.Loss`). A run keeps every element in
+  place (focus, caret, typed text and ticks survive it). A binding is no loss: a native field's `value`, `checked` or `selected`, a
+  constant as much as a signal, is what the field shows on every run, and kyo-ui puts back an edit nobody takes (`UI.Bound`). What a
+  run takes is a default it moves (`defaultValue`, `defaultChecked`, `defaultSelected` with another value than the run before, which
+  starts the reader's field over) and a mount with no key, which starts over. Keep a default that moves outside the region (or bind
+  the field) and give a mount a key. `UI.reactive` refuses both where it can see them (a default that reads); kyo-ui reports the rest to a devtools sink
   (`UI.RenderKind.Lost`), and every uic suite counts them (`UicTest.countLoss`, a `UIC-LOSS` line per place). A component a wave
   frees goes on the list for which a loss fails the test (T19).
 - **Every converted component enrols in the contract's host-run case** with `placed = Present(_.toUI)` on its `SlotCase` (or
