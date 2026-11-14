@@ -3,8 +3,8 @@ package kyo.uic
 import kyo.*
 import kyo.UI.render
 
-/** The `value` slot holds to rule A ([[ReactiveValueContract]]) as a text field that keeps its text does: a constant is the
-  * starting text, and unbound or from a constant the instance's own ref holds what the reader types, with the meter, the
+/** The `value` slot holds to rule A ([[ReactiveValueContract]]) as a text field that keeps its text does: a `defaultValue` is the
+  * starting text, and unbound or from a default the instance's own ref holds what the reader types, with the meter, the
   * eye, both or neither. Typing reaches `onInput` and a commit `onChange`, so the slot is held through each. The cases after
   * them are what only this field does: the strength meter judges the text it shows, and an edit its owner does not take is
   * painted away.
@@ -27,7 +27,7 @@ class PasswordTest extends ReactiveValueContract:
             case _ => false
         }
 
-    /** A case of the value slot on `made`: the field keeps the text itself, unbound and from a constant, so the reader's text
+    /** A case of the value slot on `made`: the field keeps the text itself, unbound and from a default, so the reader's text
       * is the instance's and a host region that runs again keeps it.
       */
     private def ownText(
@@ -57,7 +57,8 @@ class PasswordTest extends ReactiveValueContract:
                 case _                   => false
             },
             ready = Present(ready),
-            startText = Present("abc")
+            startText = Present("abc"),
+            defaults = Present((c, t) => c.defaultValue(t))
         )
 
     private val valueSlot = ownText("value", uic.Password())
@@ -67,14 +68,14 @@ class PasswordTest extends ReactiveValueContract:
 
     heardBy(ownText("value heard by onChange", uic.Password(), hear = (c, f) => c.onChange(f), commit = true))
 
-    "unbound or from a constant, without the meter or the eye, the field binds the instance's own text" in {
+    "unbound or from a default, without the meter or the eye, the field binds the instance's own text" in {
         def own(c: uic.Password): Boolean < Sync = field(c.render).map(_.value match
             case Present(UI.Bound.Ref(_)) => true
             case _                        => false)
         for
             bare  <- own(uic.Password())
-            start <- own(uic.Password().value("abc"))
-        yield assert((bare, start) == (true, true), s"the field binds a ref of its own (unbound, from a constant): ${(bare, start)}")
+            start <- own(uic.Password().defaultValue("abc"))
+        yield assert((bare, start) == (true, true), s"the field binds a ref of its own (unbound, from a default): ${(bare, start)}")
         end for
     }
 
@@ -93,7 +94,7 @@ class PasswordTest extends ReactiveValueContract:
             if label != expected then throw new AssertionError(s"the meter says $label over the text '$text'")
             text
 
-    // With the meter on, the meter judges the text the field keeps, unbound and from a constant alike.
+    // With the meter on, the meter judges the text the field keeps, unbound and from a default alike.
     private val feedbackSlot = ownText("value with feedback", uic.Password().feedback(true), shows = judged(_))
 
     holds(feedbackSlot)
@@ -109,10 +110,10 @@ class PasswordTest extends ReactiveValueContract:
     holds(toggleSlot)
     blurs(toggleSlot, (c, f) => c.onBlur(f))
 
-    "started from a constant, the meter judges what the reader types" in {
+    "started from a default, the meter judges what the reader types" in {
         for
             after <- publishedAfterReady(
-                uic.Password().feedback(true).value("abc").onInput(_ => ()).render,
+                uic.Password().feedback(true).defaultValue("abc").onInput(_ => ()).render,
                 textField(_, "p-password-input").map { case f: UI.Ast.TextInput => f.onInput.isDefined; case _ => false },
                 until = t => elementsWithClass(t, "p-password-meter-strong").map(_.nonEmpty)
             )(t => textField(t, "p-password-input").map(typed(_, "abcDEF12", commit = false)))
@@ -124,7 +125,7 @@ class PasswordTest extends ReactiveValueContract:
     "a starting text the reader typed over survives a reveal" in {
         for
             after <- publishedAfterReady(
-                uic.Password().toggleMask(true).value("abc").render,
+                uic.Password().toggleMask(true).defaultValue("abc").render,
                 elementsWithClass(_, "p-password-toggle-mask-icon").map(_.nonEmpty),
                 until = t => textField(t, "p-password-input").map(textIn).map(_ == "xyz")
             )(
