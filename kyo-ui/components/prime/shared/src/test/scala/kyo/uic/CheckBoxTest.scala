@@ -16,7 +16,9 @@ class CheckBoxTest extends ReactiveValueContract:
         render = _.render,
         input = "p-checkbox-input",
         root = "p-checkbox",
-        checkedClass = "p-checkbox-checked"
+        checkedClass = "p-checkbox-checked",
+        // As an app places it, which keys an instance on the place.
+        placed = Present(_.toUI)
     ))
 
     private def box(ui: UI)(using Frame): UI.Ast.Checkbox < Sync =
