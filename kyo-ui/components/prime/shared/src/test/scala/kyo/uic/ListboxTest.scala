@@ -161,7 +161,7 @@ class ListboxTest extends ReactiveValueContract:
             case _                   => false
         })
 
-    // The query is a text the list keeps itself, unbound and from a constant, since it filters the rows by it; the page as
+    // The query is a text the list keeps itself, unbound and from a default, since it filters the rows by it; the page as
     // first rendered draws the field with nothing in it, so the cases read what the mount published.
     holds(new SlotCase[uic.Listbox[String], String](
         name = "filterQuery",
@@ -182,6 +182,7 @@ class ListboxTest extends ReactiveValueContract:
         },
         ready = Present(filterWired(_)),
         startText = Present("apple"),
+        defaults = Present((l, q) => l.defaultFilterQuery(q)),
         mountDraws = true
     ))
 
@@ -193,11 +194,27 @@ class ListboxTest extends ReactiveValueContract:
         yield assert(shown == Chunk("Banana"), s"the list filters by the signal: $shown")
     }
 
-    "a constant query is the starting text" in {
+    "a default query is the starting text" in {
         for
-            t     <- mounted(fruit.filterQuery("apple").render)
+            t     <- mounted(fruit.defaultFilterQuery("apple").render)
             shown <- shownTexts(t)
         yield assert(shown == Chunk("Apple", "Pineapple"), s"the list starts filtered: $shown")
+    }
+
+    // A constant is a binding (UI.Bound): the field shows it, and kyo-ui puts back what the reader types over it.
+    "a constant query holds the list filtered by it, the filter field bound to the constant" in {
+        for
+            t     <- mounted(fruit.filterQuery("apple").onFilterQueryChange(_ => ()).render)
+            shown <- shownTexts(t)
+            field <- textField(t, "p-listbox-filter")
+        yield
+            assert(shown == Chunk("Apple", "Pineapple"), s"the list filters by the constant: $shown")
+            field match
+                case f: UI.Ast.TextInput =>
+                    assert(f.value.exists(_.isInstanceOf[UI.Bound.Const[?]]), s"the filter field is bound as ${f.value}")
+                case other => fail(s"not a text field: $other")
+            end match
+        end for
     }
 
     // A reader who cannot act has nothing to hear: a disabled list takes no query.
