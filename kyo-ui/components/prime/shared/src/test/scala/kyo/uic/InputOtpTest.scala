@@ -44,6 +44,7 @@ class InputOtpTest extends ReactiveValueContract:
         // mount and the id mount publish on their own, so the tree a gesture sees can hold both, whatever the order.
         ready = Present(t => cells(t).map(_.exists(_.attrs.identifier.isDefined))),
         startText = Present("12"),
+        defaults = Present((c, t) => c.defaultValue(t)),
         disable = Present((c, on) => c.disabled(on))
     ))
 
@@ -66,9 +67,24 @@ class InputOtpTest extends ReactiveValueContract:
         yield assert(s == List(" 1", " 12"), s"reported $s")
     }
 
-    "started from a constant, every cell edit reports the whole code the cells hold" in {
-        for s <- twoEdits(seen => otp.value("5").onChange(v => seen.updateAndGet(_ :+ v).unit).render, "7", "8")
+    "started from a default, every cell edit reports the whole code the cells hold" in {
+        for s <- twoEdits(seen => otp.defaultValue("5").onChange(v => seen.updateAndGet(_ :+ v).unit).render, "7", "8")
         yield assert(s == List("57", "578"), s"reported $s")
+    }
+
+    // A constant is a binding (UI.Bound): a cell edit reports the code it asks for from the constant, never from an edit before
+    // it, since the code stays what the owner holds.
+    "a constant code reports each cell edit against the constant, which the code stays" in {
+        for
+            seen <- Signal.initRef(List.empty[String])
+            t    <- readyTree(otp.value("5").onChange(v => seen.updateAndGet(_ :+ v).unit).render)(t =>
+                cells(t).map(_.exists(_.attrs.identifier.isDefined))
+            )
+            cs <- cells(t)
+            _  <- typed(cs(1), "7", commit = false)
+            _  <- typed(cs(2), "8", commit = false)
+            s  <- seen.get
+        yield assert(s == List("57", "5 8"), s"reported $s")
     }
 
     // The second keystroke reaches the cells the first one was typed into, before they were drawn again.

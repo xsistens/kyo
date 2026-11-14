@@ -35,10 +35,16 @@ final class InputOtp private[uic] (private[uic] val p: InputOtp.Props) extends N
     /** The whole code. A `SignalRef` binds TWO-WAY: a cell edit writes its character into the right position, and ref
       * changes re-render every cell. Any other signal binds ONE-WAY: the cells show it, and an edit writes nothing and
       * only reports the code it asks for through [[onChange]]; without it, a card says the reader cannot change it. A
-      * constant is the starting code. Unbound or from a constant, the field keeps the code itself, so a cell edit writes
-      * there and [[onChange]] hears the whole code the cells hold. `ref.readOnly` opts a ref out.
+      * constant holds the code the same way (see [[kyo.UI.Bound]]). Unbound or from a [[defaultValue]], the field keeps the
+      * code itself, so a cell edit writes there and [[onChange]] hears the whole code the cells hold. `ref.readOnly` opts a
+      * ref out.
       */
     def value(v: String | Signal[String]): InputOtp = new InputOtp(p.copy(valueSlot = valueSlot.bind(v)))
+
+    /** The code the cells start with; the reader owns it from there, in the field: a cell edit writes there and
+      * [[onChange]] hears the whole code the cells hold.
+      */
+    def defaultValue(v: String): InputOtp = new InputOtp(p.copy(valueSlot = valueSlot.startAt(v)))
 
     /** Number of cells (Prime default 4). */
     def length(n: Int): InputOtp = new InputOtp(p.copy(lengthV = math.max(1, n)))
@@ -84,13 +90,13 @@ final class InputOtp private[uic] (private[uic] val p: InputOtp.Props) extends N
 
     private def interactive: Boolean = !disabledFlag.constTrue && !readonlyFlag
 
-    // Unbound or started from a constant, the code is the field's own: the cells build it together, so a code the reader asks
+    // Unbound, the code is the field's own, from its default or empty: the cells build it together, so a code the reader asks
     // for is the one they hold, which a ref the field keeps for as long as it is shown remembers. It sits above the region over
-    // `disabled`, or a flip would end the mount that holds it.
+    // `disabled`, or a flip would end the mount that holds it. A binding, a constant among them, holds the code (UI.Bound).
     private[uic] def render(using Frame): UI =
-        Controlled.owningFrom(
+        Controlled.owning(
             valueSlot,
-            unbound = "",
+            valueSlot.start.getOrElse(""),
             on = BoolValue.Const(interactive)
         )(s => new InputOtp(this.p.copy(valueSlot = s)).resolved)
 
@@ -105,8 +111,13 @@ final class InputOtp private[uic] (private[uic] val p: InputOtp.Props) extends N
                 // re-renders. Bound one way, each cell follows its position of the signal, so kyo-ui puts back a character the owner
                 // does not take.
                 UI.mounted(Kyo.foreach(0 until lengthV)(_ => UI.id).map(ids => wired(sig, ids.toList, focusById)))
+            // A constant somebody hears is drawn as a one-way code: each cell shows its position, an edit reports the code it asks
+            // for, and kyo-ui puts back what the owner does not take.
+            case Present(ReactiveValue.Const(code)) if interactive && valueSlot.heard =>
+                UI.mounted(Kyo.foreach(0 until lengthV)(_ => UI.id).map(ids => wired(Signal.initConst(code), ids.toList, focusById)))
             case Present(ReactiveValue.Dyn(sig)) => validity.follow(sig.render(v => body(v, Absent, _ => (), validity)))
-            case other                           => validity.follow(body(other.flatMap(_.const).getOrElse(""), Absent, _ => (), validity))
+            case other                           =>
+                validity.follow(body(other.flatMap(_.const).orElse(valueSlot.start).getOrElse(""), Absent, _ => (), validity))
         Diagnostics.after(field)("InputOtp")(Diagnostic.unheard(valueSlot, InputOtp.valueName, on = interactive))
     end renderResolved
 
