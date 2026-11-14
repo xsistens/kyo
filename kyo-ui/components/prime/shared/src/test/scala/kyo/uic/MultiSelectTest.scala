@@ -635,7 +635,7 @@ class MultiSelectTest extends ReactiveValueContract:
         end for
     }
 
-    // The query is a text the field keeps itself, unbound and from a constant, since it draws the panel from it. Its input
+    // The query is a text the field keeps itself, unbound and from a default, since it draws the panel from it. Its input
     // is in the panel, which only the mount draws open: the panel is held open here, so the query is the slot under test.
     holds(new SlotCase[uic.MultiSelect[Fruit], String](
         name = "filterQuery",
@@ -656,6 +656,7 @@ class MultiSelectTest extends ReactiveValueContract:
         },
         ready = Present(elementsWithClass(_, "p-multiselect-filter").map(_.nonEmpty)),
         startText = Present("ch"),
+        defaults = Present((m, q) => m.defaultFilterQuery(q)),
         mountDraws = true
     ))
 
@@ -667,11 +668,27 @@ class MultiSelectTest extends ReactiveValueContract:
         yield assert(rows.size == 1 && textOf(rows.head).contains("Apple"), s"the panel filters by the signal: ${rows.map(textOf)}")
     }
 
-    "a constant query is the starting text" in {
+    "a default query is the starting text" in {
         for
-            t    <- mounted(multi.open(true).filterQuery("ch").render)
+            t    <- mounted(multi.open(true).defaultFilterQuery("ch").render)
             rows <- elementsWithClass(t, "p-multiselect-option")
         yield assert(rows.size == 1 && textOf(rows.head).contains("Cherry"), s"the panel starts filtered: ${rows.map(textOf)}")
+    }
+
+    // A constant is a binding (UI.Bound): the field shows it, and kyo-ui puts back what the reader types over it.
+    "a constant query holds the panel filtered by it, the filter field bound to the constant" in {
+        for
+            t     <- mounted(multi.open(true).filterQuery("ch").onFilterQueryChange(_ => ()).render)
+            rows  <- elementsWithClass(t, "p-multiselect-option")
+            field <- textField(t, "p-multiselect-filter")
+        yield
+            assert(rows.size == 1 && textOf(rows.head).contains("Cherry"), s"the panel filters by the constant: ${rows.map(textOf)}")
+            field match
+                case f: UI.Ast.TextInput =>
+                    assert(f.value.exists(_.isInstanceOf[UI.Bound.Const[?]]), s"the filter field is bound as ${f.value}")
+                case other => fail(s"not a text field: $other")
+            end match
+        end for
     }
 
     // A reader who cannot act has nothing to hear: a disabled field neither opens nor takes a query.
