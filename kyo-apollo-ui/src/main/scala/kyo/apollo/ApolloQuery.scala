@@ -20,7 +20,7 @@ import kyo.apollo.network.ApolloResponse
   *   - the effect form ([[ApolloEffect]]) — `call.data` / `call.response`;
   *   - the reactive form ([[ApolloSignal]]) — `call.watchSignal` /
   *     `call.watchStream`;
-  *   - and this file's [[useQuery]] helper, a react-apollo-style pairing of the
+  *   - and [[Apollo.query]], a react-apollo-style pairing of the
   *     live [[Signal]] with a `refetch` effect.
   *
   * So app code writes, with no per-operation wiring:
@@ -38,7 +38,7 @@ import kyo.apollo.network.ApolloResponse
   *     onClick(q.refetch)         // D < (Async & Abort[ApolloException])
   * }}}
   *
-  * It is deliberately thin: [[useQuery]] is nothing but `call.watchSignal` for
+  * It is deliberately thin: [[Apollo.query]] is nothing but `call.watchSignal` for
   * the reactive state paired with `call.data` for `refetch`, so it introduces no
   * new coupling to `core` beyond the `call.watch()` cache-watcher stream the two
   * forms already drive off.
@@ -190,7 +190,7 @@ class QueryHandle[D] private[apollo] (
 
     // The running poll fiber, if any (react-parity imperative polling). A plain cell
     // — single-threaded JS — driven by [[startPolling]] / [[stopPolling]]; its fiber
-    // is cleaned up when the handle's enclosing `Scope` closes (see [[useQuery]]).
+    // is cleaned up when the handle's enclosing `Scope` closes (see [[Apollo.query]]).
     private var pollFiberCell: Maybe[Fiber[Unit, Any]] = Absent
 
     /** Start (or restart) background polling — react's `startPolling`. Every
@@ -309,7 +309,7 @@ extension [D](sig: Signal[QueryState[D]])
     def mapData[B](f: D => B < Abort[ApolloException])(using Frame, CanEqual[B, B]): Signal[QueryState[B]] =
         sig.map(_.mapData(f))
 
-/** [[QueryHandle.mapData]] chained directly on the effect [[useQuery]] returns —
+/** [[QueryHandle.mapData]] chained directly on the effect [[Apollo.query]] returns —
   * `useQuery(call).mapData(f)` — so a route binder projects in the same pipeline
   * step that opens the watcher, with no intermediate `.map`:
   *
@@ -341,7 +341,7 @@ private[apollo] def buildQueryHandle[D](
         _ <- Scope.ensure(handle.stopPolling)
     yield handle
 
-/** The result of [[useLazyQuery]] — react-apollo's `useLazyQuery` shape: a
+/** The result of [[Apollo.lazyQuery]] — react-apollo's `useLazyQuery` shape: a
   * reactive [[state]] that starts [[QueryState.Idle]] (no fetch on setup) and a
   * [[load]] effect that fires the query on demand.
   *

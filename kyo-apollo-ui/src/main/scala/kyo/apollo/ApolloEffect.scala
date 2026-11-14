@@ -22,7 +22,7 @@ import kyo.apollo.network.Uuid
   *
   *   - `call.data` — run once, yield the typed `data` or a typed
   *     [[kyo.apollo.exception.ApolloException]] on Kyo's `Abort` channel;
-  *   - `call.response` — run once, yield the full [[ApolloResponse]]
+  *   - `call.response` — run once, yield the full [[kyo.apollo.network.ApolloResponse ApolloResponse]]
   *     (partial data + GraphQL errors preserved), no `Abort`.
   *
   * ==How it runs==
@@ -74,7 +74,7 @@ extension [D](call: ApolloCall[D])
         call.response.map(resp => Abort.get(ApolloEffect.projectData(resp, policy)))
     end data
 
-    /** Execute this operation once and yield its full [[ApolloResponse]].
+    /** Execute this operation once and yield its full [[kyo.apollo.network.ApolloResponse ApolloResponse]].
       *
       * `ApolloResponse[D] < Async` — no `Abort`. The response preserves partial
       * `data`, GraphQL `errors`, and any transport `exception` as values, so the
