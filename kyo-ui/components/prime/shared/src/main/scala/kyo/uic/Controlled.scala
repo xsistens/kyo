@@ -52,6 +52,11 @@ final private[uic] case class Controlled[A](
                 case s: Signal[A] @unchecked => copy(bound = Present(s))
                 case a: A @unchecked         => copy(bound = Absent, start = Present(a))
 
+    /** The slot with `a` as where the instance's own value starts, for a value the reader owns from there: the `defaultValue` of a
+      * field. A binding, where there is one, still holds the slot.
+      */
+    def startAt(a: A): Controlled[A] = copy(start = Present(a))
+
     /** The slot with nothing bound: the component's own. */
     def unbound: Controlled[A] = copy(bound = Absent)
 
@@ -165,6 +170,18 @@ private[uic] object Controlled:
         if slot.binding.isDefined || on.const.contains(false) then draw(slot)
         else UI.mounted(Signal.initRef(start).map(own => draw(slot.copy(bound = Present(own)))))
 
+    /** One instance per place for a component whose props hold its own state in a [[Controlled]] slot with a start: the engine binds
+      * the instance's own ref where the run binds nothing, and a host region that runs again hands the instance the run's props
+      * instead of starting it over, so what the reader gave an unbound component stays. `draw` draws the props as resolved: drawn
+      * once where no run can follow, and again for each run's props where one can.
+      */
+    def instance[P](props: P)(draw: P => UI)(using CanEqual[P, P], scala.deriving.Mirror.ProductOf[P], Frame): UI =
+        UI.mountedWith(props) { live =>
+            live(q => q: Prop[P]) match
+                case runs: Signal[P] @unchecked => runs.render(draw)
+                case q: P @unchecked            => draw(q)
+        }
+
     /** [[owning]] where a constant is only where the slot starts. */
     def owningFrom[A](slot: Controlled[A], unbound: A, on: BoolValue = alwaysOn)(draw: Controlled[A] => UI)(using
         CanEqual[A, A],
@@ -191,8 +208,8 @@ private[uic] object Controlled:
       * @param value
       *   what it shows at this render
       * @param native
-      *   what its native element binds: a value where a region around it follows the slot, a signal where the element has to
-      *   follow it itself so kyo-ui puts back what its owner did not take
+      *   what its native element binds: a value where a region around it follows the slot, a signal where the element
+      *   follows it itself; either way kyo-ui puts back what its owner did not take (see [[kyo.UI.Bound]])
       * @param edit
       *   what the reader's change does, `Absent` where nobody hears it
       * @param fixed
