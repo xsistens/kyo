@@ -26,9 +26,10 @@ end InputType
   * (`value(SignalRef)` to `Bound.Ref`), `onInput`/`onChange`, and the caret-preserving morph path are all inherited from kyo-ui,
   * not rebuilt.
   *
-  * The text is the reader's: unbound, the browser keeps what was typed, and a constant is where it starts, which the instance
-  * holds from there, so a host region that runs again keeps the reader's text. Any other `Signal[String]` binds one way: the
-  * field shows it, and an edit only reports through `onInput`/`onChange`. Validation is Prime's `.p-invalid` model: `invalid`
+  * The text is the reader's unbound or from a `defaultValue`: unbound, the browser keeps what was typed; from a default, the
+  * instance holds the text from there, so a host region that runs again keeps the reader's text. A bound value holds the field
+  * (see [[kyo.UI.Bound]]): a constant or any other `Signal[String]` is what it shows, and an edit only reports through
+  * `onInput`/`onChange`, put back where the owner does not take it. Validation is Prime's `.p-invalid` model: `invalid`
   * plus the optional `invalidMessage` row below the field.
   */
 final class Input private[uic] (private[uic] val p: Input.Props) extends Component(Setters[Input.Props, Input]), Node,
@@ -74,8 +75,13 @@ final class Input private[uic] (private[uic] val p: Input.Props) extends Compone
     def onChange(f: String => UI.Action)(using Frame): Input =
         new Input(p.copy(onChange = Present(Callback.of(f)), value = p.value.heardToo))
 
-    /** One instance per place where a constant gives the text its start: it holds the reader's text from there, and a host region
-      * that runs again hands it the run's props instead of starting it over. Unbound or bound to a signal the field keeps nothing
+    /** The text the field starts with; the reader owns it from there. The instance holds it, so a host region that runs again keeps
+      * what was typed. A bound `value` still holds the field.
+      */
+    def defaultValue(v: String): Input = new Input(p.copy(value = p.value.startAt(v)))
+
+    /** One instance per place where a `defaultValue` gives the text its start: it holds the reader's text from there, and a host region
+      * that runs again hands it the run's props instead of starting it over. Unbound or bound the field keeps nothing
       * of its own (the browser keeps an unbound text), so it is drawn directly (see [[Input.drawn]]).
       */
     private[uic] def render(using Frame): UI =
@@ -96,11 +102,11 @@ object Input:
     final private[uic] case class Props(
         /** The value. A `SignalRef` binds TWO-WAY: an edit writes it, and its changes update the field. Any other signal binds
           * ONE-WAY: the field shows it, and an edit writes nothing and only reports through `onInput` and `onChange`, so the app
-          * writes its own state and the field follows; with neither, a card says the reader cannot change it. A constant is where
-          * the text starts: the reader edits it freely, and the field keeps the edit when a region around it runs again.
+          * writes its own state and the field follows; with neither, a card says the reader cannot change it. A constant holds
+          * the field at that text: an edit is put back. For a text the reader edits freely from a start, use `defaultValue`.
           * `ref.readOnly` opts a ref out. Its event `onInput` fires with the text after every keystroke.
           */
-        @eventName("onInput") value: Controlled[String] = Controlled(constantStarts = true),
+        @eventName("onInput") value: Controlled[String] = Controlled(),
         @noSetter placeholder: Maybe[Prop[String]] = Absent,
         /** Native `disabled`. A signal toggles it in place (no re-render, so caret and focus survive), e.g. disabled until another
           * field is valid.
@@ -151,7 +157,7 @@ object Input:
         inputMask: Opt[Prop[String]] = Opt.unset,
         onChange: Maybe[String => UI.Action] = Absent,
         /** Fires on focus loss (native `blur`) with the text the field holds as focus leaves it, which kyo-ui's blur carries: what
-          * the reader typed, also when nothing binds the field or it started from a constant. Unlike `onChange` it fires even when
+          * the reader typed, also when nothing binds the field or it started from a default. Unlike `onChange` it fires even when
           * the value was not edited. The form-validation layer wires its `Blur` trigger here.
           */
         onBlur: Maybe[String => UI.Action] = Absent,
@@ -172,7 +178,7 @@ object Input:
       * only brings new hearers leaves it equal and draws nothing again.
       *
       * @param text
-      *   what the field's `value` binds: the caller's binding, the instance's own ref, or a constant start drawn in place; absent
+      *   what the field's `value` binds: the caller's binding, the instance's own ref from a default, or a constant drawn in place; absent
       *   where nothing is bound and the browser keeps the text
       * @param unheard
       *   a signal bound one way that nobody hears
@@ -195,7 +201,7 @@ object Input:
     ) derives CanEqual
 
     private object Base:
-        /** The base of `q`, as the engine hands it: a value that starts from a constant is bound to the instance's own ref. */
+        /** The base of `q`, as the engine hands it: a value that starts from a default is bound to the instance's own ref. */
         def apply(q: Props): Base =
             Base(
                 q.value.bound.orElse(q.value.start),
@@ -215,7 +221,7 @@ object Input:
             )
     end Base
 
-    /** The field, drawn once over `props`, which hand it `value` bound: to the instance's own ref where a constant starts it, as
+    /** The field, drawn once over `props`, which hand it `value` bound: to the instance's own ref where a default starts it, as
       * the caller bound it otherwise, and not at all where nothing is bound and the browser keeps the text.
       *
       * Each place reads the field it shows: the size, the variant, the width, `disabled`, `readonly` and `required` reach the
