@@ -2,8 +2,8 @@ package kyo.uic
 
 import kyo.*
 
-/** The `value` slot holds to rule A ([[ReactiveValueContract]]) as a text field does: a constant is the starting text,
-  * and unbound the text is the browser's. Typing reaches `onInput` and a commit `onChange`, so the slot is held through
+/** The `value` slot holds to rule A ([[ReactiveValueContract]]) as a text field does: a `defaultValue` is the starting text,
+  * a constant is a binding the field shows, and unbound the text is the browser's. Typing reaches `onInput` and a commit `onChange`, so the slot is held through
   * each. The cases after them are what only this field does: a ref is kyo-ui's own binding, and an edit its owner does
   * not take is painted away.
   */
@@ -21,7 +21,8 @@ class TextAreaTest extends ReactiveValueContract:
         render = _.render,
         field = "p-textarea",
         // As an app places it, which keys an instance on the place.
-        placed = Present(_.toUI)
+        placed = Present(_.toUI),
+        defaults = Present((c, t) => c.defaultValue(t))
     )
 
     holds(valueSlot)
@@ -35,7 +36,8 @@ class TextAreaTest extends ReactiveValueContract:
         event = "onInput or onChange",
         render = _.render,
         field = "p-textarea",
-        commit = true
+        commit = true,
+        defaults = Present((c, t) => c.defaultValue(t))
     ))
 
     private def field(ui: UI)(using Frame): UI.Ast.Textarea < Sync =
@@ -137,12 +139,12 @@ class TextAreaTest extends ReactiveValueContract:
         end for
     }
 
-    "from a constant, a host region that runs again keeps the reader's text" in {
+    "from a default, a host region that runs again keeps the reader's text" in {
         def ran(t: UI): Boolean < Sync = elementsWithClass(t, UicTest.hostRunClass).map(_.exists(e => textOf(e) == "run 1"))
         for
             run <- Signal.initRef(0)
             ui = UI.div(run.map(n =>
-                UI.div(UI.span.cssClass(UicTest.hostRunClass)(s"run $n"), uic.TextArea().value("start").onInput(_ => Kyo.unit).toUI)
+                UI.div(UI.span.cssClass(UicTest.hostRunClass)(s"run $n"), uic.TextArea().defaultValue("start").onInput(_ => Kyo.unit).toUI)
             ))
             (every, _, _) <- paintedAround(ui, t => elementsWithClass(t, "p-textarea").map(_.nonEmpty), ran)(
                 t => field(t).map(f => typeInto(f, "typed")),
@@ -153,13 +155,16 @@ class TextAreaTest extends ReactiveValueContract:
         end for
     }
 
-    "inside a FloatLabel or an IconField, from a constant, a host region that runs again keeps the reader's text" in {
+    "inside a FloatLabel or an IconField, from a default, a host region that runs again keeps the reader's text" in {
         def ran(t: UI): Boolean < Sync = elementsWithClass(t, UicTest.hostRunClass).map(_.exists(e => textOf(e) == "run 1"))
         def kept(wrap: uic.TextArea => UI.MountSite ?=> UI): String < Async =
             for
                 run <- Signal.initRef(0)
                 ui = UI.div(run.map(n =>
-                    UI.div(UI.span.cssClass(UicTest.hostRunClass)(s"run $n"), wrap(uic.TextArea().value("start").onInput(_ => Kyo.unit)))
+                    UI.div(
+                        UI.span.cssClass(UicTest.hostRunClass)(s"run $n"),
+                        wrap(uic.TextArea().defaultValue("start").onInput(_ => Kyo.unit))
+                    )
                 ))
                 (every, _, _) <- paintedAround(ui, t => elementsWithClass(t, "p-textarea").map(_.nonEmpty), ran)(
                     t => field(t).map(f => typeInto(f, "typed")),
