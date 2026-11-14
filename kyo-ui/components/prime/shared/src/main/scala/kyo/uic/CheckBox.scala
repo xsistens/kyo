@@ -91,19 +91,16 @@ final class CheckBox private[uic] (private[uic] val p: CheckBox.Props) extends N
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(validityV)
-        // Unbound, the box keeps its own state, which starts off: a ref it owns for as long as it is shown.
-        val field = validity.follow(Controlled.owning(
-            checkedSlot,
-            start = false
-        )(s => new CheckBox(this.p.copy(checkedSlot = s)).drawn(validity)))
+        // One instance per place: unbound, the box keeps its own state, which starts off, in a ref the instance owns, and a host
+        // region that runs again hands the instance the run's props instead of starting it over.
+        val field = validity.follow(Controlled.instance(p)(q => new CheckBox(q).drawn(validity)))
         // Only a signal nobody hears is a mistake worth a card: a constant nobody hears is fixed, and drawn so.
         val inert = readonlyFlag.getOrElse(false) || displayOnlyFlag.getOrElse(false) || disabledFlag.constTrue
         Diagnostics.after(field)("CheckBox")(Diagnostic.unheard(checkedSlot, CheckBox.checkedName, on = !inert))
     end render
 
-    /** The box over its binding. A toggle is wired only where it reaches somebody: a two-way binding, or onChange. Bound
-      * one way, or to a constant somebody hears, the native box follows it, so kyo-ui takes back a toggle the owner does not
-      * take (`UI.Bound.Follow`). A constant nobody hears is fixed: drawn read-only, reachable and
+    /** The box over its binding. A toggle is wired only where it reaches somebody: a two-way binding, or onChange. Bound,
+      * the native box shows the binding, and kyo-ui takes back a toggle the owner does not take (see [[kyo.UI.Bound]]). A constant nobody hears is fixed: drawn read-only, reachable and
       * readable, with nothing to toggle.
       */
     private def drawn(validity: FieldValidity)(using Frame): UI =
@@ -183,7 +180,7 @@ end CheckBox
 object CheckBox:
     final private[uic] case class Props(
         labelText: Maybe[String] = Absent,
-        checkedSlot: Controlled[Boolean] = Controlled(),
+        checkedSlot: Controlled[Boolean] = Controlled(start = Present(false)),
         disabledFlag: Maybe[BoolValue] = Absent,
         readonlyFlag: Maybe[Boolean] = Absent,
         requiredFlag: Maybe[Boolean] = Absent,
@@ -197,7 +194,7 @@ object CheckBox:
         access: Accessibility = Accessibility.none,
         onBlurF: Maybe[Boolean => UI.Action] = Absent,
         tabbableFlag: Boolean = true
-    )
+    ) derives CanEqual
 
     private val checkedName = Controlled.Name("CheckBox", "checked", "a change", "onChange")
 
