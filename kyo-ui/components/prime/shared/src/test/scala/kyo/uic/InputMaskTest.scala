@@ -19,7 +19,8 @@ class InputMaskTest extends ReactiveValueContract:
         field = "p-inputmask",
         next = "12",
         startText = "1",
-        commit = true
+        commit = true,
+        defaults = Present((c, t) => c.defaultValue(t))
     )
 
     holds(valueSlot)
@@ -35,7 +36,8 @@ class InputMaskTest extends ReactiveValueContract:
         field = "p-inputmask",
         next = "12",
         startText = "1",
-        commit = true
+        commit = true,
+        defaults = Present((c, t) => c.defaultValue(t))
     ))
 
     private def field(ui: UI)(using Frame): (UI.Ast.Element & UI.Ast.TextInput) < Sync =
@@ -48,8 +50,9 @@ class InputMaskTest extends ReactiveValueContract:
             started <- renderHtml(uic.InputMask("99").value("12").render)
             empty   <- renderHtml(uic.InputMask("99").value("").render)
             bare    <- renderHtml(uic.InputMask("99").render)
+            dflt    <- renderHtml(uic.InputMask("99").defaultValue("12").render)
         yield
-            assert(classInHtml(started, "p-filled") && started.contains("""data-kyo-filled="p-filled""""), started)
+            Seq(started, dflt).foreach(h => assert(classInHtml(h, "p-filled") && h.contains("""data-kyo-filled="p-filled""""), h))
             Seq(empty, bare).foreach(h => assert(!classInHtml(h, "p-filled") && h.contains("""data-kyo-filled="p-filled""""), h))
         end for
     }
