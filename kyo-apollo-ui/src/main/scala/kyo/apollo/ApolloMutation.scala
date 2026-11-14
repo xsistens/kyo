@@ -33,7 +33,7 @@ import kyo.apollo.network.ApolloResponse
   * }}}
   *
   * Unlike a query watcher, a mutation handle owns no subscription — so
-  * [[useMutation]] is a bare `Sync` effect with **no `Scope`**.
+  * [[Apollo.mutation]] is a bare `Sync` effect with **no `Scope`**.
   */
 enum MutationState[+D] derives CanEqual:
 

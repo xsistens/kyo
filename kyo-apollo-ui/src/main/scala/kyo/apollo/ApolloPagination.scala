@@ -218,7 +218,7 @@ extension [A <: AnyNamedTuple](sb: SelectionBuilder.Bidirectional[RootQuery, A])
       *     button("More").onClick(paged.fetchMore) // next page → merge → re-emit
       * }}}
       *
-      * For several connections in one query, use [[usePaginatedQuery]] with an
+      * For several connections in one query, use [[Apollo.paginatedQuery]] with an
       * explicit page builder (each connection's cursor advances independently);
       * `.paginated` targets the one `cursorArg` and is the single-connection sugar.
       *
@@ -245,7 +245,7 @@ end extension
   * `f` projects the query data onto the connection's `pageInfo` selection, which
   * must include `endCursor: Maybe[String]` and `hasNextPage: Boolean`. The fields
   * are read by name, so any order and extra `pageInfo` fields are fine. Pair with
-  * [[usePaginatedQuery]], [[PaginatedQuery.connection]], or [[connections]]:
+  * [[Apollo.paginatedQuery]], [[PaginatedQuery.connection]], or [[connections]]:
   *
   * {{{
   * nav = paged.connections((

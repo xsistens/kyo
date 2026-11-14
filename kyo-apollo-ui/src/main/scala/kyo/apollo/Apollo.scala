@@ -19,7 +19,7 @@ import scala.NamedTuple.AnyNamedTuple
 
 /** The `Apollo` namespace — the constructor entry points of the `kyo-ui` binding.
   *
-  * Every operation that turns a prepared [[ApolloCall]] (or a [[Fragment]], or a
+  * Every operation that turns a prepared [[ApolloCall]] (or a [[kyo.apollo.cache.normalized.api.Fragment Fragment]], or a
   * client configuration) into a running/reactive result lives here as
   * `Apollo.<verb>(…)`: the query/mutation/fragment/pagination handles, the reactive
   * `Signal` builders (`watchSignal`/`pollingSignal`/`subscribe`), and client
@@ -169,14 +169,15 @@ object Apollo:
     end fragment
 
     /** Reactively read a masked fragment through its spread-produced ref, the masked
-      * `useFragment`. The fields an [[EntityFragment]] selected are not public on the
+      * `useFragment`. The fields an [[kyo.apollo.cache.normalized.api.EntityFragment EntityFragment]] selected are not public on the
       * ref, so a parent can pass it here (or to the component that declared the
       * fragment) but never read through it; this and kyo-apollo's
       * `ApolloStore.readFragment(ref)` and `ApolloStore.watchFragment(ref)` are the
       * openers.
       *
-      * No `Maybe`, unlike the [[Fragment]]+[[CacheKey]] overload: the ref captured
-      * the response slice the fragment selected, so there is always something to
+      * No `Maybe`, unlike the
+      * [[kyo.apollo.cache.normalized.api.Fragment Fragment]]+[[kyo.apollo.cache.normalized.api.CacheKey CacheKey]]
+      * overload: the ref captured the response slice the fragment selected, so there is always something to
       * render. The signal seeds from the entity record when the cache has it and
       * from the ref's own slice when it does not (evicted, a type the store's key
       * generator gives no identity, or a cache-less client). Later cache changes
@@ -184,7 +185,7 @@ object Apollo:
       * last value rather than blanking a working view. It follows the store through
       * the same reads as `ApolloStore.watchFragment(ref)`, so a write that lands
       * while a read runs is never lost. A slice that does not decode as the
-      * fragment's fields aborts with an [[ApolloParseException]].
+      * fragment's fields aborts with an [[kyo.apollo.exception.ApolloParseException ApolloParseException]].
       */
     def fragment[Origin, D <: AnyNamedTuple](ref: EntityFragment[Origin, D]#Ref)(using
         client: ApolloClient,
@@ -232,7 +233,7 @@ object Apollo:
       * one or its type has no identity in the store. A cache-less client has no store
       * to watch, so the values are the refs' slices and only the list moves. A slice
       * that does not decode aborts the seed, or fails the driver later, with an
-      * [[ApolloParseException]].
+      * [[kyo.apollo.exception.ApolloParseException ApolloParseException]].
       */
     private def fragmentList[Origin, D <: AnyNamedTuple, A, B](items: Signal[Seq[A]])(
         refOf: A => Maybe[EntityFragment[Origin, D]#Ref]
@@ -381,7 +382,7 @@ object Apollo:
       * to watch: the signal is constant, and updates arrive the way the value did —
       * through the parent's reactivity re-rendering the child with a fresh ref. The
       * signal holds the ref's own `value`; a value that does not decode as the
-      * fragment's fields aborts with an [[ApolloParseException]].
+      * fragment's fields aborts with an [[kyo.apollo.exception.ApolloParseException ApolloParseException]].
       */
     def fragment[Origin, D <: AnyNamedTuple](ref: EmbeddedFragment[Origin, D]#Ref)(using
         frame: Frame,
