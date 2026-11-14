@@ -22,7 +22,8 @@ class InputTest extends ReactiveValueContract:
         field = "p-inputtext",
         // As an app places it, which keys an instance on the place.
         placed = Present(_.toUI),
-        defaults = Present((c, t) => c.defaultValue(t))
+        defaults = Present((c, t) => c.defaultValue(t)),
+        constantFixed = true
     )
 
     holds(valueSlot)
@@ -37,7 +38,8 @@ class InputTest extends ReactiveValueContract:
         render = _.render,
         field = "p-inputtext",
         commit = true,
-        defaults = Present((c, t) => c.defaultValue(t))
+        defaults = Present((c, t) => c.defaultValue(t)),
+        constantFixed = true
     ))
 
     private def field(ui: UI)(using Frame): (UI.Ast.Element & UI.Ast.TextInput) < Sync =

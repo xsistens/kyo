@@ -103,7 +103,8 @@ object Input:
         /** The value. A `SignalRef` binds TWO-WAY: an edit writes it, and its changes update the field. Any other signal binds
           * ONE-WAY: the field shows it, and an edit writes nothing and only reports through `onInput` and `onChange`, so the app
           * writes its own state and the field follows; with neither, a card says the reader cannot change it. A constant holds
-          * the field at that text: an edit is put back. For a text the reader edits freely from a start, use `defaultValue`.
+          * the field at that text: somebody hearing it, an edit is reported and put back; nobody hearing it, the field is native
+          * `readonly`, a value meant to stay. For a text the reader edits freely from a start, use `defaultValue`.
           * `ref.readOnly` opts a ref out. Its event `onInput` fires with the text after every keystroke.
           */
         @eventName("onInput") value: Controlled[String] = Controlled(),
@@ -185,6 +186,7 @@ object Input:
       */
     final private[uic] case class Base(
         text: Maybe[Prop[String]],
+        fixed: Boolean,
         hearsInput: Boolean,
         hearsChange: Boolean,
         blurs: Boolean,
@@ -205,6 +207,7 @@ object Input:
         def apply(q: Props): Base =
             Base(
                 q.value.bound.orElse(q.value.start),
+                q.value.fixed,
                 q.value.hearer.isDefined,
                 q.onChange.isDefined,
                 q.onBlur.isDefined,
@@ -299,7 +302,8 @@ object Input:
             .when(b.text)(_.value(_))
             .placeholder(b.placeholder)
             .disabled(props(_.disabled))
-            .readOnly(props(_.readonly))
+            // A constant nobody hears is a value meant to stay: native readonly, as if `readonly` were set.
+            .readOnly(if b.fixed then true else props(_.readonly))
             .required(required)
             .aria(Aria.required -> required)
             .when(native.name)(_.jsProp("name", _))

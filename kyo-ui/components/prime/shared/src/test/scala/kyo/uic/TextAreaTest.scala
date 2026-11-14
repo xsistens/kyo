@@ -22,7 +22,8 @@ class TextAreaTest extends ReactiveValueContract:
         field = "p-textarea",
         // As an app places it, which keys an instance on the place.
         placed = Present(_.toUI),
-        defaults = Present((c, t) => c.defaultValue(t))
+        defaults = Present((c, t) => c.defaultValue(t)),
+        constantFixed = true
     )
 
     holds(valueSlot)
@@ -37,7 +38,8 @@ class TextAreaTest extends ReactiveValueContract:
         render = _.render,
         field = "p-textarea",
         commit = true,
-        defaults = Present((c, t) => c.defaultValue(t))
+        defaults = Present((c, t) => c.defaultValue(t)),
+        constantFixed = true
     ))
 
     private def field(ui: UI)(using Frame): UI.Ast.Textarea < Sync =
