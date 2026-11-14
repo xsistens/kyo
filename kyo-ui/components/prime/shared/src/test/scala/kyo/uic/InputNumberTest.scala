@@ -86,7 +86,9 @@ class InputNumberTest extends ReactiveValueContract:
         answers = editable,
         saysFixed = readonlyField,
         ready = Present(typing(_)),
-        startText = Present("4."),
+        startText = Present("4.5"),
+        // The default is a number: the empty text is no default at all.
+        defaults = Present((c, t) => if t.isEmpty then c else c.defaultValue(t.toDouble)),
         disable = Present((c, on) => c.disabled(on))
     ))
 
@@ -105,7 +107,9 @@ class InputNumberTest extends ReactiveValueContract:
         // mount, only a region around the field itself, which holds no button to act on.
         fixedOn = Present(number(_)),
         saysFixed = readonlyField,
-        startText = Present("4."),
+        startText = Present("4.5"),
+        // The default is a number: the empty text is no default at all.
+        defaults = Present((c, t) => if t.isEmpty then c else c.defaultValue(t.toDouble)),
         disable = Present((c, on) => c.disabled(on))
     ))
 
@@ -141,16 +145,23 @@ class InputNumberTest extends ReactiveValueContract:
         end for
     }
 
-    "a constant text is still the text shown once the mount keeps it" in {
+    "a default is still the text shown once the mount keeps it" in {
         for
-            t    <- mountedWhen(uic.InputNumber().text("4.").render)(typing)
+            t    <- mountedWhen(uic.InputNumber().defaultValue(4.5).render)(typing)
             n    <- number(t)
             text <- textIn(n)
-            card <- elementsWithClass(uic.InputNumber().text("4.").render, "p-uic-diagnostic")
+            card <- elementsWithClass(uic.InputNumber().defaultValue(4.5).render, "p-uic-diagnostic")
         yield
-            assert(text == "4.", s"the field starts from $text")
+            assert(text == "4.5", s"the field starts from $text")
             assert(n.readOnly.isEmpty, "and the reader goes on typing from it")
             assert(card.isEmpty, s"a starting text is not a mistake: ${card.map(textOf)}")
+    }
+
+    // A constant is a binding (UI.Bound): the field shows it, and kyo-ui puts back what the reader types over it.
+    "a constant text binds the field to the constant" in {
+        for
+            n <- number(uic.InputNumber().text("4.").onTextChange(_ => ()).render)
+        yield assert(n.value.exists(_.isInstanceOf[UI.Bound.Const[?]]), s"the field is bound as ${n.value}")
     }
 
     // The client toggles the wrapper's class from the text the number field holds (kyo-ui's filledClass with an ancestor
@@ -166,8 +177,9 @@ class InputNumberTest extends ReactiveValueContract:
             textRef <- renderHtml(uic.InputNumber().text(held).render)
             bare    <- renderHtml(uic.InputNumber().render)
             textNo  <- renderHtml(uic.InputNumber().text("").render)
+            started <- renderHtml(uic.InputNumber().defaultValue(4.5).render)
         yield
-            Seq(number, text, textRef).foreach(h => assert(classInHtml(h, "p-inputwrapper-filled") && marked(h), h))
+            Seq(number, text, textRef, started).foreach(h => assert(classInHtml(h, "p-inputwrapper-filled") && marked(h), h))
             Seq(bare, textNo).foreach(h => assert(!classInHtml(h, "p-inputwrapper-filled") && marked(h), h))
         end for
     }
