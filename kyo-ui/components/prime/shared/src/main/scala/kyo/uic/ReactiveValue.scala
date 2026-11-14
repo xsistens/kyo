@@ -47,15 +47,6 @@ sealed private[uic] trait ReactiveValue[A]:
             case ReactiveValue.Const(a) => a
             case ReactiveValue.Dyn(sig) => sig
 
-    /** The binding for a native control whose owner hears its changes: a signal or a ref as it is, and a constant as a signal that stays, so
-      * the element puts back a change its owner did not take. A text field's constant stays out of this: it is the starting text the reader
-      * goes on editing.
-      */
-    private[uic] def native(using CanEqual[A, A], Frame): A | Signal[A] =
-        this match
-            case ReactiveValue.Const(a) => Signal.initConst(a)
-            case ReactiveValue.Dyn(sig) => sig
-
     /** The ref a reader's change is written into, if this binds two way, else `Absent`. */
     private[uic] def writable: Maybe[SignalRef[A]] = Absent
 

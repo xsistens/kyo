@@ -194,11 +194,11 @@ private[uic] object Controlled:
     def drawField[A](slot: Controlled[A], unbound: A)(body: Field[A] => UI)(using CanEqual[A, A], Frame): UI =
         val edit: Maybe[A => UI.Action] = if slot.heard then Present((a: A) => slot.change(a)) else Absent
         slot.binding match
-            case Present(ReactiveVariable(ref))                    => ref.render(a => body(Field(a, a, edit, false)))
-            case Present(ReactiveValue.Dyn(sig))                   => sig.render(a => body(Field(a, sig, edit, false)))
-            case Present(c @ ReactiveValue.Const(a)) if slot.heard => body(Field(a, c.native, edit, false))
-            case Present(ReactiveValue.Const(a))                   => body(Field(a, a, Absent, true))
-            case _                                                 => body(Field(unbound, unbound, edit, false))
+            case Present(ReactiveVariable(ref))                => ref.render(a => body(Field(a, a, edit, false)))
+            case Present(ReactiveValue.Dyn(sig))               => sig.render(a => body(Field(a, sig, edit, false)))
+            case Present(ReactiveValue.Const(a)) if slot.heard => body(Field(a, a, edit, false))
+            case Present(ReactiveValue.Const(a))               => body(Field(a, a, Absent, true))
+            case _                                             => body(Field(unbound, unbound, edit, false))
         end match
     end drawField
 
