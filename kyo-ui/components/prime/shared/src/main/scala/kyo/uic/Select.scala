@@ -147,12 +147,18 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
 
     /** Renders the same header filter over a query the APP holds. A `SignalRef` binds two way: typing writes it, external
       * writes re-filter the panel, and `onFilterQueryChange` hears every change. A plain `Signal` binds one way: the panel
-      * filters by it, typing is only reported, and the field is painted back to what the owner holds. A constant is the
-      * starting text, which the instance keeps from there, the way a text field's value is. Turns the header filter on unless
+      * filters by it, typing is only reported, and the field is painted back to what the owner holds. A constant holds
+      * the query at that text, the way a text field's value does (see [[kyo.UI.Bound]]); unset, the query starts empty and the
+      * instance keeps what the reader types. Turns the header filter on unless
       * [[Select.Props.filterable]] says otherwise. A signal nothing hears is reported in a card. Server-driven option lists
       * bind this and re-`options` on emission; the matching binding on [[Listbox.filterQuery]] takes the same shape.
       */
     def filterQuery(v: Prop[String]): Select[A] = new Select(p.copy(filterQuery = p.filterQuery.bind(v), queried = true))
+
+    /** The query the header filter starts with; the reader owns it from there, in the instance, as a text field's `defaultValue`.
+      * Turns the header filter on unless [[Select.Props.filterable]] says otherwise, as [[filterQuery]] does.
+      */
+    def defaultFilterQuery(v: String): Select[A] = new Select(p.copy(filterQuery = p.filterQuery.startAt(v), queried = true))
 
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Select[A]        = new Select(p.copy(emptyContent = v))
     private[uic] def withTooltip(v: Maybe[Prop[String]]): Select[A]             = new Select(p.copy(tooltip = v))
@@ -237,7 +243,7 @@ object Select:
         /** The query typed into the header filter. Its event `onFilterQueryChange` fires with the query the reader types, and
           * with the empty query a new open starts from.
           */
-        filterQuery: Controlled[String] = Controlled(start = Present(""), constantStarts = true),
+        filterQuery: Controlled[String] = Controlled(start = Present("")),
         /** Whether `filterQuery` was handed a query, which turns the header filter on where `filterable` is unset. */
         @noSetter queried: Boolean = false,
         /** Renders the clear affordance on the trigger while an option is chosen: it writes `Absent` into a `selection` over

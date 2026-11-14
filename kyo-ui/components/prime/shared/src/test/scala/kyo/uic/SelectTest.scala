@@ -1136,7 +1136,7 @@ class SelectTest extends ReactiveValueContract:
         end for
     }
 
-    // The query is a text the select keeps itself, unbound and from a constant, since it draws the panel from it. Its field
+    // The query is a text the select keeps itself, unbound and from a default, since it draws the panel from it. Its field
     // is in the panel, which only the mount draws open: the panel is held open here, so the query is the slot under test.
     holds(new SlotCase[uic.Select[Fruit], String](
         name = "filterQuery",
@@ -1157,6 +1157,7 @@ class SelectTest extends ReactiveValueContract:
         },
         ready = Present(elementsWithClass(_, "p-select-filter").map(_.nonEmpty)),
         startText = Present("ch"),
+        defaults = Present((s, q) => s.defaultFilterQuery(q)),
         mountDraws = true,
         placed = Present(_.toUI)
     ))
