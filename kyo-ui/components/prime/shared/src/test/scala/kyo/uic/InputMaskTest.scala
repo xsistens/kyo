@@ -20,7 +20,8 @@ class InputMaskTest extends ReactiveValueContract:
         next = "12",
         startText = "1",
         commit = true,
-        defaults = Present((c, t) => c.defaultValue(t))
+        defaults = Present((c, t) => c.defaultValue(t)),
+        constantFixed = true
     )
 
     holds(valueSlot)
@@ -37,7 +38,8 @@ class InputMaskTest extends ReactiveValueContract:
         next = "12",
         startText = "1",
         commit = true,
-        defaults = Present((c, t) => c.defaultValue(t))
+        defaults = Present((c, t) => c.defaultValue(t)),
+        constantFixed = true
     ))
 
     private def field(ui: UI)(using Frame): (UI.Ast.Element & UI.Ast.TextInput) < Sync =

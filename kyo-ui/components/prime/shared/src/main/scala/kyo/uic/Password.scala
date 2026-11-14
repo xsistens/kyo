@@ -77,8 +77,9 @@ object Password:
         /** The value. A `SignalRef` binds TWO-WAY: an edit writes it, and its changes update the field and the meter. Any other
           * signal binds ONE-WAY: the field and the meter show it, and an edit writes nothing and only reports through `onInput`
           * and `onChange`, so the app writes its own state and the field follows; with neither, a card says the reader cannot
-          * change it. A constant holds the field at that text. Unbound or from a `defaultValue`, the instance keeps the text in a
-          * ref of its own: the meter judges what the reader typed, and a reveal or a host region that runs again keeps it.
+          * change it. A constant holds the field at that text, read-only (native `readonly`) where nobody hears it. Unbound
+          * or from a `defaultValue`, the instance keeps the text in a ref of its own: the meter judges what the reader typed, and
+          * a reveal or a host region that runs again keeps it.
           * `ref.readOnly` opts a ref out. Its event `onInput` fires with the text after every keystroke.
           */
         @eventName("onInput") value: Controlled[String] = Controlled(start = Present("")),

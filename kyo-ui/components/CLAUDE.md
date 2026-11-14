@@ -173,7 +173,9 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   `value` takes the same `Prop[String]`. Every field's value is a BINDING, the HTML/React `value` (kyo-ui's K4, see
   `UI.Bound`): a constant, a signal or a ref is what the field shows, and kyo-ui puts back an edit its owner does not take. A
   text the reader owns from a start is the field's `defaultValue` (Input, TextArea, Password: `Controlled.startAt`, the slot's
-  `start`), the HTML `defaultValue`. A boolean field's constant nobody hears is FIXED, as below. `Input` is an instance where a
+  `start`), the HTML `defaultValue`. A constant nobody hears is FIXED, as below: a boolean field and ColorPicker draw it read-only, and so do Input, TextArea and
+  Password (native `readonly`, and InputMask through its Input), where the text stays visible and focusable and nothing
+  jumps back. `Input` is an instance where a
   default starts its own ref, which holds the reader's text through a host region that runs again, and a host that states the text itself and draws it in its own region (InputOtp's
   cells, Paginator's jump field, DataTable's filter fields) calls its `renderInPlace`. So a plain field leaves an unbound text to the browser, but a field that draws anything
   from its text after the page is shown (AutoComplete's suggestions, Password's meter and reveal) or builds its value
