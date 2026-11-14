@@ -59,7 +59,8 @@ final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) ext
 
     /** Binds the field's raw TEXT, for a caller that needs what was typed rather than a number. A `SignalRef` binds two
       * way and [[onTextChange]] hears every keystroke; a plain `Signal` binds one way, the field showing it and painted back
-      * after each report; a constant is the starting text the field keeps. A signal nothing hears is reported in a card.
+      * after each report; a constant binds the same way (see [[kyo.UI.Bound]]). For a number the reader starts from and owns,
+      * use [[defaultValue]]. A signal nothing hears is reported in a card.
       *
       * A `number` field reads its value as the empty string while its content is not a
       * valid number, so `-`, `4.` and `1e` are all states a `Double` cannot represent and
@@ -74,6 +75,11 @@ final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) ext
       */
     def text(v: String | Signal[String]): InputNumber =
         new InputNumber(p.copy(textSlot = textSlot.bind(v), numberSlot = numberSlot.unbound))
+
+    /** The number the field starts with; the reader owns it from there: the field keeps what the reader types and spins in its
+      * own text, which starts as this number formatted (`4.0` as `4`). A bound [[value]] or [[text]] still holds the field.
+      */
+    def defaultValue(v: Double): InputNumber = new InputNumber(p.copy(textSlot = textSlot.startAt(InputNumber.format(v))))
 
     /** Fired with the raw text after every keystroke and spin of a [[text]]-bound field, after a two-way text is written. */
     def onTextChange(f: String => UI.Action)(using Frame): InputNumber = new InputNumber(p.copy(textSlot = textSlot.hear(f)))
@@ -165,10 +171,10 @@ final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) ext
 
     private[uic] def render(using Frame): UI =
         // A constant nobody hears is fixed: drawn read-only. Unbound, the field keeps what the reader types and spins itself,
-        // through the same text channel a text binding uses, so it starts empty; a constant text is where it starts.
+        // through the same text channel a text binding uses, from its default or empty; a constant text binds (UI.Bound).
         if numberSlot.fixed && !readonlyFlag then new InputNumber(p.copy(readonlyFlag = true)).render
         else if numberSlot.binding.isDefined then renderLive
-        else Controlled.owningFrom(textSlot, unbound = "")(s => new InputNumber(this.p.copy(textSlot = s)).renderLive)
+        else Controlled.owning(textSlot, textSlot.start.getOrElse(""))(s => new InputNumber(this.p.copy(textSlot = s)).renderLive)
 
     private def renderLive(using Frame): UI =
         val validity = FieldValidity(validityV)
@@ -203,9 +209,11 @@ final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) ext
                 // Text bound one way: the native field follows it, so kyo-ui puts back text the owner does not take.
                 case Present(ReactiveValue.Dyn(sig)) =>
                     sig.render(t => body(Absent, validity, textShown = Present(t), native = Present(sig)))
-                // The static projection of a starting text: the mount takes it over as the field's own.
+                // A constant text: the field shows it and reports a keystroke, and kyo-ui puts back what nobody takes (UI.Bound).
                 case Present(ReactiveValue.Const(t)) => body(Absent, validity, textShown = Present(t))
-                case _                               => body(Absent, validity)
+                // Unbound with a default, outside a mount (the page as first rendered): the default the mount takes over.
+                case _ if textSlot.start.isDefined => body(Absent, validity, textShown = textSlot.start)
+                case _                             => body(Absent, validity)
     end renderResolved
 
     private def body(
