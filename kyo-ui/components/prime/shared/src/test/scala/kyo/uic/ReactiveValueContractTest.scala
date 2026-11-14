@@ -223,6 +223,8 @@ abstract class ReactiveValueContract extends UicTest:
       * @param fixedAria
       *   the `aria-*` state, set to `"true"`, that says the input changes nothing: `readonly` for a checkbox or a switch,
       *   `disabled` for a radio, whose role has no readonly state
+      * @param placed
+      *   as [[SlotCase]]'s, for a box that is an instance kept across its host's runs
       */
     def nativeBoolean[C](
         name: String,
@@ -234,7 +236,8 @@ abstract class ReactiveValueContract extends UicTest:
         input: String,
         root: String,
         checkedClass: String,
-        fixedAria: String = "readonly"
+        fixedAria: String = "readonly",
+        placed: Maybe[C => (Frame, UI.MountSite) ?=> UI] = Absent
     ): SlotCase[C, Boolean] =
         def control(t: UI)(using Frame): UI.Ast.Element < Sync =
             elements(t).map(_.collectFirst {
@@ -264,6 +267,7 @@ abstract class ReactiveValueContract extends UicTest:
             render = render,
             start = false,
             next = true,
+            placed = placed,
             control = control(_),
             shows = shows(_),
             gesture = (c: UI.Ast.Element) =>
