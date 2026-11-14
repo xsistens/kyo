@@ -16,7 +16,9 @@ class ToggleSwitchTest extends ReactiveValueContract:
         render = _.render,
         input = "p-toggleswitch-input",
         root = "p-toggleswitch",
-        checkedClass = "p-toggleswitch-checked"
+        checkedClass = "p-toggleswitch-checked",
+        // As an app places it, which keys an instance on the place.
+        placed = Present(_.toUI)
     ))
 
     private def box(ui: UI)(using Frame): UI.Ast.Checkbox < Sync =
