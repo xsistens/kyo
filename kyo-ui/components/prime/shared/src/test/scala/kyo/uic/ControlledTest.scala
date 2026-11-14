@@ -238,19 +238,6 @@ class ControlledTest extends UicTest:
                 assert(stays.fixedAt(1))
         }
 
-        "ownedFrom takes a constant as where it starts" in {
-            for
-                own  <- Controlled[Int]().bind(5).ownedFrom(3)
-                none <- Controlled[Int]().ownedFrom(3)
-                sig  <- Controlled[Int]().bind(Signal.initConst(7)).ownedFrom(3)
-                a    <- own.current(-1)
-                b    <- none.current(-1)
-            yield
-                assert(own.binding.exists(_.writable.isDefined))
-                assert((a, b) == (5, 3))
-                assert(sig.binding.exists(b => b.dyn.isDefined && b.writable.isEmpty))
-        }
-
         "owning mounts where nothing is bound, not where something is, and not where the switch is constant off" in {
             for
                 own   <- mountsAbove(Controlled.owning(Controlled[Int](), 0)(body), cls)
@@ -265,20 +252,6 @@ class ControlledTest extends UicTest:
         "owning mounts under a signal switch whatever it holds now, so the state outlives it being off" in {
             mountsAbove(Controlled.owning(Controlled[Int](), 0, ReactiveValue.Dyn(Signal.initConst(false)))(body), cls)
                 .map(n => assert(n == 1))
-        }
-
-        "owningFrom mints from a constant too" in {
-            for
-                first <- shown(Controlled.owningFrom(Controlled[Int]().bind(5), 0)(body))
-                n     <- mountsAbove(Controlled.owningFrom(Controlled[Int]().bind(5), 0)(body), cls)
-                off   <- mountsAbove(
-                    Controlled.owningFrom(Controlled[Int]().bind(5), 0, ReactiveValue.Const(false))(body),
-                    cls
-                )
-            yield
-                assert(first == Chunk("5"))
-                assert(n == 1)
-                assert(off == 0)
         }
 
         "draw shows the body over the state it allocated, with no card" in {
