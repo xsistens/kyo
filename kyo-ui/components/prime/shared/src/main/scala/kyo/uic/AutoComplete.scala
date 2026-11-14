@@ -90,11 +90,16 @@ final class AutoComplete[A] private[uic] (private[uic] val p: AutoComplete.Props
     /** The raw text. A `SignalRef` binds TWO-WAY: typing, option picks and a clear write back into the ref, and ref
       * changes update the field and re-filter the suggestions. Any other signal binds ONE-WAY: the field shows it, and an
       * edit writes nothing and only reports: typing through [[onInput]], a pick through [[onChange]] and [[onSelect]], a
-      * clear through [[onChange]]. A card names each edit nothing hears. A constant is the starting text: unbound or from
-      * a constant, the field keeps the text itself, so the suggestions follow what the reader types, a pick shows its
-      * label and the clear button empties it. `ref.readOnly` opts a ref out.
+      * clear through [[onChange]]. A card names each edit nothing hears. A constant holds the text the same way (see
+      * [[kyo.UI.Bound]]): the field shows it and kyo-ui puts back what the reader types; nobody hearing it, it offers no
+      * clear. For a text the reader starts from and owns, use [[defaultValue]]. `ref.readOnly` opts a ref out.
       */
     def value(v: String | Signal[String]): AutoComplete[A] = new AutoComplete(p.copy(valueSlot = valueSlot.bind(v)))
+
+    /** The text the field starts with; the reader owns it from there, in the instance: the suggestions follow what the
+      * reader types, a pick shows its label and the clear button empties it.
+      */
+    def defaultValue(v: String): AutoComplete[A] = new AutoComplete(p.copy(valueSlot = valueSlot.startAt(v)))
 
     /** How a suggestion matches the typed text, as `(option, text) => Boolean` with the text as typed. [[Filter]]
       * holds the ready-made ones: `filter(Filter.contains(_.name, _.email))` suggests an option by either text, and
@@ -251,10 +256,9 @@ final class AutoComplete[A] private[uic] (private[uic] val p: AutoComplete.Props
     end fieldKey
 
     private[uic] def render(using Frame): UI =
-        // Unbound or started from a constant, the text is the field's own: the suggestions filter by it, a pick writes its
-        // label into it and a clear empties it, and a field drawn with a constant would be given the constant back by the
-        // render that typing's open causes. A ref the field keeps for as long as it is shown holds it, beside the interaction state
-        // (open/highlight/show-all) the mount allocates.
+        // Unbound or started from a default, the text is the field's own: the suggestions filter by it, a pick writes its
+        // label into it and a clear empties it. A ref the field keeps for as long as it is shown holds it, beside the interaction
+        // state (open/highlight/show-all) the mount allocates. A binding, a constant among them, holds the text (UI.Bound).
         if !interactive then
             val validity = FieldValidity(validityV)
             validity.follow(OptionItem.reading(optionSources).and(text).render((opts, cur) =>
@@ -263,7 +267,7 @@ final class AutoComplete[A] private[uic] (private[uic] val p: AutoComplete.Props
         else
             val field = UI.mounted {
                 for
-                    value <- valueSlot.ownedFrom("")
+                    value <- valueSlot.owned(valueSlot.start.getOrElse(""))
                     base  <- access.id.map(v => Kyo.lift(v)).getOrElse(UI.id)
                     open  <- Signal.initRef(false)
                     hi    <- Signal.initRef(-1)
@@ -281,8 +285,8 @@ final class AutoComplete[A] private[uic] (private[uic] val p: AutoComplete.Props
 
     /** The edits of a one-way text that reach nobody, each with the event that would hear it. They report through
       * different events: typing through `onInput` (without it the suggestions keep filtering the text the owner holds),
-      * a pick through `onChange` or `onSelect`, and a clear through `onChange` alone. Empty for a two-way ref, a constant
-      * (the starting text, which stays in the field) and an unbound field.
+      * a pick through `onChange` or `onSelect`, and a clear through `onChange` alone. Empty for a two-way ref, a constant (a value the field shows, fixed where nobody
+      * hears it) and an unbound field.
       */
     private def unheardEdits: List[String] =
         if !valueSlot.binding.exists(v => v.dyn.isDefined && v.writable.isEmpty) then Nil
@@ -313,11 +317,12 @@ final class AutoComplete[A] private[uic] (private[uic] val p: AutoComplete.Props
         })
     end wired
 
-    /** The typed text: a bound signal is read live, constants and unbound fields hold a fixed query. Read beside the
+    /** The typed text: a bound signal is read live, a constant is a fixed query, and an unbound field reads its default (the
+      * mount binds its own ref there, so this is the page as first rendered or a field that takes no edit). Read beside the
       * panel's state as ONE region (see [[ReactiveValue.and]]).
       */
     private def text(using Frame): ReactiveValue[String] =
-        valueSlot.reading("")
+        valueSlot.reading(valueSlot.start.getOrElse(""))
 
     /** How a suggestion matches the typed text: [[filter]], else the start of any word of the label. */
     private def matcher: (A, String) => Boolean = filterF.getOrElse(Filter.startsWithPerTerm(labelF))
@@ -373,7 +378,8 @@ final class AutoComplete[A] private[uic] (private[uic] val p: AutoComplete.Props
         end match
         if variantV == FieldVariant.Filled then f = f.cssClass("p-variant-filled")
         f = validity.mark(f)
-        // A two-way ref is kyo-ui's own binding, a one-way signal is followed in place, a constant is the starting text.
+        // A two-way ref is kyo-ui's own binding, a one-way signal is followed in place, a constant is shown as it is; kyo-ui puts
+        // back an edit nobody takes (UI.Bound).
         valueSlot.bound.foreach(v => f = f.value(v))
         f = f.placeholder(placeholderText)
         if disabledFlag then f = f.disabled(true)
@@ -433,7 +439,8 @@ final class AutoComplete[A] private[uic] (private[uic] val p: AutoComplete.Props
             case Absent                          => Nil
 
         val clear: List[UI] = valueSlot.binding match
-            case Present(ReactiveValue.Dyn(_)) if showClearFlag && interactive && query.nonEmpty =>
+            // A constant nobody hears is a value meant to stay, so it offers no clear; one somebody hears reports the clear.
+            case Present(b) if showClearFlag && interactive && query.nonEmpty && (b.dyn.isDefined || valueSlot.heard) =>
                 List(
                     button
                         .cssClass("p-autocomplete-clear-icon")
