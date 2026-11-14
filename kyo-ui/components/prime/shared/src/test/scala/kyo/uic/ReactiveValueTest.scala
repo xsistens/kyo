@@ -82,19 +82,6 @@ class ReactiveValueTest extends UicTest:
             assert(bindingOf(uic.Slider().value(sig)) == "one-way")
             assert(bindingOf(uic.Slider().value(ref.readOnly)) == "one-way")
     }
-    "the binding a native control takes: a signal or a ref as it is, a constant as a signal that stays" in {
-        for
-            ref     <- Signal.initRef("a")
-            onConst <- ReactiveValue[String]("c").native match
-                case s: Signal[String] @unchecked => s.current
-                case other                        => throw new AssertionError(s"a constant stayed a value: $other")
-        yield
-            assert(onConst == "c")
-            assert(ReactiveValue[String](ref).native.isInstanceOf[SignalRef[?]])
-            assert(ReactiveValue[String](ref.readOnly).native.isInstanceOf[Signal[?]])
-        end for
-    }
-
     "what a render reads" - {
         def isConst[A](v: ReactiveValue[A], expected: A)(using CanEqual[A, A], Frame, kyo.test.AssertScope): Unit =
             v match

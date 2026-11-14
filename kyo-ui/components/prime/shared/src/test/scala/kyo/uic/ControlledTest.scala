@@ -301,7 +301,7 @@ class ControlledTest extends UicTest:
             yield
                 assert(two.value == 2 && two.native.equals(2) && two.edit.isDefined && !two.fixed)
                 assert(one.value == 2 && !one.native.equals(2) && one.edit.isEmpty && !one.fixed)
-                assert(heard.value == 5 && !heard.native.equals(5) && heard.edit.isDefined && !heard.fixed)
+                assert(heard.value == 5 && heard.native.equals(5) && heard.edit.isDefined && !heard.fixed)
                 assert(fixed.value == 5 && fixed.native.equals(5) && fixed.edit.isEmpty && fixed.fixed)
                 assert(none.value == -1 && none.native.equals(-1) && none.edit.isEmpty && !none.fixed)
             end for

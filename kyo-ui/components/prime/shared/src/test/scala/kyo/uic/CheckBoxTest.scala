@@ -27,6 +27,13 @@ class CheckBoxTest extends ReactiveValueContract:
     private def toggle(b: UI.Ast.Checkbox, to: Boolean)(using Frame): Any < Async =
         handled(b.onChange.getOrElse(throw new AssertionError("no toggle wired"))(to))
 
+    // A constant is a binding kyo-ui puts back itself (UI.Bound), so the native box takes the constant as it is, no signal around it.
+    "a constant somebody hears binds the native box to the constant itself" in {
+        box(uic.CheckBox().checked(true).onChange(_ => ()).render).map(b =>
+            assert(b.checked.exists(_.isInstanceOf[UI.Bound.Const[?]]), s"the box is bound as ${b.checked}")
+        )
+    }
+
     "a signal nobody hears says nothing where it reaches somebody or nobody can toggle it: a ref, readonly, disabled" in {
         def errors(c: uic.CheckBox): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-diagnostic")
         for
