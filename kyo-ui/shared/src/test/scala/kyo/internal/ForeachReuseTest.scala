@@ -306,11 +306,12 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 _    <- rows.set(Chunk.empty)
                 // The region waits on `show` again once the value before has closed, the list and every row in it included: then only
                 // the region outside observes `tick`, and no mount is registered. A row never closed keeps a region waiting there.
-                _          <- parked(show, 1)
-                observing  <- tick.waiters
+                _         <- parked(show, 1)
+                observing <- tick.waiters
+                // A keyed instance is released by its table, which settles on a fiber of its own. Until then its place holds it in
+                // hand-over (MountDispatch.unregister), and `registered` counts it, so the count is read once every release has run.
+                _          <- assertEventually(Sync.defer(releases.get == starts.get))
                 registered <- root.mountDispatch.get.registered
-                // A keyed instance is released by its table, which settles on a fiber of its own.
-                _ <- assertEventually(Sync.defer(releases.get == starts.get))
             yield assert(
                 observing == 1 && registered == 0,
                 s"regions observing tick: $observing (expected 1), mount instances registered: $registered (expected 0)"
