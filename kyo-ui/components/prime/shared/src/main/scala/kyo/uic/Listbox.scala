@@ -243,10 +243,17 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
     def filterable(v: Boolean | Signal[Boolean]): Listbox[K] = new Listbox(p.copy(filterableV = Present(ReactiveValue(v))))
 
     /** Renders the header filter over a query the APP holds, as [[Select.filterQuery]] does: a `SignalRef` is written by
-      * typing, a plain `Signal` filters the list and typing is only reported and painted back, a constant is the starting
-      * text. Turns the header filter on unless [[filterable]] says otherwise. A signal nothing hears is reported in a card.
+      * typing, a plain `Signal` filters the list and typing is only reported and painted back, and a constant holds the query
+      * at that text the same way (see [[kyo.UI.Bound]]). For a query the reader starts from and owns, use
+      * [[defaultFilterQuery]]. Turns the header filter on unless [[filterable]] says otherwise. A signal nothing hears is
+      * reported in a card.
       */
     def filterQuery(v: String | Signal[String]): Listbox[K] = new Listbox(p.copy(filterQuerySlot = filterQuerySlot.bind(v)))
+
+    /** The query the header filter starts with; the reader owns it from there, in the list, as [[Select.defaultFilterQuery]].
+      * Turns the header filter on unless [[filterable]] says otherwise.
+      */
+    def defaultFilterQuery(v: String): Listbox[K] = new Listbox(p.copy(filterQuerySlot = filterQuerySlot.startAt(v)))
 
     /** Fired with the query the reader types. */
     def onFilterQueryChange(f: String => UI.Action)(using Frame): Listbox[K] =
@@ -289,7 +296,8 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
     private given CanEqual[K, K]                     = CanEqual.derived
     private given CanEqual[ListItem[K], ListItem[K]] = CanEqual.derived
 
-    private def filterOn: BoolValue = filterableV.getOrElse(BoolValue.Const(filterQuerySlot.binding.isDefined))
+    private def filterOn: BoolValue =
+        filterableV.getOrElse(BoolValue.Const(filterQuerySlot.binding.isDefined || filterQuerySlot.start.isDefined))
 
     /** Whether rows respond to clicks at all (selecting or an explicit item handler). */
     private def interactive: Boolean =
@@ -334,8 +342,8 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
       */
     private def renderQuery(validity: FieldValidity)(using Frame): UI =
         // A switch that may turn on (a signal, or `true`) needs a query to filter by; only a constant `false` does not.
-        // A constant query is the starting text, kept here like an unbound one.
-        val ownsQuery = filterQuerySlot.binding.forall(_.const.isDefined) && !filterOn.const.exists(on => !on)
+        // An unbound query is the list's own, from its default or empty; any binding, a constant among them, holds it.
+        val ownsQuery = filterQuerySlot.binding.isEmpty && !filterOn.const.exists(on => !on)
         val list      = UI.mounted {
             for
                 // The id the highlight is announced through. A caller's own `id` wins, and where
@@ -343,7 +351,7 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
                 // something a reader has to opt into to be told which option is highlighted.
                 base <- access.id.map(v => Kyo.lift(v)).getOrElse(UI.id)
                 hi   <- Signal.initRef(-1)
-                q    <- if ownsQuery then filterQuerySlot.ownedFrom("") else Kyo.lift(filterQuerySlot)
+                q    <- if ownsQuery then filterQuerySlot.owned(filterQuerySlot.start.getOrElse("")) else Kyo.lift(filterQuerySlot)
                 // Unbound, a list that selects keeps what the reader picks itself.
                 own <-
                     if selectedRef.isEmpty && selectionModeV != SelectionMode.None then Signal.initRef(Set.empty[K]).map(r => Present(r))
