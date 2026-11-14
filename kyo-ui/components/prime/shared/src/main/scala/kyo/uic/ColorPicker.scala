@@ -69,11 +69,17 @@ final class ColorPicker private[uic] (private[uic] val p: ColorPicker.Props) ext
 
     /** The color. A `SignalRef` binds TWO-WAY: drags write the recomputed hex back, ref changes move the picker. Any
       * other signal binds ONE-WAY: the picker shows it, and a drag or key writes nothing and only reports the hex it asks
-      * for through [[onChange]]; without it, a card says the reader cannot change it. A constant is the colour the picker
-      * starts from: unbound or from a constant, the picker keeps the colour itself, so a drag or key moves it and
-      * [[onChange]] hears each one. `ref.readOnly` opts a ref out.
+      * for through [[onChange]]; without it, a card says the reader cannot change it. A constant holds the colour the same
+      * way (see [[kyo.UI.Bound]]): somebody hearing it, a drag or key reports the hex it asks for and the picker keeps
+      * showing the constant; nobody hearing it, the picker is read-only (`aria-readonly`, nothing to drag). For a colour the
+      * reader starts from and owns, use [[defaultValue]]. `ref.readOnly` opts a ref out.
       */
     def value(v: String | Signal[String]): ColorPicker = new ColorPicker(p.copy(valueSlot = valueSlot.bind(v)))
+
+    /** The colour the picker starts from; the reader owns it from there: the picker keeps the colour itself, so a drag or key
+      * moves it and [[onChange]] hears each one.
+      */
+    def defaultValue(v: String): ColorPicker = new ColorPicker(p.copy(valueSlot = valueSlot.startAt(v)))
 
     /** Renders the panel inline (`.p-colorpicker-panel-inline`) instead of the
       * default overlay behind a swatch trigger (Prime's `inline`).
@@ -108,19 +114,19 @@ final class ColorPicker private[uic] (private[uic] val p: ColorPicker.Props) ext
         val validity = FieldValidity(validityV)
         validity.follow(build(validity))
 
-    // Unbound or started from a constant, the colour is the picker's own: it draws everything itself, so the colour the reader
-    // moves to is one it keeps, for as long as it is shown. It sits above the region over `disabled`, or a flip would end the mount
-    // that holds it. An overlay picker keeps its panel state in the same mount.
+    // Unbound, the colour is the picker's own, from its default: it draws everything itself, so the colour the reader moves to is
+    // one it keeps, for as long as it is shown. It sits above the region over `disabled`, or a flip would end the mount that holds
+    // it. An overlay picker keeps its panel state in the same mount. A binding, a constant among them, holds the colour.
     private[uic] def render(using Frame): UI =
         if inlineFlag then
-            Controlled.owningFrom(valueSlot, unbound = ColorPicker.DefaultHex, on = BoolValue.Const(interactive))(s =>
+            Controlled.owning(valueSlot, startHex, on = BoolValue.Const(interactive))(s =>
                 new ColorPicker(this.p.copy(valueSlot = s)).resolved
             )
         else
-            val start = valueSlot.binding.flatMap(_.const).getOrElse(ColorPicker.DefaultHex)
+            val start = valueSlot.binding.flatMap(_.const).getOrElse(startHex)
             UI.mounted {
                 for
-                    value  <- if interactive then valueSlot.ownedFrom(ColorPicker.DefaultHex) else Kyo.lift(valueSlot)
+                    value  <- if interactive then valueSlot.owned(startHex) else Kyo.lift(valueSlot)
                     open   <- Signal.initRef(false)
                     opened <- Signal.initRef(start)
                 yield new ColorPicker(p.copy(valueSlot = value, panelV = Present(ColorPicker.Panel(open, opened)))).resolved
@@ -131,10 +137,18 @@ final class ColorPicker private[uic] (private[uic] val p: ColorPicker.Props) ext
     private def resolved(using Frame): UI =
         BoolValue.reactive(disabledFlag)(d => new ColorPicker(p.copy(disabledFlag = d)).renderResolved)
 
+    /** Where the picker's own colour starts: its default, else Prime's. */
+    private def startHex: String = valueSlot.start.getOrElse(ColorPicker.DefaultHex)
+
+    /** A constant nobody hears: a colour meant to stay, drawn read-only with nothing to drag. */
+    private def fixed: Boolean = valueSlot.fixed
+
     private def renderResolved(using Frame): UI =
         val field = valueSlot.binding match
             case Present(ReactiveValue.Dyn(sig)) => body(Present(sig), ColorPicker.DefaultHex)
-            case other                           => body(Absent, other.flatMap(_.const).getOrElse(ColorPicker.DefaultHex))
+            // A constant somebody hears: the picker shows it and reports every colour the reader asks for; only its owner moves it.
+            case Present(ReactiveValue.Const(hex)) if valueSlot.heard => body(Present(Signal.initConst(hex)), hex)
+            case other                                                => body(Absent, other.flatMap(_.const).getOrElse(startHex))
         Diagnostics.after(field)("ColorPicker")(Diagnostic.unheard(valueSlot, ColorPicker.valueName, on = interactive))
     end renderResolved
 
@@ -362,6 +376,7 @@ final class ColorPicker private[uic] (private[uic] val p: ColorPicker.Props) ext
         extraClasses.foreach(c => root = root.cssClass(c))
         if ownsId then access.id.foreach(v => root = root.id(v))
         if disabledFlag.constTrue then root = root.cssClass("p-disabled")
+        if fixed then root = root.aria(Aria.readonly -> "true")
         root = validity.mark(root)
         access.name.foreach(n => root = root.aria(Aria.label -> n))
         onBlurF.foreach { f =>
@@ -388,6 +403,7 @@ final class ColorPicker private[uic] (private[uic] val p: ColorPicker.Props) ext
         // The swatch is the overlay picker's one tab stop, so it carries the caller's id.
         access.id.foreach(v => preview = preview.id(v))
         if disabledFlag.constTrue then preview = preview.disabled(true).cssClass("p-disabled")
+        if fixed then preview = preview.aria(Aria.readonly -> "true")
         access.name.foreach(n => preview = preview.aria(Aria.label -> n))
         preview
     end previewSwatch
@@ -409,7 +425,7 @@ final class ColorPicker private[uic] (private[uic] val p: ColorPicker.Props) ext
         // is shut. Opening also records the colour the panel opens with, which is what Escape
         // puts back.
         val toggle: UI.Action =
-            if !interactive then ()
+            if !interactive || fixed then ()
             else
                 panel.open.get.map { wasOpen =>
                     if wasOpen then panel.open.set(false)

@@ -232,9 +232,9 @@ class ColorPickerTest extends ReactiveValueContract:
         sliders(t).map(_.find(_.attrs.ariaAttrs.get("label").contains(plane))
             .getOrElse(throw new AssertionError("no plane slider: the picker offers the reader nothing to change")))
 
-    // The colour is held to rule A as a text field's value is, a constant being the colour it starts from: the picker draws
-    // it entirely itself, so unbound or started from a constant it keeps the colour, and Home on the plane (no saturation
-    // left) is the gesture.
+    // The colour is held to rule A: unbound the picker keeps it itself (it draws it entirely), a constant is a binding (a
+    // constant nobody hears is fixed: read-only, nothing to drag), and Home on the plane (no saturation left) is the gesture.
+    // Where the colour starts from a default is the case after it.
     holds(new SlotCase[uic.ColorPicker, String](
         name = "value",
         bare = Present(uic.ColorPicker().inline(true)),
@@ -252,9 +252,28 @@ class ColorPickerTest extends ReactiveValueContract:
         // The sliders stay where they are while the colour moves (a rebuilt one would lose the focus that pressed it), so
         // what says the reader's colour is shown is the plane announcing it in place.
         nextPatch = Present((name, value) => name == "aria-valuetext" && value == "Saturation 0%, brightness 100%"),
-        startText = Present("#00ff00"),
+        // Fixed, the picker draws no slider at all, so it says so on its root.
+        isFixed = Present(t =>
+            sliders(t).map(s =>
+                if s.nonEmpty then Kyo.lift(false)
+                else elementWithClass(t, "p-colorpicker").map(_.attrs.ariaAttrs.get("readonly").contains("true"))
+            )
+        ),
         disable = Present((c, on) => c.disabled(on))
     ))
+
+    "a default colour is where the picker starts, and a gesture moves the colour the picker keeps" in {
+        def started(using Frame)      = uic.ColorPicker().inline(true).defaultValue("#00ff00")
+        def ready(t: UI)(using Frame) = Abort.run[AssertionError](Abort.catching[AssertionError](planeOf(t))).map(_.isSuccess)
+        for
+            first <- readyTree(started.render)(ready(_))
+            from  <- shown(first)
+            moved <- attrPatchedAfter(started.render, ready(_))(t => planeOf(t).map(press(_, UI.Keyboard.Home)))((name, value) =>
+                name == "aria-valuetext" && value == "Saturation 0%, brightness 100%"
+            )
+        yield assert(from == "#00ff00" && moved, s"started at $from, moved $moved")
+        end for
+    }
 
     "a color bound one way follows its owner" in {
         for
