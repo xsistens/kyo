@@ -58,7 +58,8 @@ class PasswordTest extends ReactiveValueContract:
             },
             ready = Present(ready),
             startText = Present("abc"),
-            defaults = Present((c, t) => c.defaultValue(t))
+            defaults = Present((c, t) => c.defaultValue(t)),
+            constantFixed = true
         )
 
     private val valueSlot = ownText("value", uic.Password())

@@ -71,6 +71,10 @@ abstract class ReactiveValueContract extends UicTest:
       *   for a text field whose start is its `defaultValue` (kyo-ui's `UI.Bound.Default`) and whose constant is a binding: the setter
       *   of the default. Every case that starts the field from `startText` then starts it from the default, and a constant nobody
       *   hears is a value the field shows. Absent, `startText` is handed to the field as a constant.
+      * @param constantFixed
+      *   for a field with [[defaults]] that draws a constant nobody hears read-only (native `readonly` on Input, TextArea, Password
+      *   and the fields built on them): the case for that constant checks it is fixed. Absent, the field stays editable and kyo-ui
+      *   puts back the edit.
       * @param keptNatively
       *   for a field whose unbound state is the browser's own (a native text field nobody binds keeps what the reader
       *   typed, and a headless run has no browser to keep it): whether the tree leaves it to the browser, drawing nothing
@@ -121,6 +125,7 @@ abstract class ReactiveValueContract extends UicTest:
         val startText: Maybe[A] = Absent,
         val keptNatively: Maybe[UI => Frame ?=> Boolean < Sync] = Absent,
         val defaults: Maybe[(C, A) => Frame ?=> C] = Absent,
+        val constantFixed: Boolean = false,
         val after: Seq[UI => Frame ?=> Any < Async] = Nil,
         val mountDraws: Boolean = false,
         val layout: Map[String, UI.Rect] = Map.empty,
@@ -342,6 +347,8 @@ abstract class ReactiveValueContract extends UicTest:
       *   as [[SlotCase]]'s, for a field that is an instance kept across its host's runs
       * @param defaults
       *   as [[SlotCase]]'s, for a field whose start is its `defaultValue`
+      * @param constantFixed
+      *   as [[SlotCase]]'s
       */
     def nativeText[C](
         name: String,
@@ -356,7 +363,8 @@ abstract class ReactiveValueContract extends UicTest:
         commit: Boolean = false,
         ready: Maybe[UI => Frame ?=> Boolean < Sync] = Absent,
         placed: Maybe[C => (Frame, UI.MountSite) ?=> UI] = Absent,
-        defaults: Maybe[(C, String) => Frame ?=> C] = Absent
+        defaults: Maybe[(C, String) => Frame ?=> C] = Absent,
+        constantFixed: Boolean = false
     ): SlotCase[C, String] =
         new SlotCase[C, String](
             name = name,
@@ -379,6 +387,7 @@ abstract class ReactiveValueContract extends UicTest:
             placed = placed,
             startText = Present(startText),
             defaults = defaults,
+            constantFixed = constantFixed,
             keptNatively = Present(t =>
                 textField(t, field).map {
                     case f: UI.Ast.TextInput => f.value.isEmpty
@@ -508,15 +517,20 @@ abstract class ReactiveValueContract extends UicTest:
                     end for
                 }
                 if s.defaults.isDefined then
-                    // The constant is a binding (UI.Bound): the field shows it, and kyo-ui puts back an edit nobody takes.
-                    s"${s.name}: a constant nobody hears is the text the field shows, and nothing to say" in s.laidOut {
+                    // The constant is a binding (UI.Bound): the field shows it, and kyo-ui puts back an edit nobody takes; a field that says
+                    // so draws it read-only, a value meant to stay.
+                    s"${s.name}: a constant nobody hears is the text the field shows${
+                            if s.constantFixed then ", read-only" else ""
+                        }, and nothing to say" in s.laidOut {
                         val bound = s.render(s.bind(text))
                         for
-                            page  <- s.page(bound)
-                            shown <- s.shows(page)
-                            card  <- cards(bound)
+                            page    <- s.page(bound)
+                            shown   <- s.shows(page)
+                            isFixed <- s.fixedIn(page)
+                            card    <- cards(bound)
                         yield
                             assert(shown == text, s"the component shows $shown for the constant $text")
+                            assert(isFixed == s.constantFixed, s"read-only: $isFixed, expected ${s.constantFixed}")
                             assert(card.isEmpty, s"a constant is not a mistake: ${card.map(textOf)}")
                         end for
                     }
