@@ -975,15 +975,15 @@ object UicTest:
 
     /** A loss as one line: what it takes, from which element, and where that element was built. */
     private[uic] def described(loss: UI.Loss): String = loss match
-        case UI.Loss.StatedValue(element, attribute, frame) => s"stated $attribute | $element | ${frame.position.show}"
+        case UI.Loss.StatedValue(element, attribute, frame) => s"moved default $attribute | $element | ${frame.position.show}"
         case UI.Loss.UnkeyedMount(frame)                    => s"unkeyed mount | | ${frame.position.show}"
 
     // The lines `countLoss` has written, so each suite names each place once.
     private val lossesSeen = new java.util.concurrent.atomic.AtomicReference(Set.empty[String])
 
     /** A devtools sink that writes every [[kyo.UI.Loss]] a suite's regions report, once per suite and place, as a `UIC-LOSS` line:
-      * the count of the places in uic that lose the reader's state when the region around them runs again (T13, before the check
-      * fails a test).
+      * the count of the places in uic that lose the reader's state when the region around them runs again: a default the run moves,
+      * or a mount with no key (T13; a binding is no loss), before the check fails a test.
       */
     private[uic] def countLoss(suite: String): UI.RenderEvent => Unit = event =>
         event.kind match
