@@ -177,9 +177,10 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   default starts its own ref, which holds the reader's text through a host region that runs again, and a host that states the text itself and draws it in its own region (InputOtp's
   cells, Paginator's jump field, DataTable's filter fields) calls its `renderInPlace`. So a plain field leaves an unbound text to the browser, but a field that draws anything
   from its text after the page is shown (AutoComplete's suggestions, Password's meter and reveal) or builds its value
-  from several controls (InputOtp's cells, ColorPicker's sliders) keeps the text itself, unbound and from a constant
-  (`Controlled.owningFrom`, which still takes a constant as the start for these; Input, TextArea and Select's `filterQuery` bind it; Password, which the rulebook reached, through a `Controlled` whose `start` the engine binds, with or
-  without its meter and eye), and its handlers read the value live, since a keystroke can land before the render of the one
+  from several controls (InputOtp's cells, ColorPicker's sliders) keeps the text itself, unbound and from its default
+  (`Controlled.owned` or `Controlled.owning` from the slot's `start`, which `defaultValue` or `defaultFilterQuery` sets; every
+  text slot binds a constant, as Input does; Password, which the rulebook reached, through a `Controlled` whose `start` the
+  engine binds, with or without its meter and eye), and its handlers read the value live, since a keystroke can land before the render of the one
   before it. `ReactiveValueContract.nativeText` and the `startText`/`keptNatively` slot fields hold them to it. A text
   field's `onBlur` reports the text kyo-ui's blur carries (kyo-ui's two-parameter `onBlur((e, text) => ...)`, read off the field as focus leaves it), never
   its binding: unbound or from a default the binding does not have the reader's text at all. `ReactiveValueContract.blurs`
@@ -207,8 +208,8 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   nothing. A slot nobody bound keeps what the reader does in state the component owns for as long as its mount instance
   lives, the way an HTML control nobody binds keeps its tick. There are four forms, smallest first: `slot.owned(start)` inside a mount
   the component already has (beside its ids and highlights: a mount around it would be a mount inside a mount for every instance,
-  which `UicTest.mountsAbove` holds), `slot.ownedFrom(unbound)` the same where a constant is only where it starts, `Controlled.owning` a mount
-  of its own, and `Controlled.draw` that with the card in front, for a container.
+  which `UicTest.mountsAbove` holds), `Controlled.owning` a mount of its own, `Controlled.instance` a `mountedWith` for a
+  component that is one instance per place, and `Controlled.draw` that with the card in front, for a container.
   `Controlled.drawField` is what a field with native state draws from. CheckBox, RadioButton and ToggleSwitch are one instance per place
   (`Controlled.instance`, a `mountedWith`), as ToggleButton is, so an unbound box keeps its tick through a host region that runs again.
   Elsewhere a region around a component that re-renders ends the instance and starts the state over, which a native control under a morph

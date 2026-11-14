@@ -114,13 +114,6 @@ final private[uic] case class Controlled[A](
             case Present(_) => copy()
             case _          => start.map(mintFrom)
 
-    /** [[owned]] where a constant is only where the slot starts: a text the reader goes on editing. */
-    def ownedFrom(unbound: A)(using CanEqual[A, A], Frame): Controlled[A] < Sync =
-        binding match
-            case Present(ReactiveValue.Const(a)) => mintFrom(a)
-            case Present(_)                      => copy()
-            case _                               => mintFrom(unbound)
-
     private def mintFrom(a: A)(using CanEqual[A, A], Frame): Controlled[A] < Sync =
         Signal.initRef(a).map(ref => copy(bound = Present(ref)))
 end Controlled
@@ -172,17 +165,6 @@ private[uic] object Controlled:
                 case runs: Signal[P] @unchecked => runs.render(draw)
                 case q: P @unchecked            => draw(q)
         }
-
-    /** [[owning]] where a constant is only where the slot starts. */
-    def owningFrom[A](slot: Controlled[A], unbound: A, on: BoolValue = alwaysOn)(draw: Controlled[A] => UI)(using
-        CanEqual[A, A],
-        Frame
-    ): UI =
-        slot.binding match
-            case Present(ReactiveValue.Const(a)) if !on.const.contains(false) =>
-                UI.mounted(Signal.initRef(a).map(own => draw(slot.copy(bound = Present(own)))))
-            case Present(_) => draw(slot)
-            case _          => owning(slot, unbound, on)(draw)
 
     /** [[owning]] for a container: a card for a slot nobody hears goes in front, for as long as the switch is on. */
     def draw[A](slot: Controlled[A], name: Name, start: A, on: BoolValue = alwaysOn)(body: Controlled[A] => UI)(using
