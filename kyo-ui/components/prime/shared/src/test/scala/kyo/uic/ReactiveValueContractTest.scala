@@ -67,6 +67,10 @@ abstract class ReactiveValueContract extends UicTest:
       *   A constant nobody hears is then shown, editable and not called fixed, with no card; and where the component keeps
       *   the text itself (`keptNatively` absent), a gesture on a constant changes it as it would unbound. Absent, a
       *   constant nobody hears is fixed.
+      * @param defaults
+      *   for a text field whose start is its `defaultValue` (kyo-ui's `UI.Bound.Default`) and whose constant is a binding: the setter
+      *   of the default. Every case that starts the field from `startText` then starts it from the default, and a constant nobody
+      *   hears is a value the field shows. Absent, `startText` is handed to the field as a constant.
       * @param keptNatively
       *   for a field whose unbound state is the browser's own (a native text field nobody binds keeps what the reader
       *   typed, and a headless run has no browser to keep it): whether the tree leaves it to the browser, drawing nothing
@@ -116,12 +120,21 @@ abstract class ReactiveValueContract extends UicTest:
         val fixedOn: Maybe[UI => Frame ?=> UI.Ast.Element < Sync] = Absent,
         val startText: Maybe[A] = Absent,
         val keptNatively: Maybe[UI => Frame ?=> Boolean < Sync] = Absent,
+        val defaults: Maybe[(C, A) => Frame ?=> C] = Absent,
         val after: Seq[UI => Frame ?=> Any < Async] = Nil,
         val mountDraws: Boolean = false,
         val layout: Map[String, UI.Rect] = Map.empty,
         val disable: Maybe[(C, Signal[Boolean]) => Frame ?=> C] = Absent,
         val placed: Maybe[C => (Frame, UI.MountSite) ?=> UI] = Absent
     )(using val equal: CanEqual[A, A]):
+
+        /** The slot started from `a`: through its default where it has one (see [[defaults]]), else as a constant. */
+        def started(a: A)(using Frame): C = defaults match
+            case Present(d) => d(bare.get, a)
+            case Absent     => bind(a)
+
+        /** How the cases name a slot started from a text: from its default, or from a constant. */
+        def startName: String = if defaults.isDefined then "from a default" else "from a constant"
 
         /** `v` run on a page laid out as [[layout]] says. */
         def laidOut[B, S](v: B < S)(using Frame): B < S = UicTest.layout.let(layout)(v)
@@ -308,7 +321,7 @@ abstract class ReactiveValueContract extends UicTest:
       * the commit, as a change event: a field bound to a ref has it written first, then the handler is told
       * ([[typeInto]], [[commitInto]]). What a render shows is the field's `value` ([[textIn]]). The field answers by being
       * editable, since the browser edits it whether or not anybody listens, and fixed is what native `readonly` is, which
-      * keeps the field focusable. A constant is the starting text (`startText`), and unbound the text is the browser's,
+      * keeps the field focusable. The field starts from `startText`, through its default where it has one, and unbound the text is the browser's,
       * which the field leaves to it by drawing no `value` of its own.
       *
       * @param field
@@ -316,13 +329,15 @@ abstract class ReactiveValueContract extends UicTest:
       * @param next
       *   the text the reader types
       * @param startText
-      *   the constant the field starts from
+      *   the text the field starts from, as a default where it has one, else as a constant
       * @param commit
       *   whether the slot's event hears the commit (`onChange`) rather than every keystroke (`onInput`)
       * @param ready
       *   as [[SlotCase]]'s, for a field whose handlers its mount wires
       * @param placed
       *   as [[SlotCase]]'s, for a field that is an instance kept across its host's runs
+      * @param defaults
+      *   as [[SlotCase]]'s, for a field whose start is its `defaultValue`
       */
     def nativeText[C](
         name: String,
@@ -336,7 +351,8 @@ abstract class ReactiveValueContract extends UicTest:
         startText: String = "start",
         commit: Boolean = false,
         ready: Maybe[UI => Frame ?=> Boolean < Sync] = Absent,
-        placed: Maybe[C => (Frame, UI.MountSite) ?=> UI] = Absent
+        placed: Maybe[C => (Frame, UI.MountSite) ?=> UI] = Absent,
+        defaults: Maybe[(C, String) => Frame ?=> C] = Absent
     ): SlotCase[C, String] =
         new SlotCase[C, String](
             name = name,
@@ -358,6 +374,7 @@ abstract class ReactiveValueContract extends UicTest:
             ready = ready,
             placed = placed,
             startText = Present(startText),
+            defaults = defaults,
             keptNatively = Present(t =>
                 textField(t, field).map {
                     case f: UI.Ast.TextInput => f.value.isEmpty
@@ -419,7 +436,7 @@ abstract class ReactiveValueContract extends UicTest:
                 }
             end starts
             if s.bare.isDefined then starts("unbound", s.bare.get)
-            if s.startText.isDefined && s.keptNatively.isEmpty then starts("from a constant", s.bind(s.start))
+            if s.startText.isDefined && s.keptNatively.isEmpty then starts(s.startName, s.started(s.start))
         }
 
     /** Registers the cases of rule A for `s`: all six, or the four of them a slot with no unbound form has. */
@@ -471,23 +488,41 @@ abstract class ReactiveValueContract extends UicTest:
 
         s.startText match
             case Present(text) =>
-                s"${s.name}: a constant nobody hears is the text it starts with: shown, editable, and nothing to say" in s.laidOut {
-                    val started = s.render(s.bind(text))
+                s"${s.name}: ${
+                        if s.defaults.isDefined then "a default" else "a constant nobody hears"
+                    } is the text it starts with: shown, editable, and nothing to say" in s.laidOut {
+                    val started = s.render(s.started(text))
                     for
                         page    <- s.page(started)
                         isFixed <- s.fixedIn(page)
                         shown   <- s.shows(page)
                         card    <- cards(started)
                     yield
-                        assert(shown == text, s"the component shows $shown for the constant $text")
+                        assert(shown == text, s"the component shows $shown for the start $text")
                         assert(!isFixed, "the reader edits a starting text, so nothing may call it fixed")
                         assert(card.isEmpty, s"a starting text is not a mistake: ${card.map(textOf)}")
                     end for
                 }
+                if s.defaults.isDefined then
+                    // The constant is a binding (UI.Bound): the field shows it, and kyo-ui puts back an edit nobody takes.
+                    s"${s.name}: a constant nobody hears is the text the field shows, and nothing to say" in s.laidOut {
+                        val bound = s.render(s.bind(text))
+                        for
+                            page  <- s.page(bound)
+                            shown <- s.shows(page)
+                            card  <- cards(bound)
+                        yield
+                            assert(shown == text, s"the component shows $shown for the constant $text")
+                            assert(card.isEmpty, s"a constant is not a mistake: ${card.map(textOf)}")
+                        end for
+                    }
+                end if
                 if s.keptNatively.isEmpty then
-                    s"${s.name}: a constant is only where it starts: a gesture changes it, and the component keeps the change" in
+                    s"${s.name}: ${
+                            if s.defaults.isDefined then "a default" else "a constant"
+                        } is only where it starts: a gesture changes it, and the component keeps the change" in
                         s.laidOut {
-                            for changed <- changes(s, s.render(s.bind(s.start)))
+                            for changed <- changes(s, s.render(s.started(s.start)))
                             yield assert(changed, s"a gesture never showed ${s.next}")
                         }
                 end if
@@ -606,8 +641,8 @@ abstract class ReactiveValueContract extends UicTest:
             }
         end if
 
-        s"${s.name}: from a constant, a blur reports the reader's edit, not the constant" in {
-            reported(s.bind(s.startText.getOrElse(s.start))).map(got => assert(got == Chunk(s.next), s"reported $got"))
+        s"${s.name}: ${s.startName}, a blur reports the reader's edit, not the start" in {
+            reported(s.started(s.startText.getOrElse(s.start))).map(got => assert(got == Chunk(s.next), s"reported $got"))
         }
 
         s"${s.name}: bound one way, a blur reports the text the field holds" in {
