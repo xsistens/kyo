@@ -35,9 +35,13 @@ final class InputMask private[uic] (private[uic] val p: InputMask.Props) extends
     /** The value. A `SignalRef` binds TWO-WAY: an edit writes the MASKED value, and ref writes update the field. Any other
       * signal binds ONE-WAY: the field shows it, and an edit only reports through [[onChange]] and [[onComplete]]; with
       * neither, a card says the reader cannot change it. A constant (already formatted, or raw; the client re-masks on
-      * edit) is the starting text. `ref.readOnly` opts a ref out.
+      * edit) holds the field the same way (see [[kyo.UI.Bound]]): an edit nobody takes is put back. For a text the reader
+      * starts from and owns, use [[defaultValue]]. `ref.readOnly` opts a ref out.
       */
     def value(v: String | Signal[String]): InputMask = new InputMask(p.copy(valueSlot = valueSlot.bind(v)))
+
+    /** The text the field starts with (formatted, or raw: the client re-masks on edit); the reader owns it from there. */
+    def defaultValue(v: String): InputMask = new InputMask(p.copy(valueSlot = valueSlot.startAt(v)))
 
     private[uic] def withPlaceholder(v: Maybe[UI.Prop[String]]): InputMask = new InputMask(p.copy(placeholderText = v))
 
@@ -101,7 +105,9 @@ final class InputMask private[uic] (private[uic] val p: InputMask.Props) extends
         access.id.foreach(v => in = in.id(v))
         access.name.foreach(v => in = in.accessibleName(v))
         in = in.withPlaceholder(placeholderText)
+        // A binding, a constant among them, holds the field (UI.Bound); a default is the inner field's start, which the reader owns.
         valueSlot.bound.foreach(v => in = in.value(v))
+        if valueSlot.bound.isEmpty then valueSlot.start.foreach(v => in = in.defaultValue(v))
         if valueSlot.hearer.isDefined || onCompleteF.isDefined then
             in = in.onChange { masked =>
                 val fireChange: UI.Action = valueSlot.hearer match
