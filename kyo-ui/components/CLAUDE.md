@@ -248,7 +248,7 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   feedback) has no region around it, so a keystroke renders nothing; one whose chrome does (CheckBox, RadioButton, ToggleSwitch, Slider, Rating,
   InputNumber, InputOtp, Password with feedback) draws the chrome in a region over the signal and binds the native element to the signal inside
   it. A constant somebody hears is put back like any binding (the boolean fields, Slider, InputNumber's `value`, Rating and the text
-  fields alike; `ReactiveValue.native` still hands it on as `Signal.initConst`, which kyo-ui treats the same). A constant nobody hears is fixed. A two-way ref is put back too, where a hearer writes back another value than the edit, and a field that draws everything itself (ToggleButton, ColorPicker,
+  fields alike): the native element takes the constant as it is. A constant nobody hears is fixed. A two-way ref is put back too, where a hearer writes back another value than the edit, and a field that draws everything itself (ToggleButton, ColorPicker,
   Knob, the pickers) has nothing native to fall out of step.
 - **A `SignalRef` in a slot is a CAPABILITY demand, not a data hand-over.** It asks every
   caller for write access so that the callers who want write-back can have it. Reading needs
