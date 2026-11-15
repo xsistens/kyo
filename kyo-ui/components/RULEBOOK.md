@@ -76,9 +76,9 @@ element type, and keeps apart only what truly differs.
   through it.
 
 ```scala
-private def shared[E <: (UI.Ast.Element & UI.Ast.Interactive) { type Self = E }](el: E, loading: Boolean)(using Frame): E = ... // classes, id, aria, title, role
-private def renderButton(loading: Boolean)(using Frame): UI = shared(button.jsProp("type", ...), loading) ... // type, disabled, click
-private def renderAnchor(h: String, loading: Boolean, disabled: Boolean)(using Frame): UI = shared(a, loading) ... // href, p-disabled
+private def shared[E <: (UI.Ast.Element & UI.Ast.Interactive) { type Self = E }](el: E)(using Frame): E = ... // classes, id, aria, title, role
+private def renderButton(using Frame): UI.Ast.Button = shared(button.buttonType(...)) ... // type, the inert marker, tab stop, form
+private def renderAnchor(h: String, disabled: Boolean, ariaDisabled: Boolean, ...)(using Frame): UI = shared(a) ... // href, p-disabled
 ```
 
 - The order of calls on a field that keeps one value matters where both paths set it: the later call wins (Button's host role

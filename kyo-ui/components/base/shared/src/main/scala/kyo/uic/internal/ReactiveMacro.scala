@@ -308,7 +308,7 @@ private[kyo] object ReactiveMacro:
         // ---- `when(Boolean)` over toggle setters: the toggle form, so its condition is decided as a channel ----
         //
         // `el.when(cond)(f)` with a `Boolean` condition takes `f: Self => Self`, so a read there is the block's, and the block a
-        // region over it. Where `f` only sets what a `UI.Ast.Toggle` has (classes, `aria` and `data` entries, `role`, `tabIndex`, `hidden`,
+        // region over it. Where `f` only sets what a `UI.Ast.Toggle` has (classes, `aria` and `data` entries, `role`, `tabIndex`, `preventActivation`, `blocked`, `hidden`,
         // `silent`, `disabled`, `readOnly`, `required`, each with plain values, for an entry a value of a type with no signal
         // in it) and the condition reads (a read, or something the block defines), the call becomes `when(cond: Prop[Boolean])`
         // with `f` rebuilt on the toggle. That overload takes a `Prop`, so the data flow below decides the condition as it
@@ -320,7 +320,8 @@ private[kyo] object ReactiveMacro:
             elementClass,
             TypeRepr.of[UI.Ast.Interactive].typeSymbol,
             TypeRepr.of[UI.Ast.HasDisabled].typeSymbol,
-            TypeRepr.of[UI.Ast.TextInput].typeSymbol
+            TypeRepr.of[UI.Ast.TextInput].typeSymbol,
+            TypeRepr.of[UI.Ast.Anchor].typeSymbol
         )
         val cssClassModule = TypeRepr.of[UI.Ast.CssClass.type].termSymbol
         val stringType     = TypeRepr.of[String]
@@ -334,7 +335,8 @@ private[kyo] object ReactiveMacro:
             "silent"   -> List(booleanType),
             "disabled" -> List(booleanType),
             "readOnly" -> List(booleanType),
-            "required" -> List(booleanType)
+            "required" -> List(booleanType),
+            "blocked"  -> List(booleanType)
         )
         val signalSymbol = TypeRepr.of[Signal[Any]].typeSymbol
         // Whether a value of type `t` may hold a signal: a signal, or a union or a type argument that may.
@@ -407,7 +409,7 @@ private[kyo] object ReactiveMacro:
         )
         // The toggle's setter `name` on `recv` with `args`, its evidence (`S <:< HasDisabled`) found where it asks for one.
         def toggleCall(recv: Term, name: String, args: List[Term]): Maybe[Term] =
-            val applied = Select.overloaded(recv, name, Nil, args)
+            val applied = if args.isEmpty then Select.unique(recv, name) else Select.overloaded(recv, name, Nil, args)
             applied.tpe.widen match
                 case mt: MethodType if mt.isImplicit =>
                     val evidence = mt.paramTypes.map(t =>
@@ -436,6 +438,9 @@ private[kyo] object ReactiveMacro:
                     if entries.forall(e => constantEntry(e) && !refsTo(Set(p))(e)) then
                         onToggle(inner, p, recv).flatMap(toggleCall(_, name, entries))
                     else Absent
+                // The one toggle setter that takes nothing.
+                case sel @ Select(inner, "preventActivation") if setterOwners.contains(sel.symbol.owner) =>
+                    onToggle(inner, p, recv).flatMap(toggleCall(_, "preventActivation", Nil))
                 case Apply(sel @ Select(inner, name), args) if setterOwners.contains(sel.symbol.owner) =>
                     toggleSetters.get(name) match
                         case Some(types) if plain(args, types) => onToggle(inner, p, recv).flatMap(toggleCall(_, name, args))
