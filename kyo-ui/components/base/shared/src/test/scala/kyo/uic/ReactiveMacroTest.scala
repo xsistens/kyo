@@ -642,6 +642,77 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
         }
     }
 
+    "a fork no read decides is taken once, so each of its branches is a block of its own" - {
+        // A component with two renderings, as a button that is a link where it has an href: the `val` is drawn with in one
+        // branch and only set in the other.
+        def byMatch(link: Maybe[String], off: Prop[Boolean])(using Frame): UI = UI.reactive {
+            val x = off.read
+            link match
+                case Present(h) => if x then span(h) else a(h)
+                case Absent     => button.disabled(x)
+        }
+        def byIf(wide: Boolean, off: Prop[Boolean])(using Frame): UI = UI.reactive {
+            val x = off.read
+            if wide then (if x then span("off") else div("on")) else button.disabled(x)
+        }
+
+        "a val one case draws with is a channel in the case that only sets it, with no region" in {
+            for
+                off <- Signal.initRef(false)
+                ui = byMatch(Absent, off)
+            yield ui match
+                case b: UI.Ast.Button => assert(b.attrs.reactiveBoolAttrs.contains("disabled"), s"disabled is no channel: ${b.attrs}")
+                case other            => fail(s"the case that only sets the val drew a region: $other")
+        }
+
+        "the case that draws with the val is a region over it" in {
+            for
+                off <- Signal.initRef(false)
+                ui = byMatch(Present("/x"), off)
+                drawn <- ui match
+                    case r: Reactive[?] => r.signal.current
+                    case other          => Kyo.lift(fail(s"the case that draws with the val drew no region: $other"))
+                _     <- off.set(true)
+                after <- ui match
+                    case r: Reactive[?] => r.signal.current
+                    case other          => Kyo.lift(fail(s"$other"))
+            yield assert(drawn.isInstanceOf[Anchor] && after.isInstanceOf[SpanElement], s"$drawn, then $after")
+        }
+
+        "over constants either case draws once" in {
+            assert(byMatch(Absent, true).isInstanceOf[UI.Ast.Button])
+            assert(byMatch(Present("/x"), true).isInstanceOf[SpanElement])
+        }
+
+        "an if no read decides is such a fork too" in {
+            for
+                off <- Signal.initRef(false)
+                narrow = byIf(false, off)
+                wide   = byIf(true, off)
+            yield
+                narrow match
+                    case b: UI.Ast.Button => assert(b.attrs.reactiveBoolAttrs.contains("disabled"), s"${b.attrs}")
+                    case other            => fail(s"the branch that only sets the val drew a region: $other")
+                assert(wide.isInstanceOf[Reactive[?]], s"the branch that draws with the val drew no region: $wide")
+        }
+
+        "a val read in the case itself was a channel there already" in {
+            for
+                off <- Signal.initRef(false)
+                link: Maybe[String] = Absent
+                ui                  = UI.reactive {
+                    link match
+                        case Present(h) => if off.read then span(h) else a(h)
+                        case Absent     =>
+                            val x = off.read
+                            button.disabled(x)
+                }
+            yield ui match
+                case b: UI.Ast.Button => assert(b.attrs.reactiveBoolAttrs.contains("disabled"), s"${b.attrs}")
+                case other            => fail(s"$other")
+        }
+    }
+
     "a read handed to when(Boolean) over toggle setters is the toggle's channel, by the rule of a prop argument" - {
         // The class `x` on `el` now: a toggled class whose channel holds true, or a static one.
         def classed(el: Element, cls: String)(using Frame): Boolean < Sync =
