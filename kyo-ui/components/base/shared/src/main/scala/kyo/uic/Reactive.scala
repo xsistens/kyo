@@ -59,8 +59,20 @@ extension [A](self: Signal[A])
   * constant the block runs once and gives a plain value (a `Prop[T]` that is a `T`), with no subscription. Where one is a signal, a
   * block that yields a value is one mapped signal and a block that yields a UI draws in one region, compared by the values read,
   * the way `Prop.render` does. A UI-typed `if` (or one typed as a child that draws UI) nested in an element and reading something is
-  * a site instead: it draws its own region over its condition, the element around it is built once with its channels, and a block
-  * whose structure is only sites draws no region around itself.
+  * a site instead: it draws its own region, the element around it is built once with its channels, and a block whose structure is
+  * only sites draws no region around itself. A branch of a site never shows a value its condition has left, however the condition
+  * is written: where the two read the same thing, the branch takes the value the region was drawn for.
+  *
+  * A block that ends in an `if` or a `match` that no read decides is taken once, so each of its branches is a block of its own:
+  *
+  * {{{
+  * UI.reactive {
+  *     val off = p.disabled.read
+  *     p.href match
+  *         case Present(h) => if off then span(h) else a(h) // a region over `off`
+  *         case Absent     => button.disabled(off)          // a channel, with no region
+  * }
+  * }}}
   *
   * A read in an argument whose parameter takes `T | Signal[T]` (a [[UI.Prop]], as `aria`, `cssClass` or `disabled` do) is that
   * argument's own channel and not a read of the block: `el.aria(Aria.checked -> on.read)` patches the attribute in place and the
@@ -72,7 +84,8 @@ extension [A](self: Signal[A])
   * A read that decides the structure only through a condition (an `if` condition, a `match` selector or a guard, of a type with a
   * `CanEqual`, written over reads and over `val`s that only name what is read) is not the region's read: the region compares the
   * condition's value instead, so a change of the read that leaves the condition as it was runs nothing and draws nothing, and the
-  * read feeds its channels otherwise (`if pct != 0 then span(s"$pct%")` beside a width over `pct`). While the condition's value
+  * read feeds its channels otherwise (`if pct != 0 then span(s"$pct%")` beside a width over `pct`). A lambda in the condition
+  * that reads nothing itself is part of it (`shown.exists(_ != 0)`). While the condition's value
   * is not the one the run was drawn for, each channel of the run keeps what it showed until the region draws again, so the client
   * never shows a value of a moment whose structure it does not show. A condition that is the read itself stays the region's read.
   *

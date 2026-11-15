@@ -538,6 +538,117 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
         }
     }
 
+    "a nested condition whose branch shows what the condition reads never shows a value the condition has left" - {
+        given CanEqual[Any, Any] = CanEqual.derived
+
+        // The one region among the children of the element the block draws once.
+        def regionIn(ui: UI)(using Frame, kyo.test.AssertScope): Reactive[?] < Sync = ui match
+            case d: Div =>
+                d.children.toSeq match
+                    case Seq(r: Reactive[?]) => Kyo.lift(r)
+                    case other               => Kyo.lift(fail(s"no region over the condition: $other"))
+            case other => Kyo.lift(fail(s"the block is not an element: $other"))
+
+        "a condition with a lambda in it is a key like any other: the region compares its value and holds the label to it" in {
+            Scope.run {
+                for
+                    x <- Signal.initRef(40)
+                    ui = UI.reactive {
+                        val shown = Maybe(x.read)
+                        div.inlineStyle(Style.width(shown.getOrElse(0).pct))(
+                            if shown.exists(_ != 0) then span(shown.fold("")(v => s"$v%")) else UI.empty
+                        )
+                    }
+                    region   <- regionIn(ui)
+                    compared <- region.source match
+                        case Present(p: Reactive.Source.Projected[?]) => Kyo.lift(p.signal.asInstanceOf[Signal[Any]])
+                        case other                                    => Kyo.lift(fail(s"the region keeps no value it compares: $other"))
+                    at40  <- compared.current
+                    drawn <- region.signal.current
+                    label <- drawn match
+                        case s: SpanElement =>
+                            s.children.toSeq match
+                                case Seq(r: Reactive[?]) => Kyo.lift(r.signal)
+                                case other               => Kyo.lift(fail(s"the label's text is no channel: $other"))
+                        case other => Kyo.lift(fail(s"the label is not drawn: $other"))
+                    seen <- AtomicRef.init(Chunk.empty[String])
+                    _    <- Fiber.init(label.observe {
+                        case t: Text => seen.getAndUpdate(_.append(t.value)).unit
+                        case _       => Kyo.unit
+                    })
+                    _    <- assertEventually(seen.get.map(_.nonEmpty))
+                    _    <- x.set(70)
+                    at70 <- compared.current
+                    _    <- assertEventually(seen.get.map(_.lastMaybe.contains("70%")))
+                    _    <- x.set(0)
+                    at0  <- compared.current
+                    _    <- x.set(80)
+                    _    <- assertEventually(seen.get.map(_.lastMaybe.contains("80%")))
+                    s    <- seen.get
+                yield
+                    val steps = s.foldLeft(Chunk.empty[String])((acc, t) => if acc.lastMaybe.contains(t) then acc else acc.append(t))
+                    assert(at40 == at70 && at40 != at0, s"the region compares $at40, $at70, $at0")
+                    assert(!s.contains("0%") && steps == Chunk("40%", "70%", "80%"), s"the label showed $s")
+            }
+        }
+
+        "a condition that is the read itself: the branch takes the read as the region's value of the run" in {
+            for
+                on <- Signal.initRef(true)
+                ui = UI.reactive(div(if on.read then span(s"on ${on.read}") else UI.empty))
+                region <- regionIn(ui)
+                drawn  <- region.signal.current
+            yield drawn match
+                case s: SpanElement => assert(s.children.toSeq == Seq(Text("on true")), s"the text is a channel of its own: ${s.children}")
+                case other          => fail(s"the branch is not drawn: $other")
+        }
+
+        "the same through a val that names the read" in {
+            for
+                on <- Signal.initRef(true)
+                ui = UI.reactive {
+                    val x = on.read
+                    div(if x then span(s"on $x") else UI.empty)
+                }
+                region <- regionIn(ui)
+                drawn  <- region.signal.current
+            yield drawn match
+                case s: SpanElement => assert(s.children.toSeq == Seq(Text("on true")), s"the text is a channel of its own: ${s.children}")
+                case other          => fail(s"the branch is not drawn: $other")
+        }
+
+        "a val the condition cannot be written out of makes the condition the block's, and the branch takes the run's value" in {
+            for
+                n <- Signal.initRef(3)
+                ui = UI.reactive {
+                    val xs = Seq(n.read).map(_ + 1)
+                    div(if xs.sum > 3 then span(s"sum ${xs.sum}") else UI.empty)
+                }
+                drawn <- ui match
+                    case r: Reactive[?] => r.signal.current
+                    case other          => Kyo.lift(fail(s"the condition drew no region around the element: $other"))
+            yield drawn match
+                case d: Div =>
+                    d.children.toSeq match
+                        case Seq(s: SpanElement) => assert(s.children.toSeq == Seq(Text("sum 4")), s"${s.children}")
+                        case other               => fail(s"$other")
+                case other => fail(s"$other")
+        }
+
+        "a branch that shows nothing the condition reads keeps its own channel, and is subscribed only while taken" in {
+            for
+                on <- Signal.initRef(true)
+                n  <- Signal.initRef(1)
+                ui = UI.reactive(div(if on.read then span(s"n ${n.read}") else UI.empty))
+                region <- regionIn(ui)
+                drawn  <- region.signal.current
+            yield drawn match
+                case s: SpanElement =>
+                    assert(s.children.toSeq.forall(_.isInstanceOf[Reactive[?]]), s"the text is no channel: ${s.children}")
+                case other => fail(s"the branch is not drawn: $other")
+        }
+    }
+
     "a val of the block is a read to whoever uses it, so naming a read changes nothing" - {
         "a val that only reaches a channel is a channel too, with no region" in {
             for
