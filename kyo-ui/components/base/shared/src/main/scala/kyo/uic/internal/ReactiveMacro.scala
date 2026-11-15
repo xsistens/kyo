@@ -9,8 +9,13 @@ import scala.quoted.*
   * A block reads props and signals with `.read`. The expansion is applicative: every read is taken out of the block and evaluated
   * once, before it, the reads are combined into one value (a chunk while every read is a constant, else one signal over the
   * distinct signals), and the block becomes a function of that value with each read replaced by its slot. A block that yields a UI
-  * draws through one `render`, any other block maps through one `map`. Reads of one stable path share a slot at compile time, and
-  * reads that reach one signal by different paths share one at run time, so the block never sees two values of one source.
+  * draws through one `render` unless its structure is only sites, and any other block maps through one `map`. Reads of one stable
+  * path share a slot at compile time, and reads that reach one signal by different paths share one at run time, so the block never
+  * sees two values of one source.
+  *
+  * A site is a UI-typed `if` nested in an element that reads: it draws its own region (`siteTerm`), so the element around it is built
+  * once. A site whose condition is a key (`pct != 0`) is a keyed region over its own term, and its channels are held to the run's keys
+  * (`Gate`, Option A), so a branch never shows a value its condition has left.
   *
   * Taking a read out of the block is right only where the block itself would have evaluated it, once, while it runs. A handler
   * runs later, at its event: a by-name argument or a lambda whose result is a computation that may suspend (`UI.Action`, which
@@ -700,6 +705,42 @@ private[kyo] object ReactiveMacro:
             }
         end while
 
+        // A site: an `if` among the children of an element, typed UI or as the `HtmlChildVal` a child takes it in, that reads. It is a
+        // region of its own over its condition (`lazyPick`), so the reads it takes are not the block's structure.
+        // The argument a conversion takes: `lift[T](x)(using ...)` has it in the first list, after its given list.
+        def conversionArg(t: Term): Option[Term] = strip(t) match
+            case Apply(f: Apply, _) => conversionArg(f)
+            case Apply(_, List(x))  => Some(x)
+            case _                  => None
+        // A branch as the UI it draws: a child's conversion of a UI, or a UI itself. A child that converts a String is no site.
+        def drawsUI(b: Term): Boolean =
+            if b.tpe.widen <:< TypeRepr.of[UI.Ast.HtmlChildVal] then conversionArg(b).exists(_.tpe.widen <:< TypeRepr.of[UI])
+            else b.tpe.widen <:< TypeRepr.of[UI]
+        def siteIf(t: Term): Option[Term] = strip(t) match
+            case i @ If(_, y, n)
+                if i.tpe.widen <:< TypeRepr.of[UI] || (i.tpe.widen <:< TypeRepr.of[UI.Ast.HtmlChildVal] && drawsUI(y) && drawsUI(n)) =>
+                Some(i)
+            case _ => None
+        def isSite(t: Term): Boolean =
+            siteIf(t).exists(i => containsRead(i) || refsTo(reading.toSet)(i))
+        // The sites by identity: each `if` that is an argument of a call, or one of the elements of a varargs argument.
+        val siteNodes = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap[Tree, java.lang.Boolean])
+        new TreeTraverser:
+            override def traverseTree(tree: Tree)(owner: Symbol): Unit =
+                tree match
+                    case Apply(_, args) =>
+                        args.foreach { a =>
+                            val elems = a match
+                                case Typed(Repeated(es, _), _) => es
+                                case other                     => List(other)
+                            elems.foreach(e => if isSite(e) then discard(siteNodes.add(e)))
+                        }
+                    case _ => ()
+                end match
+                super.traverseTree(tree)(owner)
+            end traverseTree
+        .traverseTree(rhs)(lambdaSym)
+
         // ---- Keys: a condition that decides the structure through a value derived from its reads ----
         //
         // A condition of an `if`, a `match`'s selector or a guard in the structure of a UI block, whose value can be compared and
@@ -736,6 +777,7 @@ private[kyo] object ReactiveMacro:
         val feeds      = scala.collection.mutable.ArrayBuffer.empty[(Symbol, Symbol)] // (used, user)
         final class Uses(inArg: Boolean, inVal: Maybe[Symbol], deferred: Boolean) extends TreeTraverser:
             override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
+                case t: Term if siteNodes.contains(t)         => () // a site takes its own reads
                 case id: Ident if reading.contains(id.symbol) =>
                     if deferred then structural += id.symbol
                     else if inArg then ()
@@ -962,6 +1004,7 @@ private[kyo] object ReactiveMacro:
             val keyed    = result <:< TypeRepr.of[UI]
             final class Collector(deferred: Maybe[String]) extends TreeTraverser:
                 override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
+                    case t: Term if siteNodes.contains(t) && !(t eq term)             => () // a site takes its own reads
                     case t: Term if keyed && deferred.isEmpty && keyNodes.contains(t) => keysHere += t
                     case t @ Read(arg)                                                =>
                         deferred.foreach(what => deferredError(t.pos, what))
@@ -1109,6 +1152,8 @@ private[kyo] object ReactiveMacro:
                                 case _ => super.transformStatement(tree)(o)
                             override def transformTerm(tree: Term)(o: Symbol): Term = tree match
                                 // A key is the run's value of it, which the region compared.
+                                // a site (also one inside a varargs argument) is its own region.
+                                case _ if siteNodes.contains(tree) && !(tree eq term) => siteTerm(tree, o, o, inner)
                                 case _ if keyIndex.containsKey(tree) => slotTerm(values, width + keyIndex.get(tree), tree.tpe)
                                 // A lazy form is the prop the collector took out, a slot like a read.
                                 case _ if lazyNodes.contains(tree) => slotValue(tree.tpe)
@@ -1122,19 +1167,22 @@ private[kyo] object ReactiveMacro:
                                     val channel = channels(fn, args)
                                     val handler = handlerArgs(fn, args)
                                     val args1   = args.zipWithIndex.map { (a, i) =>
-                                        handler(i).filter(_ => channel(i).isEmpty && readsInHandler(a)) match
-                                            case Present(t) => compileHandler(a, o, t)
-                                            case _          =>
-                                                channel(i) match
-                                                    case Present(x) =>
-                                                        strip(a) match
-                                                            // A bare read, or a bare channel-only `val`, hands on what it reads.
-                                                            case Read(of)
-                                                                if !stablePath(of).exists(inner.contains) && of.tpe.widen <:< params(i) =>
-                                                                held(of).changeOwner(o)
-                                                            case id: Ident if channelOnly.contains(id.symbol) => Ref(propOf(id.symbol))
-                                                            case _                                            => compile(a, o, o, x, inner)
-                                                    case Absent => transformTerm(a)(o)
+                                        if isSite(a) then siteTerm(a, o, o, inner)
+                                        else
+                                            handler(i).filter(_ => channel(i).isEmpty && readsInHandler(a)) match
+                                                case Present(t) => compileHandler(a, o, t)
+                                                case _          =>
+                                                    channel(i) match
+                                                        case Present(x) =>
+                                                            strip(a) match
+                                                                // A bare read, or a bare channel-only `val`, hands on what it reads.
+                                                                case Read(of)
+                                                                    if !stablePath(of).exists(inner.contains) &&
+                                                                        of.tpe.widen <:< params(i) =>
+                                                                    held(of).changeOwner(o)
+                                                                case id: Ident if channelOnly.contains(id.symbol) => Ref(propOf(id.symbol))
+                                                                case _ => compile(a, o, o, x, inner)
+                                                        case Absent => transformTerm(a)(o)
                                     }
                                     Apply.copy(tree)(fn1, args1)
                                 case _ => super.transformTerm(tree)(o)
@@ -1144,6 +1192,10 @@ private[kyo] object ReactiveMacro:
             end lambdaOf
 
             result.asType match
+                // nothing here is structure (its reads are channels and sites), so the element is built once, over no values.
+                case '[r] if result <:< TypeRepr.of[UI] && reads.isEmpty && keysHere.isEmpty =>
+                    val f = lambdaOf[UI]
+                    '{ ($f(Chunk.empty[Any]): UI) }.asTerm.changeOwner(to)
                 case '[r] if result <:< TypeRepr.of[UI] && !keysHere.isEmpty =>
                     val f = lambdaOf[UI]
                     '{ ReactiveMacro.drawKeyed($hoisted, ${ Expr(compared) })($keyFn)($f)(using $frame) }.asTerm.changeOwner(to)
@@ -1198,6 +1250,53 @@ private[kyo] object ReactiveMacro:
             val nn   = no.asExprOf[UI]
             '{ ReactiveMacro.pick($cc)($yy, $nn)(using $frame) }.asTerm.changeOwner(to)
         end lazyPick
+
+        // the site as its own region, drawn where it stands (`lazyPick`), its condition and branches compiled against `taken`.
+        def siteTerm(t: Term, from: Symbol, to: Symbol, taken: Map[List[Symbol], Taken]): Term =
+            siteRegion(t, from, to, taken).getOrElse(pickSite(t, from, to, taken))
+
+        def pickSite(t: Term, from: Symbol, to: Symbol, taken: Map[List[Symbol], Taken]): Term =
+            // A branch typed as a child is the conversion of the UI it draws: the UI is what `pick` draws.
+            def ui(b: Term): Term =
+                if b.tpe.widen <:< TypeRepr.of[UI.Ast.HtmlChildVal] then
+                    conversionArg(b).getOrElse(report.errorAndAbort(s"not a child: ${b.show}", b.pos))
+                else b
+            val site  = siteIf(t).getOrElse(report.errorAndAbort(s"not a site: ${t.show}", t.pos))
+            val drawn = site match
+                case If(c, y, n) => lazyPick(c, ui(y), ui(n), from, to, taken)
+                case other       => report.errorAndAbort(s"not an if: ${other.show}", other.pos)
+            if site.tpe.widen <:< TypeRepr.of[UI] then drawn
+            else '{ UI.Ast.HtmlChildVal.lift[UI](${ drawn.asExprOf[UI] }) }.asTerm.changeOwner(to)
+        end pickSite
+
+        // Option A:a UI site whose condition is a key (`pct != 0`) is a keyed region over its own term, like a block-level `if`:
+        // its channels are held to the run's keys (Gate), so a branch never shows a value the condition has left.
+        def siteRegion(t: Term, from: Symbol, to: Symbol, taken: Map[List[Symbol], Taken]): Maybe[Term] =
+            siteIf(t) match
+                case Some(i @ If(c, y, n)) if (i.tpe.widen <:< TypeRepr.of[UI] || (drawsUI(y) && drawsUI(n))) && keyEligible(c) =>
+                    // The branches as the UI they draw: a child's conversion is taken off, so the region draws UI, not HtmlChildVal.
+                    def drawn(b: Term): Term =
+                        if b.tpe.widen <:< TypeRepr.of[UI.Ast.HtmlChildVal] then conversionArg(b).getOrElse(b) else b
+                    // A block `val` the site reads is written out as its read, so the branch's channels read the region's own
+                    // signal and the gate holds them (a `val`'s prop is a different signal, which the gate does not hold).
+                    val writeOut = new TreeMap:
+                        override def transformTerm(tree: Term)(o: Symbol): Term = tree match
+                            case id: Ident if reading.contains(id.symbol) && inlinable(id.symbol, Set.empty) =>
+                                transformTerm(candidates(id.symbol).rhs.get)(o)
+                            case _ => super.transformTerm(tree)(o)
+                    val inlined = writeOut.transformTerm(If(c, drawn(y), drawn(n)))(from) match
+                        case w @ If(c2, _, _) =>
+                            discard(keyNodes.add(c2))
+                            w
+                        case other => report.errorAndAbort(s"site not an if after inlining: ${other.show}", other.pos)
+                    val region  = compileReads(inlined, from, to, TypeRepr.of[UI], taken, inBranch = false)
+                    val asChild = strip(t) match
+                        case If(_, _, _) if i.tpe.widen <:< TypeRepr.of[UI] => region
+                        case _ => '{ UI.Ast.HtmlChildVal.lift[UI](${ region.asExprOf[UI] }) }.asTerm.changeOwner(to)
+                    Present(asChild)
+                case _ => Absent
+            end match
+        end siteRegion
 
         // The lazy `match` as a value inside the block: its selector as a prop, and the case its value picks as a prop built over that
         // case's pattern variables (`ReactiveMacro.matched`). A slot like a lazy `if`'s.
@@ -1259,6 +1358,7 @@ private[kyo] object ReactiveMacro:
             var drawsRegion = false
             new TreeTraverser:
                 override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
+                    case t: Term if siteNodes.contains(t)              => () // a site draws its own region
                     case Read(_)                                       => drawsRegion = true
                     case id: Ident if channelOnly.contains(id.symbol)  => drawsRegion = true
                     case vd: ValDef if channelOnly.contains(vd.symbol) => ()

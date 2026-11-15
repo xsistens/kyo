@@ -456,9 +456,13 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
                     val pct = x.read
                     div.inlineStyle(Style.width(pct.pct))(if pct != 0 then span(s"$pct%") else UI.empty)
                 }
-                region <- ui match
-                    case r: Reactive[?] => Kyo.lift(r)
-                    case other          => Kyo.lift(fail(s"no region over the condition: $other"))
+                // The block is the element, drawn once: the condition is a region of its own inside it.
+                outer <- ui match
+                    case d: Div => Kyo.lift(d)
+                    case other  => Kyo.lift(fail(s"the block is not an element: $other"))
+                region <- outer.children.toSeq match
+                    case Seq(r: Reactive[?]) => Kyo.lift(r)
+                    case other               => Kyo.lift(fail(s"no region over the condition: $other"))
                 compared <- region.source match
                     case Present(p: Reactive.Source.Projected[?]) => Kyo.lift(p.signal.asInstanceOf[Signal[Any]])
                     case other                                    => Kyo.lift(fail(s"the region keeps no value it compares: $other"))
@@ -471,14 +475,10 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
             yield
                 // The region compares what the condition gives: 40 and 60 are one value of it, 0 another.
                 assert(at40 == at60 && at40 != at0, s"the region compares $at40, $at60, $at0")
+                assert(outer.attrs.reactiveStyle.isDefined, s"the width is no channel: ${outer.attrs}")
                 drawn match
-                    case d: Div =>
-                        assert(d.attrs.reactiveStyle.isDefined, s"the width is no channel: ${d.attrs}")
-                        d.children.toSeq match
-                            case Seq(s: SpanElement) => assert(s.children.toSeq.forall(_.isInstanceOf[Reactive[?]]), s"${s.children}")
-                            case other               => fail(s"the label is not drawn: $other")
-                        end match
-                    case other => fail(s"$other")
+                    case s: SpanElement => assert(s.children.toSeq.forall(_.isInstanceOf[Reactive[?]]), s"${s.children}")
+                    case other          => fail(s"the label is not drawn: $other")
                 end match
         }
 
@@ -506,17 +506,17 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
                         div.inlineStyle(Style.width(pct.pct))(if pct != 0 then span(s"$pct%") else UI.empty)
                     }
                     region <- ui match
-                        case r: Reactive[?] => Kyo.lift(r)
-                        case other          => Kyo.lift(fail(s"no region over the condition: $other"))
-                    drawn <- region.signal.current
-                    label <- drawn match
                         case d: Div =>
                             d.children.toSeq match
-                                case Seq(s: SpanElement) =>
-                                    s.children.toSeq match
-                                        case Seq(r: Reactive[?]) => Kyo.lift(r.signal)
-                                        case other               => Kyo.lift(fail(s"$other"))
-                                case other => Kyo.lift(fail(s"$other"))
+                                case Seq(r: Reactive[?]) => Kyo.lift(r)
+                                case other               => Kyo.lift(fail(s"no region over the condition: $other"))
+                        case other => Kyo.lift(fail(s"the block is not an element: $other"))
+                    drawn <- region.signal.current
+                    label <- drawn match
+                        case s: SpanElement =>
+                            s.children.toSeq match
+                                case Seq(r: Reactive[?]) => Kyo.lift(r.signal)
+                                case other               => Kyo.lift(fail(s"$other"))
                         case other => Kyo.lift(fail(s"$other"))
                     seen <- AtomicRef.init(Chunk.empty[String])
                     _    <- Fiber.init(label.observe {
