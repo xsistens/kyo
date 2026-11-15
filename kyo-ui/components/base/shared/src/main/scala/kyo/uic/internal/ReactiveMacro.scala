@@ -490,7 +490,7 @@ private[kyo] object ReactiveMacro:
         val liftPropString = childModule.methodMember("liftPropString").headOption.getOrElse(
             report.errorAndAbort("kyo-ui has no `HtmlChildVal.liftPropString`: the expansion of `UI.reactive` needs it.")
         )
-        val rhs = new TreeMap:
+        val channelled = new TreeMap:
             override def transformTerm(tree: Term)(owner: Symbol): Term = tree match
                 case Apply(Apply(fn, List(text)), frameArgs)
                     if liftStringSym.contains(fn.symbol) && text.tpe.widen <:< stringType && readsOrDefined(text) =>
@@ -519,6 +519,38 @@ private[kyo] object ReactiveMacro:
                         case _ => super.transformTerm(tree)(owner)
                 case _ => super.transformTerm(tree)(owner)
         .transformTerm(toggled)(lambdaSym)
+
+        // ---- A fork no read decides: each of its branches is a block of its own ----
+        //
+        // A block that ends in an `if` or a `match` whose condition or selector neither reads nor uses anything the block defines
+        // takes one branch for as long as it lives. What the block defines before the fork then belongs to the branch taken:
+        // `{ defs; fork }` is the fork over `{ defs; branch }`, each branch with definitions of its own, so the data flow below
+        // decides a `val` per branch: one that a branch draws with and another only sets is the first branch's read and a channel
+        // in the second. A statement before the fork that is no definition, and a pattern or a guard that uses one of the
+        // definitions, leave the block as written.
+        def distribute(t: Term): Term = t match
+            case Inlined(call, bindings, inner) => Inlined.copy(t)(call, bindings, distribute(inner))
+            case Typed(inner, tpt)              => Typed.copy(t)(distribute(inner), tpt)
+            case Block(stats, expr) if stats.nonEmpty && stats.forall { case _: Definition | _: Import => true; case _ => false } =>
+                val mine = definitionsIn(t, lambdaSym)
+                val own  = stats.collect { case d: Definition => d.symbol }.toSet
+                // Decided once: no read in it, and nothing the block defines.
+                def fixed(c: Term): Boolean = !anyIn(c) {
+                    case Read(_)   => true
+                    case id: Ident => mine.contains(id.symbol)
+                    case _         => false
+                }
+                // The definitions with the branch, as definitions of the branch's own: moving a tree gives what it defines new symbols.
+                def branch(b: Term): Term = distribute(Block(stats, b).changeOwner(lambdaSym))
+                strip(expr) match
+                    case fork @ If(c, y, n) if fixed(c) => If.copy(fork)(c, branch(y), branch(n))
+                    case fork @ Match(sel, cases)
+                        if fixed(sel) && cases.forall(cd => !refsTo(own)(cd.pattern) && cd.guard.forall(g => !refsTo(own)(g))) =>
+                        Match.copy(fork)(sel, cases.map(cd => CaseDef.copy(cd)(cd.pattern, cd.guard, branch(cd.rhs))))
+                    case _ => t
+                end match
+            case _ => t
+        val rhs = distribute(channelled)
 
         // What the block defines, so no read refers to it.
         val local = definitionsIn(rhs, lambdaSym)
