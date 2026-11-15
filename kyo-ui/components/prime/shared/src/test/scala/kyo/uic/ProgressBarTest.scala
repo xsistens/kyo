@@ -86,6 +86,23 @@ class ProgressBarTest extends UicTest:
         end for
     }
 
+    // A label drawn for a value that is not zero never shows "0%": its text is held to the run that drew it, so the value of the
+    // moment that drops the label does not reach it, whichever of the two the engine runs first.
+    "the label drawn for 60 keeps its 60% when the value drops to zero, where no label is drawn" in {
+        for
+            value <- Signal.initRef(60)
+            bar = uic.ProgressBar().value(value)
+            drawn <- elementsWithClass(bar.render, "p-progressbar-label")
+            at60  <- Kyo.foreach(drawn)(textNow)
+            _     <- value.set(0)
+            after <- Kyo.foreach(drawn)(textNow)
+            now   <- elementsWithClass(bar.render, "p-progressbar-label")
+        yield assert(
+            at60 == Chunk("60%") && after == Chunk("60%") && now.isEmpty,
+            s"the label drawn for 60 read $at60, then $after at zero, and ${now.size} labels are drawn at zero"
+        )
+    }
+
     "a mode from a signal swaps the class, the fill, aria-valuenow and the label in place, with no region around the bar" in {
         for
             mode <- Signal.initRef(uic.ProgressBarMode.Determinate)
