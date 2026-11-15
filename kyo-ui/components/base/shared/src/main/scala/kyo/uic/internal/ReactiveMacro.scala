@@ -14,8 +14,14 @@ import scala.quoted.*
   * sees two values of one source.
   *
   * A site is a UI-typed `if` nested in an element that reads: it draws its own region (`siteTerm`), so the element around it is built
-  * once. A site whose condition is a key (`pct != 0`) is a keyed region over its own term, and its channels are held to the run's keys
-  * (`Gate`, Option A), so a branch never shows a value its condition has left.
+  * once. A branch never shows a value its condition has left, and what a site is follows from what the condition and the branches
+  * share (`siteKind`). A site whose condition is a key (`pct != 0`, `shown.exists(_ != 0)`) is a keyed region over its own term, and
+  * its channels are held to the run's keys (`Gate`, Option A). One whose condition shares no source with its branches is picked by
+  * its condition, each branch with channels of its own. Any other is one region over the site's own reads, where a read the branch
+  * shares is the run's value. A `val` that cannot be written out and shares a source with a condition is the block's (`pinned`).
+  *
+  * A block that ends in an `if` or a `match` no read decides (`p.href match`) takes one branch for as long as it lives, so it is that
+  * fork over its branches, each with the block's definitions as its own (`distribute`): the data flow decides a `val` per branch.
   *
   * Taking a read out of the block is right only where the block itself would have evaluated it, once, while it runs. A handler
   * runs later, at its event: a by-name argument or a lambda whose result is a computation that may suspend (`UI.Action`, which
@@ -738,7 +744,7 @@ private[kyo] object ReactiveMacro:
         end while
 
         // A site: an `if` among the children of an element, typed UI or as the `HtmlChildVal` a child takes it in, that reads. It is a
-        // region of its own over its condition (`lazyPick`), so the reads it takes are not the block's structure.
+        // region of its own, so the reads it takes are not the block's structure (see Sites below, after the keys).
         // The argument a conversion takes: `lift[T](x)(using ...)` has it in the first list, after its given list.
         def conversionArg(t: Term): Option[Term] = strip(t) match
             case Apply(f: Apply, _) => conversionArg(f)
@@ -753,8 +759,119 @@ private[kyo] object ReactiveMacro:
                 if i.tpe.widen <:< TypeRepr.of[UI] || (i.tpe.widen <:< TypeRepr.of[UI.Ast.HtmlChildVal] && drawsUI(y) && drawsUI(n)) =>
                 Some(i)
             case _ => None
-        def isSite(t: Term): Boolean =
-            siteIf(t).exists(i => containsRead(i) || refsTo(reading.toSet)(i))
+
+        // ---- Keys: a condition that decides the structure through a value derived from its reads ----
+        //
+        // A condition of an `if`, a `match`'s selector or a guard in the structure of a UI block, whose value can be compared and
+        // which reads (directly, or through `val`s it can be written out of), is a key of the region: the region compares the
+        // key's value, not the reads it is computed from, so a change of the reads that leaves the key as it was runs nothing. Its
+        // uses of a `val` need nothing of the region, so a `val` that otherwise only reaches channels stays a channel, and every
+        // channel of the run is held to the run's keys (`ReactiveMacro.Gate`). A key that is the read itself, or that uses
+        // something it cannot be written out of (a `val` defining something, a pattern's variable, a lazy branch), is not a key.
+        // A lambda in a key is part of it where it neither reads nor uses a `val` that reads (`shown.exists(_ != 0)`): it is a
+        // function of its arguments alone, written out with the key.
+        val keyNodes = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap[Tree, java.lang.Boolean])
+        // A reading `val` the key can be written out of: its definition defines nothing and uses only `val`s like it.
+        def inlinable(s: Symbol, seen: Set[Symbol]): Boolean =
+            reading.contains(s) && !seen.contains(s) &&
+                candidates.get(s).flatMap(_.rhs).exists(r => definitionsIn(r, lambdaSym).isEmpty && writtenOut(r, seen + s))
+        def writtenOut(t: Tree, seen: Set[Symbol]): Boolean =
+            // What `t` defines itself (a lambda's parameter) goes with it.
+            val own = definitionsIn(t, lambdaSym)
+            !anyIn(t) {
+                case id: Ident if local.contains(id.symbol) && !own.contains(id.symbol) => !inlinable(id.symbol, seen)
+                case _                                                                  => false
+            }
+        end writtenOut
+        // Whether all `t` defines lies in lambdas that neither read nor use a `val` that reads.
+        def definesOnlyPureLambdas(t: Tree): Boolean =
+            var ok = true
+            new TreeTraverser:
+                override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
+                    case dd: DefDef if dd.name.startsWith("$anonfun") => if containsRead(dd) || refsTo(reading)(dd) then ok = false
+                    case _: Definition                                => ok = false
+                    case _                                            => super.traverseTree(tree)(owner)
+            .traverseTree(t)(lambdaSym)
+            ok
+        end definesOnlyPureLambdas
+        // The read itself, through any `val`s that only name it: a key over it compares what the region compares already.
+        def bareRead(t: Term): Boolean = strip(t) match
+            case Read(_)                                  => true
+            case id: Ident if reading.contains(id.symbol) => candidates.get(id.symbol).flatMap(_.rhs).exists(bareRead)
+            case _                                        => false
+        def keyEligible(t: Term): Boolean =
+            TypeRepr.of[T] <:< TypeRepr.of[UI] && !(t.tpe.widen <:< TypeRepr.of[UI]) && canEqualOf(t.tpe.widen).isDefined &&
+                (containsRead(t) || refsTo(reading)(t)) && definesOnlyPureLambdas(t) && writtenOut(t, Set.empty) &&
+                !bareRead(t) && !anyIn(t) {
+                    case x: Term => lazyParts(x).isDefined || lazyCases(x).isDefined
+                    case _       => false
+                }
+
+        // ---- Sites: a nested `if` as a region of its own, by what its condition and its branches share ----
+        //
+        // A branch must never show a value its condition has left (a label reading "0%" under `pct != 0`), so what a site is
+        // follows from what the two share:
+        //   - keyed: the condition is a key. The site is a keyed region over its own term, its channels held to the run's keys.
+        //   - picked: the condition and the branches share no source. The condition picks the branch drawn (`lazyPick`), and each
+        //     branch keeps its own channels, subscribed only while it is taken.
+        //   - region: they share a source and the condition is no key (the read itself, a pattern's variable in it). The site is
+        //     one region over its own reads, so a shared read is the run's value in the branch, not a channel of its own.
+        // A keyed site and a region have the `val`s they use written out as their reads, so a shared source is one read of the
+        // site. A `val` that cannot be written out (it defines something) and shares a source with a condition is the block's
+        // (`pinned`): each run has one value of it, in the condition and in the branch alike.
+
+        // What a term's value comes from: the stable paths it reads and the reading `val`s it uses, through what those are built from.
+        def sources(t: Tree): Set[Any] =
+            val out                                  = scala.collection.mutable.Set.empty[Any]
+            def go(x: Tree, seen: Set[Symbol]): Unit =
+                readPaths(x).foreach(out += _)
+                new TreeTraverser:
+                    override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
+                        case id: Ident if reading.contains(id.symbol) && !seen.contains(id.symbol) =>
+                            out += id.symbol
+                            candidates.get(id.symbol).flatMap(_.rhs).foreach(go(_, seen + id.symbol))
+                        case _ => super.traverseTree(tree)(owner)
+                .traverseTree(x)(lambdaSym)
+            end go
+            go(t, Set.empty)
+            out.toSet
+        end sources
+        def readsHere(t: Tree): Boolean = containsRead(t) || refsTo(reading)(t)
+        // The sources of every condition that reads: an `if`'s, a `match`'s selector, a guard. A handler decides when it runs.
+        val conditionSources: Set[Any] =
+            val out = scala.collection.mutable.Set.empty[Any]
+            new TreeTraverser:
+                override def traverseTree(tree: Tree)(owner: Symbol): Unit =
+                    tree match
+                        case If(c, _, _) if readsHere(c) => out ++= sources(c)
+                        case Match(sel, cases)           =>
+                            if readsHere(sel) then out ++= sources(sel)
+                            cases.foreach(_.guard.foreach(g => if readsHere(g) then out ++= sources(g)))
+                        case _ => ()
+                    end match
+                    tree match
+                        case dd: DefDef if isHandlerLambda(dd) => ()
+                        case _                                 => super.traverseTree(tree)(owner)
+                end traverseTree
+            .traverseTree(rhs)(lambdaSym)
+            out.toSet
+        end conditionSources
+        // A reading `val` that cannot be written out and shares a source with a condition: the block's, one value per run.
+        val pinned: Set[Symbol] = reading.toSet.filter { s =>
+            !inlinable(s, Set.empty) && {
+                val from = candidates.get(s).flatMap(_.rhs).fold(Set.empty[Any])(sources) + s
+                from.exists(conditionSources.contains)
+            }
+        }
+        // The kind of site `t` is: 'K' keyed, 'P' picked, 'R' a region over its own reads; `Absent` where it is no site.
+        def siteKind(t: Term): Maybe[Char] = siteIf(t) match
+            case Some(i @ If(c, y, n)) if readsHere(i) =>
+                if keyEligible(c) then Present('K')
+                else
+                    val decides = sources(c)
+                    if (sources(y) ++ sources(n)).exists(decides.contains) then Present('R') else Present('P')
+            case _ => Absent
+        def isSite(t: Term): Boolean = siteKind(t).isDefined
         // The sites by identity: each `if` that is an argument of a call, or one of the elements of a varargs argument.
         val siteNodes = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap[Tree, java.lang.Boolean])
         new TreeTraverser:
@@ -773,39 +890,9 @@ private[kyo] object ReactiveMacro:
             end traverseTree
         .traverseTree(rhs)(lambdaSym)
 
-        // ---- Keys: a condition that decides the structure through a value derived from its reads ----
-        //
-        // A condition of an `if`, a `match`'s selector or a guard in the structure of a UI block, whose value can be compared and
-        // which reads (directly, or through `val`s it can be written out of), is a key of the region: the region compares the
-        // key's value, not the reads it is computed from, so a change of the reads that leaves the key as it was runs nothing. Its
-        // uses of a `val` need nothing of the region, so a `val` that otherwise only reaches channels stays a channel, and every
-        // channel of the run is held to the run's keys (`ReactiveMacro.Gate`). A key that is the read itself, or that uses
-        // something it cannot be written out of (a `val` defining something, a pattern's variable, a lazy branch), is not a key.
-        val keyNodes = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap[Tree, java.lang.Boolean])
-        // A reading `val` the key can be written out of: its definition defines nothing and uses only `val`s like it.
-        def inlinable(s: Symbol, seen: Set[Symbol]): Boolean =
-            reading.contains(s) && !seen.contains(s) &&
-                candidates.get(s).flatMap(_.rhs).exists(r => definitionsIn(r, lambdaSym).isEmpty && writtenOut(r, seen + s))
-        def writtenOut(t: Tree, seen: Set[Symbol]): Boolean = !anyIn(t) {
-            case id: Ident if local.contains(id.symbol) => !inlinable(id.symbol, seen)
-            case _                                      => false
-        }
-        // The read itself, through any `val`s that only name it: a key over it compares what the region compares already.
-        def bareRead(t: Term): Boolean = strip(t) match
-            case Read(_)                                  => true
-            case id: Ident if reading.contains(id.symbol) => candidates.get(id.symbol).flatMap(_.rhs).exists(bareRead)
-            case _                                        => false
-        def keyEligible(t: Term): Boolean =
-            TypeRepr.of[T] <:< TypeRepr.of[UI] && !(t.tpe.widen <:< TypeRepr.of[UI]) && canEqualOf(t.tpe.widen).isDefined &&
-                (containsRead(t) || refsTo(reading)(t)) && definitionsIn(t, lambdaSym).isEmpty && writtenOut(t, Set.empty) &&
-                !bareRead(t) && !anyIn(t) {
-                    case x: Term => lazyParts(x).isDefined || lazyCases(x).isDefined
-                    case _       => false
-                }
-
         // Each use of a reading `val`: inside a channel argument or a key it needs nothing, inside another reading `val` it needs
         // what that one needs, anywhere else the region needs it.
-        val structural = scala.collection.mutable.Set.empty[Symbol]
+        val structural = scala.collection.mutable.Set.empty[Symbol] ++= pinned
         val feeds      = scala.collection.mutable.ArrayBuffer.empty[(Symbol, Symbol)] // (used, user)
         final class Uses(inArg: Boolean, inVal: Maybe[Symbol], deferred: Boolean) extends TreeTraverser:
             override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
@@ -1283,9 +1370,11 @@ private[kyo] object ReactiveMacro:
             '{ ReactiveMacro.pick($cc)($yy, $nn)(using $frame) }.asTerm.changeOwner(to)
         end lazyPick
 
-        // the site as its own region, drawn where it stands (`lazyPick`), its condition and branches compiled against `taken`.
-        def siteTerm(t: Term, from: Symbol, to: Symbol, taken: Map[List[Symbol], Taken]): Term =
-            siteRegion(t, from, to, taken).getOrElse(pickSite(t, from, to, taken))
+        // The site as its own region, drawn where it stands, by its kind (see Sites above).
+        def siteTerm(t: Term, from: Symbol, to: Symbol, taken: Map[List[Symbol], Taken]): Term = siteKind(t) match
+            case Present('P')  => pickSite(t, from, to, taken)
+            case Present(kind) => siteRegion(t, from, to, taken, keyed = kind == 'K')
+            case Absent        => report.errorAndAbort(s"not a site: ${t.show}", t.pos)
 
         def pickSite(t: Term, from: Symbol, to: Symbol, taken: Map[List[Symbol], Taken]): Term =
             // A branch typed as a child is the conversion of the UI it draws: the UI is what `pick` draws.
@@ -1301,16 +1390,18 @@ private[kyo] object ReactiveMacro:
             else '{ UI.Ast.HtmlChildVal.lift[UI](${ drawn.asExprOf[UI] }) }.asTerm.changeOwner(to)
         end pickSite
 
-        // Option A:a UI site whose condition is a key (`pct != 0`) is a keyed region over its own term, like a block-level `if`:
-        // its channels are held to the run's keys (Gate), so a branch never shows a value the condition has left.
-        def siteRegion(t: Term, from: Symbol, to: Symbol, taken: Map[List[Symbol], Taken]): Maybe[Term] =
+        // A keyed site, or a region over the site's own reads: one region over the site's term, like a block-level `if`. A keyed
+        // one compares its condition's value and holds its channels to the run's keys (`Gate`), so a branch never shows a value
+        // the condition has left; a region compares the reads themselves, and a read the branch shares is the run's value there.
+        def siteRegion(t: Term, from: Symbol, to: Symbol, taken: Map[List[Symbol], Taken], keyed: Boolean): Term =
             siteIf(t) match
-                case Some(i @ If(c, y, n)) if (i.tpe.widen <:< TypeRepr.of[UI] || (drawsUI(y) && drawsUI(n))) && keyEligible(c) =>
+                case Some(i @ If(c, y, n)) =>
                     // The branches as the UI they draw: a child's conversion is taken off, so the region draws UI, not HtmlChildVal.
                     def drawn(b: Term): Term =
                         if b.tpe.widen <:< TypeRepr.of[UI.Ast.HtmlChildVal] then conversionArg(b).getOrElse(b) else b
                     // A block `val` the site reads is written out as its read, so the branch's channels read the region's own
-                    // signal and the gate holds them (a `val`'s prop is a different signal, which the gate does not hold).
+                    // signal: the gate holds them (a `val`'s prop is a different signal, which the gate does not hold), and a read
+                    // the region compares is the run's value in the branch.
                     val writeOut = new TreeMap:
                         override def transformTerm(tree: Term)(o: Symbol): Term = tree match
                             case id: Ident if reading.contains(id.symbol) && inlinable(id.symbol, Set.empty) =>
@@ -1318,15 +1409,13 @@ private[kyo] object ReactiveMacro:
                             case _ => super.transformTerm(tree)(o)
                     val inlined = writeOut.transformTerm(If(c, drawn(y), drawn(n)))(from) match
                         case w @ If(c2, _, _) =>
-                            discard(keyNodes.add(c2))
+                            if keyed then discard(keyNodes.add(c2))
                             w
                         case other => report.errorAndAbort(s"site not an if after inlining: ${other.show}", other.pos)
-                    val region  = compileReads(inlined, from, to, TypeRepr.of[UI], taken, inBranch = false)
-                    val asChild = strip(t) match
-                        case If(_, _, _) if i.tpe.widen <:< TypeRepr.of[UI] => region
-                        case _ => '{ UI.Ast.HtmlChildVal.lift[UI](${ region.asExprOf[UI] }) }.asTerm.changeOwner(to)
-                    Present(asChild)
-                case _ => Absent
+                    val region = compileReads(inlined, from, to, TypeRepr.of[UI], taken, inBranch = false)
+                    if i.tpe.widen <:< TypeRepr.of[UI] then region
+                    else '{ UI.Ast.HtmlChildVal.lift[UI](${ region.asExprOf[UI] }) }.asTerm.changeOwner(to)
+                case _ => report.errorAndAbort(s"not a site: ${t.show}", t.pos)
             end match
         end siteRegion
 
