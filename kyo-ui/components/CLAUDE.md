@@ -85,7 +85,7 @@ region that runs again must not start a component over and take the reader's sta
   a bound slot, keeps the reader's value across runs, and carries on from what was shown when a run stops binding it.
 - **What builds the element and has no channel is one `UI.reactive` block** over a small value of the structural fields (ToggleButton's
   `Base`: editable, fixed, unheard, validity, access, radio, never a hearer), so a run that only brings new hearers leaves it equal and
-  draws nothing again. Inside the block a value that only reaches channels stays a channel (the macro's data flow), and blocks nest.
+  draws nothing again. Inside the block a value that only reaches channels stays a channel (the macro's data flow), and blocks nest. A nested UI-typed `if` that reads is a site with its own region (ISC-49), so the element around it is built once and a run that flips the branch draws only that region.
 - **A handler reads the run when its event comes**: `props.call(_.checked).map(s => ...)`, so a click writes the ref the latest run
   bound and reaches that run's `onChange`, and a `SignalRef` stays two way. Never close over a value read while drawing.
 - **A host that binds the slot itself and draws the component in its own region** (SelectButton's options) calls a mount-free

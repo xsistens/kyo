@@ -39,7 +39,9 @@ class ReactiveContractTest extends kyo.test.Test[Any]:
         /** `was` updated from the element `id="out"` in `html`, or `was` where `html` holds no such element. */
         def in(html: String, was: Out): Out =
             val at = html.indexOf("id=\"out\"")
-            if at < 0 then was
+            // A paint of a region inside `#out` carries no id: the element's content is then this paint, so its text is the text shown.
+            if at < 0 then
+                was.copy(text = html.replaceAll("<[^>]*>", "").trim)
             else
                 val start                      = html.lastIndexOf('<', at)
                 val end                        = html.indexOf('>', at)
@@ -690,6 +692,107 @@ class ReactiveContractTest extends kyo.test.Test[Any]:
                 assert(waitingN == 0 && k.paints == 0 && k.patches == 0, s"observers $waitingN, write cost $k")
                 assert(shown.text == "012", s"after the flip it showed: $shown")
             end for
+        }
+
+        "CONTROL-FAILS-ON-BASE a top-level if repaints on the flip (harness shape, not a macro result; ignore)" in {
+            for
+                c <- Signal.initRef(true)
+                ui = UI.reactive(if c.read then div(Seq.tabulate(2)(i => span(s"$i"))*) else span("off"))
+                _ <- live(ui) { l =>
+                    for
+                        _ <- observed(c)
+                        _ <- settle(c, false)
+                        _ <- shows(l)(_.text == "off")
+                    yield ()
+                }
+            yield assert(true)
+        }
+
+        "PROBE7 the site paints on the flip and the model shows the new branch" in {
+            for
+                c <- Signal.initRef(true)
+                ui = UI.reactive(span.id("out")(if c.read then div(Seq.tabulate(2)(i => span(s"$i"))*) else span("off")))
+                r <- live(ui) { l =>
+                    for
+                        _   <- observed(c)
+                        p0  <- l.paints
+                        _   <- settle(c, false)
+                        _   <- assertEventually(l.paints.map(_ > p0), within)
+                        p1  <- l.paints
+                        now <- l.now
+                    yield (p0, p1, now)
+                }
+            yield assert(r._2 == r._1 + 1 && r._3.text == "off", s"paints ${r._1} -> ${r._2}, model ${r._3.text}")
+        }
+
+        "INVALID-SHAPE nested UI.reactive in a UI.reactive (fails on base too; the harness cannot judge this shape)" in {
+            for
+                c <- Signal.initRef(true)
+                ui = UI.reactive(span.id("out")(UI.reactive {
+                    val v = c.read
+                    if v then div(Seq.tabulate(2)(i => span(s"$i"))*) else span("off")
+                }))
+                _ <- live(ui) { l =>
+                    for
+                        _ <- observed(c)
+                        _ <- settle(c, false)
+                        _ <- shows(l)(_.text == "off")
+                    yield ()
+                }
+            yield assert(true)
+        }
+
+        "PROBE3 a site with a constant branch repaints on the flip" in {
+            for
+                c <- Signal.initRef(true)
+                ui = UI.reactive(span.id("out")(if c.read then div(Seq.tabulate(2)(i => span(s"$i"))*) else span("off")))
+                _ <- live(ui) { l =>
+                    for
+                        _ <- observed(c)
+                        _ <- settle(c, false)
+                        _ <- shows(l)(_.text == "off")
+                    yield ()
+                }
+            yield assert(true)
+        }
+
+        "WRONG-PROBE hand-written nested region (fails on base too: the view keeps the old branch, so the probe is wrong, not the runtime)" in {
+            for
+                c <- Signal.initRef(true)
+                n <- Signal.initRef(2)
+                ui = span.id("out")(UI.Prop.render(c)(on =>
+                    if on then UI.Prop.render(n)(k => div(Seq.tabulate(k)(i => span(s"$i"))*)) else span("off")
+                ))
+                r <- live(ui) { l =>
+                    for
+                        _        <- observed(n)
+                        _        <- settle(c, false)
+                        _        <- shows(l)(_.text == "off")
+                        before   <- n.waiters
+                        _        <- n.set(5)
+                        _        <- assertEventually(n.waiters.map(_ == 0), within)
+                        waitingN <- n.waiters
+                    yield (before, waitingN)
+                }
+            yield assert(r._2 == 0, "PROBE observers before the write: " + r._1 + ", after the write: " + r._2)
+            end for
+        }
+
+        "PROBE2 a plain observer forked in a value's scope is interrupted when the next value closes it" in {
+            Scope.run {
+                for
+                    n    <- Signal.initRef(2)
+                    flag <- Signal.initRef(true)
+                    _    <- Fiber.init(flag.observe { on =>
+                        if on then Fiber.init(n.observe(_ => Kyo.unit)).unit else Kyo.unit
+                    })
+                    _     <- assertEventually(n.waiters.map(_ > 0), within)
+                    _     <- flag.set(false)
+                    _     <- assertEventually(n.waiters.map(_ == 0), within)
+                    _     <- n.set(3)
+                    after <- n.waiters
+                yield assert(after == 0, s"PROBE2 observers after the close and a write: $after")
+            }
         }
 
         "a read behind a condition that reads nothing and is false" in {
