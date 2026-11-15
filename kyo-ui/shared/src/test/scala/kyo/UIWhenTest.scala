@@ -173,6 +173,39 @@ class UIWhenTest extends kyo.test.Test[Any]:
         end for
     }
 
+    "preventActivation and blocked over a signal: the marker of the constant in each state, a channel, and no static marker beside it" in {
+        val field = UI.checkbox
+        val link  = UI.a("x").href(UI.Href.Path("/x"))
+        for
+            on   <- Signal.initRef(true)
+            off  <- Signal.initRef(false)
+            iOn  <- html(field.when(on: Signal[Boolean])(_.preventActivation))
+            iOff <- html(field.when(off: Signal[Boolean])(_.preventActivation))
+            cOn  <- html(field.when(true)(_.preventActivation))
+            cOff <- html(field.when(false)(_.preventActivation))
+            bOn  <- html(link.when(on: Signal[Boolean])(_.blocked(true)))
+            bOff <- html(link.when(off: Signal[Boolean])(_.blocked(true)))
+            dOn  <- html(link.when(true)(_.blocked(true)))
+            dOff <- html(link.when(false)(_.blocked(true)))
+            // A link blocked on its own is open while the condition says so, and blocked again after.
+            open   <- html(link.blocked(true).when(on: Signal[Boolean])(_.blocked(false)))
+            closed <- html(link.blocked(true).when(off: Signal[Boolean])(_.blocked(false)))
+            inert   = field.when(on: Signal[Boolean])(_.preventActivation)
+            blocked = link.when(on: Signal[Boolean])(_.blocked(true))
+        yield
+            assert(attrSet(iOn, "input") == attrSet(cOn, "input") && iOn.contains("""data-kyo-inert="1""""), s"$iOn / $cOn")
+            assert(attrSet(iOff, "input") == attrSet(cOff, "input") && !iOff.contains("data-kyo-inert"), s"$iOff / $cOff")
+            assert(attrSet(bOn, "a") == attrSet(dOn, "a") && bOn.contains("""data-kyo-blocked="1""""), s"$bOn / $dOn")
+            assert(attrSet(bOff, "a") == attrSet(dOff, "a") && !bOff.contains("data-kyo-blocked"), s"$bOff / $dOff")
+            assert(!open.contains("data-kyo-blocked") && closed.contains("""data-kyo-blocked="1""""), s"$open / $closed")
+            assert(
+                !inert.attrs.dataAttrs.contains("kyo-inert") && inert.attrs.reactiveMaybeAttrs.contains("data-kyo-inert"),
+                s"${inert.attrs}"
+            )
+            assert(blocked.attrs.blocked.isEmpty && blocked.attrs.reactiveMaybeAttrs.contains("data-kyo-blocked"), s"${blocked.attrs}")
+        end for
+    }
+
     "a change patches class, aria and disabled in place, with nothing drawn again" in {
         import kyo.internal.ReactiveUI
         import kyo.internal.RecordingExchange

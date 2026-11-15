@@ -2265,6 +2265,40 @@ object UI:
                 attr("tabindex", el.attrs.tabIndex.map(_.toString), v.toString, _.copy(tabIndex = Absent))(el.tabIndex(v))
             end tabIndex
 
+            /** The element declines its activation keys while the condition holds, as [[kyo.UI.Ast.Interactive.preventActivation]]
+              * does for good: the marker comes and goes with the condition, patched in place.
+              */
+            def preventActivation(using ev: S <:< Interactive): Toggle[S] =
+                // Unsafe: the toggle's element is its `S`, which the evidence says is an `Interactive`.
+                val el = ev(element.asInstanceOf[S])
+                attr(
+                    "data-kyo-inert",
+                    Maybe.fromOption(el.attrs.dataAttrs.get("kyo-inert")),
+                    "1",
+                    a => a.copy(dataAttrs = a.dataAttrs - "kyo-inert")
+                )(el.preventActivation)
+            end preventActivation
+
+            /** The link blocked (`v`) or open while the condition holds, and as the link itself says while it does not; see
+              * [[kyo.UI.Ast.Anchor.blocked]]. The marker is patched in place.
+              */
+            def blocked(v: Boolean)(using ev: S <:< Anchor): Toggle[S] =
+                // Unsafe: the toggle's element is its `S`, which the evidence says is an `Anchor`.
+                val el                     = ev(element.asInstanceOf[S])
+                val own                    = el.attrs.blocked.getOrElse(false)
+                def strip(a: Attrs): Attrs = a.copy(blocked = Absent)
+                if v then attr("data-kyo-blocked", Maybe.when(own)("1"), "1", strip)(el.blocked(true))
+                else if !own then this
+                else
+                    cond match
+                        case s: Signal[Boolean] @unchecked =>
+                            given Frame = element.frame
+                            // Open while the condition holds: the marker is on while it does not.
+                            next(Toggle.attrChannel(element, "data-kyo-blocked", Absent, "1", strip, s.map(!_)))
+                        case on: Boolean => if on then next(el.blocked(false)) else this
+                end if
+            end blocked
+
             /** `hidden` set to `v` while the condition holds. */
             def hidden(v: Boolean): Toggle[S] =
                 flag("hidden", element.attrs.hidden.getOrElse(false), v)(element.hidden(v))
@@ -3967,6 +4001,14 @@ object UI:
               * anywhere in the page. Package-internal: the prime button is the one caller, and the attribute has no other element here.
               */
             private[kyo] def form(v: String): Button = copy(form = Present(v))
+
+            /** The button's `type` (`submit`, `button`, `reset`), constant or reactive through one setter: a constant is the
+              * property it sets, and a signal is the `type` attribute's channel, patched in place, which event dispatch reads when
+              * an activation comes. Package-internal, as [[form]] is.
+              */
+            private[kyo] def buttonType(v: Prop[String]): Button = v match
+                case s: Signal[String] @unchecked => withReactiveAttr("type", s)
+                case t: String                    => jsProp("type", t)
         end Button
 
         // ---- Boolean inputs (checked + onChange: Boolean) ----

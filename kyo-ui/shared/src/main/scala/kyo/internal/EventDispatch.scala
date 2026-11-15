@@ -83,9 +83,9 @@ private[kyo] object EventDispatch:
                 // `type="button"` submits nothing in a browser (see ButtonActivation). `Absent` here
                 // means the target is no button at all, which is not the same as "a button that does
                 // not submit".
-                targetButtonSubmits = facts.target match
-                    case Present(b: Button) => Present(ButtonActivation.submits(b.attrs.jsProps.getOrElse("type", "")))
-                    case _                  => Absent
+                targetButtonSubmits <- facts.target match
+                    case Present(b: Button) => buttonSubmits(b).map(Present(_))
+                    case _                  => Kyo.lift(Absent: Maybe[Boolean])
                 // Enter submits a form implicitly from a single-line field or a button, as a browser does; from a textarea it is a
                 // line break, from a select a dropdown interaction, and from anything else nothing at all.
                 targetEnterSubmits = isKeyDown && facts.target.exists { t =>
@@ -154,20 +154,27 @@ private[kyo] object EventDispatch:
       * caller falls back to submitting the form directly, the answer HTML gives a form with no submit
       * button at all.
       */
-    private def defaultSubmitButton(elem: Element, basePath: Seq[String]): Maybe[Seq[String]] =
+    private def defaultSubmitButton(elem: Element, basePath: Seq[String])(using Frame): Maybe[Seq[String]] < Sync =
         val start: Maybe[Seq[String]] = Absent
-        elem.children.toSeq.zipWithIndex.foldLeft(start) { case (found, (child, i)) =>
+        Kyo.foldLeft(elem.children.toSeq.zipWithIndex)(start) { case (found, (child, i)) =>
             if found.isDefined then found
             else
                 val childPath = basePath :+ i.toString
                 child match
-                    case b: Button if ButtonActivation.submits(b.attrs.jsProps.getOrElse("type", "")) =>
-                        Present(childPath)
+                    case b: Button  => buttonSubmits(b).map(yes => if yes then Present(childPath) else defaultSubmitButton(b, childPath))
                     case c: Element => defaultSubmitButton(c, childPath)
                     case _          => Absent
                 end match
         }
     end defaultSubmitButton
+
+    /** Whether activating `b` submits, by its `type` now: the value behind the attribute's channel where it has one (the channel
+      * is the value, see `withReactiveAttr`), else the property it was given.
+      */
+    private def buttonSubmits(b: Button)(using Frame): Boolean < Sync =
+        b.attrs.reactiveAttrs.get("type") match
+            case Some(sig) => sig.current.map(ButtonActivation.submits)
+            case None      => ButtonActivation.submits(b.attrs.jsProps.getOrElse("type", ""))
 
     /** Submit the form itself, HTML's fallback when implicit submission finds no default button to click.
       *
@@ -787,9 +794,10 @@ private[kyo] object EventDispatch:
                     if !isTarget && KeyPolicy.submitsImplicitly(e.keyboard.key) && enterSubmits then
                         elem match
                             case f: Form =>
-                                defaultSubmitButton(f, selfPath) match
+                                defaultSubmitButton(f, selfPath).map {
                                     case Present(buttonPath) => recordActivation(buttonPath)
                                     case Absent              => submitDirectly(f)
+                                }
                             case _ => Kyo.lift(())
                     else Kyo.lift(())
                 keyHandler.andThen(activateClick).andThen(activateToggle).andThen(selectCycle).andThen(formSubmit)
