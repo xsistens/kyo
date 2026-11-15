@@ -4348,6 +4348,17 @@ lazy val `kyo-ui-components-base` =
 // is the real target and gets a row per linker backend (the Wasm row is that same source linked to
 // WasmGC); the JVM and Native rows carry server-side rendering for the server-push transport, so a
 // server on either can render the same components a browser mounts.
+// Writes the setters of `@member` props fields as real members of their component (kyo.uic.setters.SettersPlugin).
+// A JVM compiler plugin, so it builds once for every platform of the components that load it.
+lazy val `kyo-ui-setters-plugin` =
+    project
+        .in(file("kyo-ui/components/setters-plugin"))
+        .settings(
+            scalaVersion := scala39Version,
+            publish / skip := true,
+            libraryDependencies += "org.scala-lang" %% "scala3-compiler" % scala39Version % Provided
+        )
+
 lazy val `kyo-ui-components-prime` =
     crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
         .crossType(CrossType.Full)
@@ -4355,6 +4366,9 @@ lazy val `kyo-ui-components-prime` =
         .dependsOn(`kyo-ui-components-base`, `kyo-direct`)
         .withKyoTest
         .settings(`kyo-settings`)
+        .settings(
+            Compile / scalacOptions += "-Xplugin:" + (`kyo-ui-setters-plugin` / Compile / packageBin).value.getAbsolutePath
+        )
         .jvmSettings(mimaCheck(false))
         // `openssl-native-settings` as in kyo-ui: kyo-net's bundled TLS shim compiles into THIS binary,
         // and nativeConfig does not cross a project dependency, so without the system OpenSSL flags the

@@ -8,6 +8,12 @@ import scala.quoted.*
 /** A props field no setter is made for: a host, a shared trait or a hand-written setter of another name writes it. */
 final class noSetter extends scala.annotation.StaticAnnotation
 
+/** A props field whose setter the compiler plugin `kyo-ui-setters-plugin` writes as a real member of the component, before
+  * the typer runs, so it wins over every extension and conversion. The plugin writes it from the field, so no setter is
+  * generated here either.
+  */
+final class member extends scala.annotation.StaticAnnotation
+
 /** The name of an ownable field's event setter, where it is not `on<Field>Change` (`@eventName("onChange") checked`). */
 final class eventName(name: String) extends scala.annotation.StaticAnnotation
 
@@ -104,6 +110,7 @@ object Setters:
         val props                      = TypeRepr.of[P].typeSymbol
         val declared                   = TypeRepr.of[Self].typeSymbol.declarations.map(_.name).toSet
         val marked                     = TypeRepr.of[noSetter].typeSymbol
+        val writtenByPlugin            = TypeRepr.of[member].typeSymbol
         val named                      = TypeRepr.of[eventName].typeSymbol
         val ownable                    = TypeRepr.of[UI.Ownable[Any]].typeSymbol
         val maybe                      = TypeRepr.of[Maybe[Any]].typeSymbol
@@ -160,7 +167,7 @@ object Setters:
                 case other                     => report.errorAndAbort(s"UI.attempt takes one action by name, not ${other.show}")
         end byNameAction
 
-        val made = all.zipWithIndex.filterNot((f, _) => f.hasAnnotation(marked)).flatMap { (f, i) =>
+        val made = all.zipWithIndex.filterNot((f, _) => f.hasAnnotation(marked) || f.hasAnnotation(writtenByPlugin)).flatMap { (f, i) =>
             val t = TypeRepr.of[P].memberType(props.fieldMember(f.name))
             t.baseType(ownable) match
                 case owner @ AppliedType(_, List(_)) =>
