@@ -860,6 +860,21 @@ class ReactiveMacroTest extends kyo.test.Test[Any]:
             )
         }
 
+        "preventActivation and blocked are toggle setters: the marker follows the read in place, with no region" in {
+            for
+                on <- Signal.initRef(false)
+                field = UI.reactive(checkbox.when(on.read)(_.preventActivation))
+                link  = UI.reactive(a("x").when(on.read)(_.blocked(true)))
+            yield
+                field match
+                    case c: Checkbox => assert(c.attrs.reactiveMaybeAttrs.contains("data-kyo-inert"), s"${c.attrs}")
+                    case other       => fail(s"the block drew a region: $other")
+                link match
+                    case l: Anchor => assert(l.attrs.reactiveMaybeAttrs.contains("data-kyo-blocked"), s"${l.attrs}")
+                    case other     => fail(s"the block drew a region: $other")
+                end match
+        }
+
         "a tab index is a toggle setter: the tab stop follows the read in place, with no region" in {
             for
                 on <- Signal.initRef(false)
