@@ -7,7 +7,9 @@ import kyo.internal.MouseEventData
 import kyo.internal.ReactiveUI
 import kyo.internal.UIEvent
 
-/** A button reads its three switches as one region, whichever of them follow a signal, and with none it draws no region at all. */
+/** A button is drawn once: its three switches patch it in place, whichever of them follow a signal, and only the spinner of a
+  * loading button is a region, inside it.
+  */
 class ButtonTest extends UicTest:
 
     // Armed: a region that takes the reader's state again fails the leaf.
@@ -17,34 +19,43 @@ class ButtonTest extends UicTest:
 
     private def regions(b: uic.Button)(using Frame): Int < Sync = regionsAbove(b.render, "p-button")
 
-    "two signals are one region" in {
+    "no signal draws a region around the button: disabled, aria-disabled and loading patch it in place" in {
         for
-            on <- Signal.initRef(false)
-            n  <- regions(button.disabled(on).loading(on))
-        yield assert(n == 1, s"$n regions")
+            on  <- Signal.initRef(false)
+            d   <- regions(button.disabled(on))
+            ad  <- regions(button.ariaDisabled(on))
+            l   <- regions(button.loading(on))
+            all <- regions(button.disabled(on).ariaDisabled(on).loading(on))
+        yield assert((d, ad, l, all) == (0, 0, 0, 0), s"disabled $d, ariaDisabled $ad, loading $l, all three $all")
     }
 
-    "a signal in aria-disabled and one in loading are one region" in {
+    "loading from a signal draws one region, inside the button: the spinner that stands where the icon does" in {
         for
-            on <- Signal.initRef(false)
-            n  <- regions(button.ariaDisabled(on).loading(on))
-        yield assert(n == 1, s"$n regions")
+            on      <- Signal.initRef(true)
+            spinner <- regionsAbove(button.loading(on).render, "p-button-loading-icon")
+            fixed   <- regionsAbove(button.loading(true).render, "p-button-loading-icon")
+        yield assert((spinner, fixed) == (1, 0), s"regions above the spinner: from a signal $spinner, from a constant $fixed")
     }
 
-    "three signals are one region" in {
+    "a button that starts to load keeps its element: the type, aria-busy, the inert marker and the classes follow in place" in {
         for
             on <- Signal.initRef(false)
-            n  <- regions(button.disabled(on).ariaDisabled(on).loading(on))
-        yield assert(n == 1, s"$n regions")
-    }
-
-    "a signal in disabled or aria-disabled patches the button in place; one in loading, which shapes it, is its one region" in {
-        for
-            on <- Signal.initRef(false)
-            d  <- regions(button.disabled(on))
-            ad <- regions(button.ariaDisabled(on))
-            l  <- regions(button.loading(on))
-        yield assert((d, ad, l) == (0, 0, 1), s"disabled $d, ariaDisabled $ad, loading $l")
+            el <- elementWithClass(uic.Button("Save").buttonType(ButtonType.Submit).loading(on).render, "p-button")
+            a    = el.attrs
+            kind = a.reactiveAttrs.get("type")
+            idle <- kind.fold(Kyo.lift(""))(_.current)
+            _    <- on.set(true)
+            busy <- kind.fold(Kyo.lift(""))(_.current)
+            says <- a.reactiveMaybeAttrs.get("aria-busy").fold(Kyo.lift(Absent: Maybe[String]))(_.current)
+        yield
+            assert((idle, busy) == ("submit", "button"), s"type while idle $idle, while loading $busy")
+            assert(says.contains("true"), s"aria-busy while loading: $says")
+            assert(
+                a.reactiveMaybeAttrs.contains("data-kyo-inert") && a.reactiveAttrs.contains("aria-disabled") &&
+                    a.reactiveClasses.contains("p-uic-aria-disabled") && a.jsProps.get("type").isEmpty,
+                s"$a"
+            )
+        end for
     }
 
     "a variant, size or shape from a signal toggles its classes in place" in {
@@ -133,36 +144,38 @@ class ButtonTest extends UicTest:
             case other            => fail(s"not a button: $other")
     }
 
-    /** Runs a button with `disabled` and `loading` over refs, hands `drive` the refs once it reads them, and says whether the page
-      * ended on both set: the region's observer of `loading` parked again, so what it read is what the region left, and the last
-      * paint shows both. Only `loading` is the region's read: `disabled` is a channel, and a loading button leaves it to that channel,
-      * which the region never waits on.
+    /** Runs a button with `disabled` and `loading` over refs, hands `drive` the refs once the page reads them, and says whether the
+      * page ended on both set: each follows its own channel on the button drawn once, so neither write waits on the other, and the
+      * spinner's region, the one thing `loading` draws, has painted.
       */
     private def endsOnBoth(log: kyo.internal.RecordingExchange)(drive: (SignalRef[Boolean], SignalRef[Boolean]) => Any < Async)(using
         Frame
     ): Boolean < Async =
-        // Disabled as the page shows it: the attribute, or its channel holding true (`disabled` follows a signal through it).
+        // Disabled and busy as the page shows them: each attribute's channel holding true.
         def held(t: UI): Boolean < Sync =
             elementWithClass(t, "p-button").map {
                 case b: UI.Ast.Button =>
-                    val off = b.disabled.contains(true) match
-                        case true  => Kyo.lift(true)
-                        case false => b.attrs.reactiveBoolAttrs.get("disabled").fold(Kyo.lift(false))(_.current)
-                    off.map(_ && b.attrs.ariaAttrs.get("busy").contains("true"))
+                    for
+                        off  <- b.attrs.reactiveBoolAttrs.get("disabled").fold(Kyo.lift(b.disabled.contains(true)))(_.current)
+                        busy <- b.attrs.reactiveMaybeAttrs.get("aria-busy").fold(Kyo.lift(false))(_.current.map(_.contains("true")))
+                    yield off && busy
                 case _ => Kyo.lift(false)
             }
+        def spins(t: UI): Boolean < Sync = elementsWithClass(t, "p-button-loading-icon").map(_.nonEmpty)
         for
             disabled <- Signal.initRef(false)
             busy     <- Signal.initRef(false)
             cmds     <- headlessCommands
-            ends <- kyo.internal.ReactiveUI.subscribed(button.disabled(disabled).loading(busy).render, log, commands = Present(cmds)) { _ =>
+            ui = button.disabled(disabled).loading(busy).render
+            ends <- kyo.internal.ReactiveUI.subscribed(ui, log, commands = Present(cmds)) { _ =>
                 waitFor(busy.waiters.map(_ > 0)).andThen(drive(disabled, busy)).andThen(
                     waitFor(
                         for
                             parked <- busy.waiters.map(_ > 0)
                             drawn  <- Sync.defer(UicTest.publishedIn(log).headOption)
-                            both   <- drawn.fold(Kyo.lift(false))(held)
-                        yield parked && both
+                            spun   <- drawn.fold(Kyo.lift(false))(spins)
+                            both   <- held(ui)
+                        yield parked && spun && both
                     ).andThen(true)
                 )
             }

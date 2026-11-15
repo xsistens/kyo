@@ -96,33 +96,32 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
     def apply(cs: UI*): Button = new Button(p.copy(extraChildren = p.extraChildren ++ cs))
 
     /** Draws the button, or the link when `href` is set. A stateless component has no instance: a host repaint has nothing of it
-      * to lose. Each place reads the field it shows: `disabled`, `aria-disabled`, the severity, the variant, the size and the
-      * shapes reach the element through its channels, and a click reads `disabled` and `loading` when it comes. Only `loading`
-      * shapes the button (spinner, icon-only, aria-disabled), so it is the one read of the button's region; a link reads `disabled`
-      * and `ariaDisabled` there too, since an inert link is a different element. With neither a signal the block draws no region.
+      * to lose. Each place reads the field it shows: `disabled`, `aria-disabled`, `loading`, the severity, the variant, the size
+      * and the shapes reach the element through its channels, and a click reads `disabled` and `loading` when it comes. The button
+      * is drawn once: `loading` patches its type, its flags and its classes in place, and only the spinner that stands where the
+      * icon does is a region, inside the button. A link reads `disabled` and `ariaDisabled` in a region around it, since an
+      * inert link is a different element. With none of them a signal the block draws no region.
       */
     private[uic] def render(using Frame): UI =
-        // The gated click actions are built once per render, not once per run of the reactive block below.
-        p.href match
-            case Present(h) =>
-                val pressed = p.onClick.map(a => answering(a, link = true))
-                UI.reactive(renderAnchor(h, p.loading.read, p.disabled.read, p.ariaDisabled.read, pressed))
-            case Absent =>
-                val pressed = p.onClick.map(a => answering(a, link = false))
-                UI.reactive {
-                    val busy = p.loading.read
+        // The gated click action is built once per render, not once per run of the reactive block below.
+        val pressed = p.onClick.map(a => answering(a, link = p.href.isDefined))
+        UI.reactive {
+            val busy = p.loading.read
+            val off  = p.disabled.read
+            val ad   = p.ariaDisabled.read
+            p.href match
+                case Present(h) => renderAnchor(h, off, ad, pressed)
+                case Absent     =>
                     // A loading button is aria-disabled, not natively disabled: it stays in the tab order, and `answering`
-                    // blocks its click.
-                    val off = p.disabled.read
-                    // aria-disabled keeps the button focusable and clickable (the click routes through the handler, e.g.
-                    // form.submit to focus-first-invalid); it says so only while the button is not natively disabled.
-                    val says = (busy || p.ariaDisabled.read) && !off
-                    renderButton(busy).disabled(off)
+                    // blocks its click. aria-disabled keeps the button focusable and clickable (the click routes through the
+                    // handler, e.g. form.submit to focus-first-invalid); it says so only while the button is not natively disabled.
+                    val says = (busy || ad) && !off
+                    renderButton.disabled(off)
                         .when(pressed)((el, act) => el.onClick(act))
                         .aria(Aria.disabled -> says)
-                        .when(says)(_.cssClass("p-uic-aria-disabled"))(contentChildren(busy)*)
-                }
-        end match
+                        .when(says)(_.cssClass("p-uic-aria-disabled"))(contentChildren*)
+            end match
+        }
     end render
 
     /** The click handler: nothing runs while the button is loading or natively disabled, and a link also runs nothing while it is
@@ -137,7 +136,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
     end answering
 
     /** The `.p-button` class chain, shared by the button and anchor renderings: a constant is a class, a signal a class channel. */
-    private def classed[E <: UI.Ast.Element { type Self = E }](el: E, loading: Boolean)(using Frame): E =
+    private def classed[E <: UI.Ast.Element { type Self = E }](el: E)(using Frame): E =
         p.extraClasses.foldLeft(el.cssClass("p-button", "p-component"))(_.cssClass(_))
             .cssClass.matching(p.severity)(s => if s == Severity.Primary then Absent else Button.severityClass(s.ordinal))
             .cssClass.matching(p.variant)(v => if v == ButtonVariant.Filled then Absent else Button.variantClass(v.ordinal))
@@ -149,21 +148,23 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
             .when(p.rounded)(_.cssClass("p-button-rounded")).when(p.raised)(_.cssClass("p-button-raised")).when(p.fluid)(_.cssClass(
                 "p-button-fluid"
             ))
-            .when(iconOnly(loading))(_.cssClass("p-button-icon-only"))
+            .when(iconOnly)(_.cssClass("p-button-icon-only"))
     end classed
 
     /** Icon-only: no children and no label, with an icon (leading or trailing) or the spinner in its place. An empty label is no label,
-      * and a label signal that empties gains the class in place.
+      * and a label signal that empties, or a button that starts to load, gains the class in place.
       */
-    private def iconOnly(loading: Boolean)(using Frame): Prop[Boolean] =
-        if p.extraChildren.nonEmpty || !(p.icon.isDefined || p.endIcon.isDefined || loading) then false
-        else UI.reactive(p.label.read.forall(_.isEmpty))
+    private def iconOnly(using Frame): Prop[Boolean] =
+        if p.extraChildren.nonEmpty then false
+        else
+            val glyph = p.icon.isDefined || p.endIcon.isDefined
+            UI.reactive((glyph || p.loading.read) && p.label.read.forall(_.isEmpty))
 
     /** What the button and the link share, on either element: the class chain, the id, the host's aria, the accessible name and
       * description, the tooltip, the host's role, focus seeding and key handler, and `aria-busy` while loading.
       */
-    private def shared[E <: (UI.Ast.Element & UI.Ast.Interactive) { type Self = E }](el: E, loading: Boolean)(using Frame): E =
-        p.extraArias.foldLeft(classed(el, loading))((e, aria) => e.aria(aria))
+    private def shared[E <: (UI.Ast.Element & UI.Ast.Interactive) { type Self = E }](el: E)(using Frame): E =
+        p.extraArias.foldLeft(classed(el))((e, aria) => e.aria(aria))
             .when(p.access.id)(_.id(_))
             .when(p.role)(_.role(_))
             .when(p.focusSeed)(_.focusAuto(true).focusRestore(true))
@@ -174,51 +175,56 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Compo
                 Aria.description -> p.description
             )
             .title(p.tooltip)
-            .when(loading)(_.aria(Aria.busy -> true))
+            .when(p.loading)(_.aria(Aria.busy -> true))
     end shared
 
     /** The `<button>` with what only it carries besides its flags: the form type, its own role, the tab stop and the form. A loading
-      * button is `type="button"`, so its click submits or resets nothing, and it declines the browser's default for the click.
+      * button is `type="button"`, so its click submits or resets nothing, and it declines the browser's default for the click;
+      * both follow `loading` in place.
       */
-    private def renderButton(loading: Boolean)(using Frame): UI.Ast.Button =
+    private def renderButton(using Frame): UI.Ast.Button =
         // The form type and the button's own role come first, so the host's role (in `shared`) wins over `accessibleRole`.
-        val typed = button.jsProp("type", if loading then ButtonType.Button.token else p.buttonType.token)
+        val typed = button.buttonType(UI.reactive(if p.loading.read then ButtonType.Button.token else p.buttonType.token))
             .when(p.accessibleRole == ButtonAccessibleRole.Link)(_.role("link"))
-        shared(typed, loading).when(loading)(_.preventActivation).when(p.tabIndex)(_.tabIndex(_)).when(p.form)(_.form(_))
+        shared(typed).when(p.loading)(_.preventActivation).when(p.tabIndex)(_.tabIndex(_)).when(p.form)(_.form(_))
     end renderButton
 
     /** Button skin on a client-routed anchor (SPA `Href.Path`). The anchor keeps its native link role; form `type` and the native
       * `disabled` attribute do not apply. An inert link (disabled or aria-disabled) gets `.p-disabled`, `aria-disabled`
       * and `tabIndex(-1)`, the treatment [[Link]] gives. A natively disabled link drops its href (it navigates nowhere); an
       * aria-disabled one keeps it. A loading link keeps its href and its place in the tab order,
-      * as a loading button does. A blocked link (loading, disabled or aria-disabled) is marked `data-kyo-blocked`, so the client
-      * declines the browser's default for its plain, modified and middle clicks (it navigates nowhere), and [[answering]] runs
-      * no host action. The browser's context menu is not covered: its "open link in new tab" still follows the href.
+      * as a loading button does, and follows `loading` in place. A blocked link (loading, disabled or aria-disabled) is marked
+      * `data-kyo-blocked`, so the client declines the browser's default for its plain, modified and middle clicks (it navigates
+      * nowhere), and [[answering]] runs no host action. The browser's context menu is not covered: its "open link in new tab"
+      * still follows the href.
       */
-    private def renderAnchor(
-        h: String,
-        loading: Boolean,
-        disabled: Boolean,
-        ariaDisabled: Boolean,
-        pressed: Maybe[UI.Action]
-    )(using Frame): UI =
+    private def renderAnchor(h: String, disabled: Boolean, ariaDisabled: Boolean, pressed: Maybe[UI.Action])(using Frame): UI =
+        val el = shared(a)
         // The marker the clients read to decline a blocked link's clicks. aria-disabled is only a hint for assistive technology, so an
         // anchor a caller marks aria-disabled on its own still navigates.
-        val el = shared(a, loading).blocked(loading || disabled || ariaDisabled)
-        // An inert link leaves the tab order outright, so the host's roving tabindex has nothing left to say about it.
         val linked =
             if disabled || ariaDisabled then
-                (if disabled then el else el.href(Href.Path(h))).cssClass("p-disabled").aria(Aria.disabled -> true).tabIndex(-1)
-            else if loading then
-                el.href(Href.Path(h)).cssClass("p-uic-aria-disabled").aria(Aria.disabled -> true).tabIndex(p.tabIndex.getOrElse(0))
-            else el.when(p.tabIndex)(_.tabIndex(_)).href(Href.Path(h))
-        linked.when(pressed)((node, act) => node.onClick(act))(contentChildren(loading)*)
+                // An inert link leaves the tab order outright, so the host's roving tabindex has nothing left to say about it.
+                (if disabled then el else el.href(Href.Path(h))).blocked(true).cssClass("p-disabled").aria(Aria.disabled -> true)
+                    .tabIndex(-1)
+            else
+                el.when(p.tabIndex)(_.tabIndex(_)).href(Href.Path(h)).when(p.loading)(
+                    _.blocked(true).cssClass("p-uic-aria-disabled").aria(Aria.disabled -> true).tabIndex(p.tabIndex.getOrElse(0))
+                )
+        linked.when(pressed)((node, act) => node.onClick(act))(contentChildren*)
     end renderAnchor
 
-    private def contentChildren(loading: Boolean)(using Frame): UI.Children =
-        val leading: Maybe[UI] =
-            if loading then Present(GlyphSvg(Icons.spinner, "p-button-icon", "p-button-icon-left", "p-button-loading-icon", "p-icon-spin"))
-            else p.icon.map(GlyphSvg(_, "p-button-icon", "p-button-icon-left"))
+    private def contentChildren(using Frame): UI.Children =
+        def icon: Maybe[UI] = p.icon.map(GlyphSvg(_, "p-button-icon", "p-button-icon-left"))
+        // The spinner stands where the icon does while the button loads: the one place `loading` shapes, a region of its own
+        // inside the button. A button that never loads has its icon there, or nothing.
+        val leading: Maybe[UI] = p.loading match
+            case never: Boolean if !never => icon
+            case busy                     =>
+                Present(UI.reactive {
+                    if busy.read then GlyphSvg(Icons.spinner, "p-button-icon", "p-button-icon-left", "p-button-loading-icon", "p-icon-spin")
+                    else icon.getOrElse(UI.empty)
+                })
         // An empty label is no label: a constant "" draws no span, while a label signal keeps its span and empties it in place.
         val label: Maybe[UI] = p.label.fold(Absent: Maybe[UI]) {
             case text: String if text.isEmpty => Absent
