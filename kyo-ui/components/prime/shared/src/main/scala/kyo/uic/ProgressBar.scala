@@ -36,26 +36,25 @@ final class ProgressBar private[uic] (private[uic] val p: ProgressBar.Props)
       * `showValue`, determinate), so a value moving within 1 to 100 patches in place, and constants draw no region.
       */
     private[uic] def render(using Frame): UI =
-        val shown: Prop[Maybe[Int]] = UI.reactive {
-            p.mode.read match
-                case ProgressBarMode.Determinate   => Maybe(math.max(0, math.min(100, p.value.read)))
-                case ProgressBarMode.Indeterminate => Maybe.empty[Int]
-        }
-        val fill: Prop[Style]       = UI.reactive(shown.read.fold(Style.empty)(v => Style.width(v.pct)))
-        val text: Prop[String]      = UI.reactive(shown.read.fold("")(p.valueTemplate))
-        val labelled: Prop[Boolean] = UI.reactive(p.showValue.read && shown.read.exists(_ != 0))
-        div.cssClass("p-progressbar", "p-component")
-            .when(p.access.id)(_.id(_))
-            .cssClass.matching(p.mode) {
-                case ProgressBarMode.Determinate   => "p-progressbar-determinate"
-                case ProgressBarMode.Indeterminate => "p-progressbar-indeterminate"
-            }
-            .role("progressbar")
-            .aria(Aria.valuemin -> 0, Aria.valuemax -> 100, Aria.valuenow -> shown, Aria.label -> p.access.name)(
-                div.cssClass("p-progressbar-value").inlineStyle(fill)(
-                    UI.reactive(if labelled.read then div.cssClass("p-progressbar-label")(text) else UI.empty)
+        UI.reactive {
+            val value      = p.value.read
+            val determined = p.mode.read == ProgressBarMode.Determinate
+            val shown      = if determined then Maybe(math.max(0, math.min(100, value))) else Maybe.empty[Int]
+            div.cssClass("p-progressbar", "p-component")
+                .when(p.access.id)(_.id(_))
+                .cssClass.matching(p.mode) {
+                    case ProgressBarMode.Determinate   => "p-progressbar-determinate"
+                    case ProgressBarMode.Indeterminate => "p-progressbar-indeterminate"
+                }
+                .role("progressbar")
+                .aria(Aria.valuemin -> 0, Aria.valuemax -> 100, Aria.valuenow -> shown, Aria.label -> p.access.name)(
+                    div.cssClass("p-progressbar-value").inlineStyle(shown.fold(Style.empty)(v => Style.width(v.pct)))(
+                        if p.showValue.read && shown.exists(_ != 0) then
+                            div.cssClass("p-progressbar-label")(shown.fold("")(p.valueTemplate))
+                        else UI.empty
+                    )
                 )
-            )
+        }
     end render
 end ProgressBar
 

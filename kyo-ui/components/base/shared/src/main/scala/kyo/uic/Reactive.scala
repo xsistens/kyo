@@ -58,7 +58,9 @@ extension [A](self: Signal[A])
   * them: reads of one stable path are one read, and reads that reach one signal by different paths share it. Where every read is a
   * constant the block runs once and gives a plain value (a `Prop[T]` that is a `T`), with no subscription. Where one is a signal, a
   * block that yields a value is one mapped signal and a block that yields a UI draws in one region, compared by the values read,
-  * the way `Prop.render` does.
+  * the way `Prop.render` does. A UI-typed `if` (or one typed as a child that draws UI) nested in an element and reading something is
+  * a site instead: it draws its own region over its condition, the element around it is built once with its channels, and a block
+  * whose structure is only sites draws no region around itself.
   *
   * A read in an argument whose parameter takes `T | Signal[T]` (a [[UI.Prop]], as `aria`, `cssClass` or `disabled` do) is that
   * argument's own channel and not a read of the block: `el.aria(Aria.checked -> on.read)` patches the attribute in place and the
