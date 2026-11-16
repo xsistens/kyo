@@ -2548,12 +2548,12 @@ private[kyo] object ReactiveUI:
                         // so a nested region's or mount's interrupt is registered here. Subscribing inline
                         // rather than on a forked fiber makes a row that suspends (only one containing a
                         // Mounted node can) finish before the emission does; the paint is already out by then.
-                        // The registry always closes and awaits a row, so its finalizers run on the evicting
-                        // fiber (initInline) instead of a fiber per row, and its channel releases collect in a
-                        // sink the eviction runs in one pass.
+                        // MEASUREMENT VARIANT (never committed): the row uses `Finalizer.init(1)` instead of
+                        // `initInline`, to measure whether init's empty close (no drain fiber) can replace it.
+                        // A plain row's finalizer holds nothing; its channel releases collect in a sink the
+                        // eviction runs in one pass.
                         def rowRunner(kids: Seq[ReactiveUI]): RowScope < Async =
-                            Sync.Unsafe.defer {
-                                val fin   = Scope.Finalizer.Unsafe.initInline()
+                            Scope.Finalizer.init(1).map { fin =>
                                 val sink  = new ReleaseSink
                                 val scope = new RowScope(sink, fin)
                                 // A root, as `Scope.runUnowned`'s is: the registry owns the row, not the enclosing scope.
