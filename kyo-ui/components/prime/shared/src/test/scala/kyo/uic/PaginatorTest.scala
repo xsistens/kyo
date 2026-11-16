@@ -298,7 +298,10 @@ class PaginatorTest extends ReactiveValueContract:
         saysFixed = readOnly,
         // A lookup that finds no dropdown yet is not ready: the first tree published can be a page-link region alone.
         ready = Present(elementsWithClass(_, "p-paginator-rpp-dropdown").map(_.exists(declaresClick))),
-        after = Seq(t => clickBubbling(t)(e => e.attrs.cssClasses.contains("p-select-option") && textOf(e) == "20"))
+        after = Seq(t => clickBubbling(t)(e => e.attrs.cssClasses.contains("p-select-option") && textOf(e) == "20")),
+        // The dropdown is a Select, whose label is a block of its own: a pick that lands before its panel was painted moves
+        // only the label's text.
+        nextText = Present("20")
     ))
 
     "the page as first rendered draws an unbound rows dropdown the reader can use, before any mount runs" in {
