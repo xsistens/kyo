@@ -137,14 +137,6 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
 
     private[uic] def withPlaceholder(v: Maybe[Prop[String]]): Select[A] = new Select(p.copy(placeholder = v))
 
-    /** How an option matches the query typed into the header filter, as `(option, query) => Boolean` with the query as typed.
-      * [[Filter]] holds the ready-made ones: `filter(Filter.contains(_.name, _.email))` finds an option by either text. Unset,
-      * the match is a case-insensitive contains on the label projection. Setting it turns the header filter on unless
-      * `filterable` says otherwise. Written here, not generated: on Scala.js every value has a `filter` (`UndefOrOps`), which a
-      * call would reach instead.
-      */
-    def filter(f: (A, String) => Boolean): Select[A] = new Select(p.copy(filter = Opt.set(f)))
-
     /** Renders the same header filter over a query the APP holds. A `SignalRef` binds two way: typing writes it, external
       * writes re-filter the panel, and `onFilterQueryChange` hears every change. A plain `Signal` binds one way: the panel
       * filters by it, typing is only reported, and the field is painted back to what the owner holds. A constant holds
@@ -191,7 +183,7 @@ object Select:
       * or a signal where the field is a `Prop`, the value itself where it is an `Opt` and the function itself for a callback or an
       * optional function (`optionKey`, `itemTemplate`);
       * `open` binds and `onOpenChange` hears it, `onChange` hears `selection` and `onFilterQueryChange` the query. The options,
-      * `selection`, `filter` and `filterQuery` are written by hand, and the fields marked `@noSetter`
+      * `selection` and `filterQuery` are written by hand, `filter` by the compiler plugin, and the fields marked `@noSetter`
       * by them, by hosts and by the shared traits.
       */
     final private[uic] case class Props[A](
@@ -238,8 +230,12 @@ object Select:
           * goes. Same word and same meaning on [[MultiSelect.filterable]] and [[Listbox.filterable]].
           */
         filterable: Opt[Prop[Boolean]] = Opt.unset,
-        /** How an option matches the query, written by [[Select.filter]]. */
-        @noSetter filter: Opt[(A, String) => Boolean] = Opt.unset,
+        /** How an option matches the query typed into the header filter, as `(option, query) => Boolean` with the query as typed.
+          * [[Filter]] holds the ready-made ones: `filter(Filter.contains(_.name, _.email))` finds an option by either text. Unset,
+          * the match is a case-insensitive contains on the label projection. Setting it turns the header filter on unless
+          * `filterable` says otherwise. Written by the compiler plugin as a real member, so on Scala.js it wins over `UndefOrOps`.
+          */
+        @member filter: Opt[(A, String) => Boolean] = Opt.unset,
         /** The query typed into the header filter. Its event `onFilterQueryChange` fires with the query the reader types, and
           * with the empty query a new open starts from.
           */
