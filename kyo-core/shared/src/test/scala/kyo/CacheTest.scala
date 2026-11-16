@@ -1706,6 +1706,29 @@ class CacheTest extends kyo.test.Test[Any]:
             end for
         }
 
+        "an interrupted waiter neither fails the computing caller nor the callers after it" in {
+            // Results rather than values, so a broken entry reports what each caller actually observed.
+            val calls = new AtomicInteger(0)
+            for
+                gate      <- Latch.init(1)
+                m         <- gatedMemo(gate, calls)
+                computing <- Fiber.initUnscoped(m(1))
+                _         <- assertEventually(Sync.defer(calls.get() == 1))
+                waiting   <- Fiber.initUnscoped(m(1))
+                _         <- assertEventually(parkedOnEntry(waiting))
+                _         <- waiting.interrupt
+                interrupt <- waiting.getResult
+                _         <- gate.release
+                computed  <- computing.getResult
+                later     <- Fiber.initUnscoped(m(1)).map(_.getResult)
+            yield
+                assert(interrupt.isPanic, s"the interrupted waiter itself ends interrupted, got $interrupt")
+                assert(computed == Result.succeed(10), s"the computing caller must get its own value, got $computed")
+                assert(later == Result.succeed(10), s"a caller after the interrupt must get the value, got $later")
+                assert(calls.get() == 1, s"the produced value must be reused, computed ${calls.get()} times")
+            end for
+        }
+
         // Bounded because a waiter left parked on an entry nothing completes never ends; the bound is not the pass condition.
         "the computing caller's interrupt hands the computation to a waiter".timeout(5.seconds) in {
             // The other half of the contract: one caller's interrupt reaches no other caller. A value that was never
