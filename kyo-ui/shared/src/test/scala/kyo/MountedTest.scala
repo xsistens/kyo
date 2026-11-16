@@ -1320,6 +1320,166 @@ class MountedTest extends kyo.test.Test[Any]:
         yield assert(counts == Map("A" -> 1, "B" -> 1) && total == 2, s"runs per card: $counts, effect starts of A: $total")
     }
 
+    /** Keeps the messages logged at error level, so a test can tell whether a mount reported a failure. */
+    private class ErrorLog extends Log.Unsafe.ConsoleLogger("MountedTest", Log.Level.error):
+        // Unsafe: written by the log's dispatch, read by the test after the releases it waits for are done.
+        private val messages = AtomicRef.Unsafe.init(Chunk.empty[String])(using AllowUnsafe.embrace.danger)
+
+        override def emit(event: Log.Event)(using allow: AllowUnsafe): Unit =
+            if event.level == Log.Level.error then discard(messages.getAndUpdate(_.append(event.message)))
+
+        def logged(using Frame): Chunk[String] < Async = Log.flush.andThen(Sync.Unsafe.defer(messages.get()))
+    end ErrorLog
+
+    // A fiber that waits on a promise interrupts that promise when it is interrupted itself, so an effect awaiting a promise another
+    // mount's effect awaits too sees that mount's release as an interrupt of its own. `released` is set once the instance's release
+    // has run its effect's finalizers, which comes after the effect's outcome is handled.
+    private def awaiting(shared: Promise[Unit, Any], entered: Latch, released: AtomicBoolean, name: String)(using
+        Frame
+    ): UI < (Async & Scope) =
+        Scope.ensure(released.set(true)).andThen(entered.release).andThen(shared.get).andThen(span(s"$name:done"))
+
+    "a mount whose effect is interrupted by the release of another mount shows its error view" in {
+        for
+            shared    <- Promise.init[Unit, Any]
+            entered   <- Latch.init(2)
+            releasedA <- AtomicBoolean.init(false)
+            releasedB <- AtomicBoolean.init(false)
+            showA     <- Signal.initRef(true)
+            ui = div(
+                showA.render(s => if s then div(UI.mounted(awaiting(shared, entered, releasedA, "A")).keyed("A")) else span("gone")),
+                div(UI.mounted(awaiting(shared, entered, releasedB, "B")).keyed("B"))
+            )
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _     <- entered.await
+                    _     <- showA.set(false)
+                    _     <- assertEventually(releasedA.get)
+                    _     <- showsEventually(recorder, Seq("1", "0"), "kyo-mount-error")
+                    gone  <- releasedB.get
+                    shown <- recorder.shown(Seq("1", "0"))
+                yield assert(!gone, s"B was released though nothing removed it, it shows $shown")
+            }
+        yield succeed
+    }
+
+    private def bothReleased(a: AtomicBoolean, b: AtomicBoolean)(using Frame): Boolean < Sync =
+        a.get.map(x => b.get.map(x && _))
+
+    private def reportsNoFailure(errors: ErrorLog)(using Frame, kyo.test.AssertScope): Unit < Async =
+        errors.logged.map(logged => assert(!logged.exists(_.contains("Mounted effect")), s"a release was reported as a failure: $logged"))
+
+    "two keyed mounts that await one promise and are released in one pass report no failure" in {
+        val errors = new ErrorLog
+        Log.let(Log(errors)) {
+            for
+                shared    <- Promise.init[Unit, Any]
+                entered   <- Latch.init(2)
+                releasedA <- AtomicBoolean.init(false)
+                releasedB <- AtomicBoolean.init(false)
+                show      <- Signal.initRef(true)
+                ui = div(show.render(s =>
+                    if s then
+                        div(
+                            UI.mounted(awaiting(shared, entered, releasedA, "A")).keyed("A"),
+                            UI.mounted(awaiting(shared, entered, releasedB, "B")).keyed("B")
+                        )
+                    else span("gone")
+                ))
+                _ <- mount(ui) { (recorder, _) =>
+                    for
+                        _ <- entered.await
+                        _ <- show.set(false)
+                        _ <- showsEventually(recorder, Seq("0"), "gone")
+                        _ <- assertEventually(bothReleased(releasedA, releasedB))
+                        _ <- reportsNoFailure(errors)
+                    yield ()
+                }
+            yield succeed
+        }
+    }
+
+    "two keyless mounts that await one promise and are released in one re-render leave no error view in the snapshot" in {
+        val errors = new ErrorLog
+        Log.let(Log(errors)) {
+            for
+                shared    <- Promise.init[Unit, Any]
+                later     <- Promise.init[Unit, Any]
+                entered   <- Latch.init(2)
+                releasedA <- AtomicBoolean.init(false)
+                releasedB <- AtomicBoolean.init(false)
+                tick      <- Signal.initRef(0)
+                // The instances after the re-render wait on a promise of their own, so the slots keep showing the KeepLatest snapshots.
+                effect = (n: Int, name: String, released: AtomicBoolean) =>
+                    if n == 0 then awaiting(shared, entered, released, name) else later.get.andThen(span(s"$name:later"))
+                ui = div(tick.render(n =>
+                    div(span(s"tick:$n"), UI.mounted(effect(n, "A", releasedA)), UI.mounted(effect(n, "B", releasedB)))
+                ))
+                _ <- mount(ui) { (recorder, _) =>
+                    for
+                        _ <- entered.await
+                        _ <- tick.set(1)
+                        _ <- showsEventually(recorder, Seq("0", "0"), "tick:1")
+                        _ <- assertEventually(bothReleased(releasedA, releasedB))
+                        a <- recorder.shown(Seq("0", "1"))
+                        b <- recorder.shown(Seq("0", "2"))
+                        _ <- reportsNoFailure(errors)
+                    yield assert(
+                        !a.contains("kyo-mount-error") && !b.contains("kyo-mount-error"),
+                        s"a released instance's snapshot shows an error view: A shows $a, B shows $b"
+                    )
+                }
+            yield succeed
+        }
+    }
+
+    "a keyless and a keyed mount that await one promise and are released in one pass report no failure" in {
+        val errors = new ErrorLog
+        Log.let(Log(errors)) {
+            for
+                shared    <- Promise.init[Unit, Any]
+                entered   <- Latch.init(2)
+                releasedA <- AtomicBoolean.init(false)
+                releasedB <- AtomicBoolean.init(false)
+                show      <- Signal.initRef(true)
+                ui = div(show.render(s =>
+                    if s then
+                        div(
+                            UI.mounted(awaiting(shared, entered, releasedA, "A")),
+                            UI.mounted(awaiting(shared, entered, releasedB, "B")).keyed("B")
+                        )
+                    else span("gone")
+                ))
+                _ <- mount(ui) { (recorder, _) =>
+                    for
+                        _ <- entered.await
+                        _ <- show.set(false)
+                        _ <- showsEventually(recorder, Seq("0"), "gone")
+                        _ <- assertEventually(bothReleased(releasedA, releasedB))
+                        _ <- reportsNoFailure(errors)
+                    yield ()
+                }
+            yield succeed
+        }
+    }
+
+    "an instance released while its effect is pending does not end failed" in {
+        val errors = new ErrorLog
+        Log.let(Log(errors)) {
+            for
+                entered <- Latch.init(1)
+                never   <- Promise.init[Unit, Any]
+                node = UI.mounted(entered.release.andThen(never.get).andThen(span("never")))
+                (table, _) <- ReactiveUI.MountTable.root(Seq.empty)
+                instance   <- ReactiveUI.MountInstance.start(MountedSpec(node, Seq("0"), Nil), Absent, Nil, table)
+                _          <- entered.await
+                _          <- instance.teardown
+                state      <- instance.cell.current
+                _          <- reportsNoFailure(errors)
+            yield assert(!state.settled, s"the released instance ended as $state")
+        }
+    }
+
     private def draftBox(editing: Boolean, draft: SignalRef[String], b: Signal[String], runs: AtomicInt)(using Frame): UI =
         div(
             if editing then input.value(draft) else span("read only"),
