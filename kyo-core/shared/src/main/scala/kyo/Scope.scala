@@ -4,6 +4,7 @@ import kyo.Result.Error
 import kyo.Result.Panic
 import kyo.kernel.ContextEffect
 import kyo.scheduler.IOTask
+import scala.annotation.tailrec
 
 /** A structured effect for safe acquisition and finalization of resources.
   *
@@ -282,33 +283,29 @@ object Scope:
 
         object Unsafe:
             /** @param spawn
-              *   Runs the drain on a fiber of its own and returns at once. The drain suspends (it awaits the queue's
-              *   handover and the finalizers), while `close` is a single `Sync` step that a bracket release evaluates
-              *   synchronously; a `spawn` that evaluates the drain in place hangs or throws there.
+              *   Runs the drain on a fiber of its own and returns at once. The drain suspends (it awaits the
+              *   finalizers), while `close` is a single `Sync` step that a bracket release evaluates synchronously; a
+              *   `spawn` that evaluates the drain in place hangs or throws there.
               */
             def init(parallelism: Int)(spawn: Unit < Async => Unit)(using frame: Frame, u: AllowUnsafe): Finalizer =
                 new Finalizer:
-                    val queue = Queue.Unbounded.Unsafe.init[Maybe[Error[Any]] => Any < (Async & Abort[Throwable])](
-                        Access.MultiProducerSingleConsumer
-                    )
-                    val children = Queue.Unbounded.Unsafe.init[Finalizer](Access.MultiProducerSingleConsumer)
+                    type Task = Maybe[Error[Any]] => Any < (Async & Abort[Throwable])
+
+                    // Registered releases and nested runs, newest first; `null` once a close has taken them. A registration
+                    // is one compare-and-set against the same reference the close swaps out, so it lands either before the
+                    // close, and is drained, or after it, and is refused: there is no registration still in flight.
+                    private val tasks    = AtomicRef.Unsafe.init[List[Task]](Nil)
+                    private val children = AtomicRef.Unsafe.init[List[Finalizer]](Nil)
 
                     // Uninterruptible: `close` `become`s this promise with the drain's fiber, so an interrupt at a
                     // caller's `await` would travel into the drain and stop the finalizers halfway (#1928).
-                    val promise = Promise.Unsafe.initUninterruptible[Unit, Any]().safe
+                    private val promise = Promise.Unsafe.initUninterruptible[Unit, Any]().safe
 
-                    // Set by `close`, so `awaitIfClosed` knows a close was requested even by a close that lost the claim.
-                    val closing = AtomicBoolean.Unsafe.init(false)
-
-                    def ensure(v: Maybe[Error[Any]] => Any < (Async & Abort[Throwable]))(using Frame): Unit < Sync =
+                    def ensure(v: Task)(using Frame): Unit < Sync =
                         Sync.Unsafe.defer(ensureUnsafe(v))
 
-                    private[kyo] def ensureUnsafe(v: Maybe[Error[Any]] => Any < (Async & Abort[Throwable]))(
-                        using
-                        frame: Frame,
-                        allow: AllowUnsafe
-                    ): Unit =
-                        if !queue.offer(v).contains(true) then
+                    private[kyo] def ensureUnsafe(v: Task)(using frame: Frame, allow: AllowUnsafe): Unit =
+                        if !prepend(tasks, v) then
                             // The scope already closed, so no later drain runs this release: it runs here, detached,
                             // or the resource leaks. The throw tells the caller its resource is unscoped.
                             Log.live.unsafe.warn(
@@ -326,8 +323,16 @@ object Scope:
                     private[kyo] def addChild(child: Finalizer)(using Frame, AllowUnsafe): Unit =
                         // A child that arrives after the close missed the drain that closes children, so it is
                         // closed here: a nested run never outlives a parent that has already closed.
-                        if !children.offer(child).contains(true) then
+                        if !prepend(children, child) then
                             Sync.Unsafe.evalOrThrow(child.close(Absent))
+
+                    /** Adds `v` in front unless a close has taken the list; false when it has. */
+                    @tailrec private def prepend[A](ref: AtomicRef.Unsafe[List[A]], v: A)(using AllowUnsafe): Boolean =
+                        val current = ref.get()
+                        if current eq null then false
+                        else if ref.compareAndSet(current, v :: current) then true
+                        else prepend(ref, v)
+                    end prepend
 
                     private[kyo] val forked: Finalizer = new Forked(this)
 
@@ -338,22 +343,20 @@ object Scope:
                             "This finalizer is already closed. This may happen if a background fiber escapes the scope of a 'Scope.run' call."
                         )
 
-                    /** Claims the backlog and the nested runs in this close's own step, so a registration that comes after the
-                      * close is refused rather than depending on whether a drain has started. A scope that holds nothing
-                      * completes here; otherwise the drain of what was claimed is spawned in the same step. Claiming and
-                      * spawning are one synchronous step: there is no continuation between them for an interrupt to abandon
-                      * with the backlog already claimed, which is how finalizers were lost before (#1928). The drain awaits
-                      * a claim that has not settled, because an `ensure` that began before this close may still be committing
-                      * its task. A close that loses the claim to an earlier one does nothing; that earlier close owns the drain.
+                    /** Takes the releases and the nested runs in this close's own step, so a registration that comes after
+                      * the close is refused rather than depending on whether a drain has started. A scope that holds nothing
+                      * completes here; otherwise the drain of what was taken is spawned in the same step. Taking and spawning
+                      * are one synchronous step: there is no continuation between them for an interrupt to abandon with the
+                      * releases already taken, which is how finalizers were lost before (#1928). A close that finds them
+                      * taken does nothing; the close that took them owns the drain.
                       */
                     def close(ex: Maybe[Error[Any]])(using Frame): Unit < Sync =
                         Sync.Unsafe.defer {
-                            closing.set(true)
-                            val tasks = queue.close()
-                            if !settledEmpty(tasks, owner = false) then
-                                val nested = children.close()
-                                if settledEmpty(tasks, owner = true) && settledEmpty(nested, owner = true) then
-                                    promise.unsafe.completeUnitDiscard()
+                            val own = tasks.getAndSet(null)
+                            if own ne null then
+                                // Only the close that took the releases reaches here, so the nested runs are taken with them.
+                                val nested = children.getAndSet(null)
+                                if own.isEmpty && nested.isEmpty then promise.unsafe.completeUnitDiscard()
                                 else
                                     // Open: by decision there is no backpressure on abnormal exit yet. This spawns the drain of the
                                     // scope's async finalizers and returns, so a joiner can observe an interrupted fiber's result while a
@@ -361,47 +364,31 @@ object Scope:
                                     // consequence does not work around it: it adds a pendingUntilFixed leaf whose reason starts with this
                                     // marker and whose body proves the cause is this drain (a finalizer the leaf holds on a latch, then
                                     // the early result), so the leaf turns red the day the wait lands.
-                                    spawn(drain(ex, tasks, nested))
+                                    spawn(drain(ex, own, nested))
                                 end if
                             end if
                         }
 
-                    /** Whether `claim` has settled with nothing to run: as the owner, an empty backlog; otherwise, a lost claim. */
-                    private def settledEmpty[A](claim: Fiber.Unsafe[Maybe[Seq[A]], Any], owner: Boolean)(using Frame): Boolean =
-                        claim.poll() match
-                            case Present(result) =>
-                                result.value.exists(_.eval match
-                                    case Present(claimed) => owner && claimed.isEmpty
-                                    case Absent           => !owner)
-                            case Absent => false
-
-                    private def drain(
-                        ex: Maybe[Error[Any]],
-                        tasks: Fiber.Unsafe[Maybe[Seq[Maybe[Error[Any]] => Any < (Async & Abort[Throwable])]], Any],
-                        nested: Fiber.Unsafe[Maybe[Seq[Finalizer]], Any]
-                    )(using Frame): Unit < Async =
+                    /** Closes the nested runs, in registration order, then runs the releases newest first. */
+                    private def drain(ex: Maybe[Error[Any]], own: List[Task], nested: List[Finalizer])(using Frame): Unit < Async =
                         val closeNested =
-                            nested.safe.get.map {
-                                case Present(cs) =>
-                                    Async.foreachDiscard(cs) { child =>
-                                        child.close(ex).andThen(child.await)
-                                    }
-                                case Absent => Kyo.unit
-                            }
-                        val own =
-                            tasks.safe.get.map {
-                                case Present(ts) if ts.nonEmpty =>
-                                    Async.foreachDiscard(ts.reverse, parallelism) { task =>
-                                        Abort.run[Throwable](task(ex))
-                                            .map(_.foldError(
-                                                _ => (),
-                                                ex => Log.error("Scope finalizer failed", ex.exception)
-                                            ))
-                                    }
-                                case _ => Kyo.unit
-                            }
+                            if nested.isEmpty then Kyo.unit
+                            else
+                                Async.foreachDiscard(nested.reverse) { child =>
+                                    child.close(ex).andThen(child.await)
+                                }
+                        val releases =
+                            if own.isEmpty then Kyo.unit
+                            else
+                                Async.foreachDiscard(own, parallelism) { task =>
+                                    Abort.run[Throwable](task(ex))
+                                        .map(_.foldError(
+                                            _ => (),
+                                            ex => Log.error("Scope finalizer failed", ex.exception)
+                                        ))
+                                }
                         // Completed whatever the drain met, so a waiter is never left at a scope that has finished releasing.
-                        Abort.run[Throwable](closeNested.andThen(own))
+                        Abort.run[Throwable](closeNested.andThen(releases))
                             .map(_.foldError(_ => (), ex => Log.error("Scope close failed", ex.exception)))
                             .andThen(promise.completeUnitDiscard)
                     end drain
@@ -409,7 +396,7 @@ object Scope:
                     def await(using Frame): Unit < Async = promise.get
 
                     private[kyo] def awaitIfClosed(using Frame): Unit < Async =
-                        Sync.Unsafe.defer(if closing.get() then promise.get else Kyo.unit)
+                        Sync.Unsafe.defer(if tasks.get() eq null then promise.get else Kyo.unit)
             end init
         end Unsafe
 

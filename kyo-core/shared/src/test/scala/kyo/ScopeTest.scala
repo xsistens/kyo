@@ -1167,6 +1167,41 @@ class ScopeTest extends kyo.test.Test[Any]:
             }
         }
 
+        // Whichever close wins the claim takes the backlog and the nested runs together, so the nested release runs
+        // once, and neither close's await returns before it has finished. Rounds rather than one shot: the race is narrow.
+        "two closes racing release a nested run once, and both awaits wait for it" in {
+            import AllowUnsafe.embrace.danger
+            Kyo.foreach(Chunk.from(0 until 50)) { _ =>
+                val spawns = AtomicInt.Unsafe.init(0)
+                val parent = counted(spawns)
+                val child  = counted(spawns)
+                for
+                    released <- AtomicInt.init(0)
+                    gate     <- Latch.init(1)
+                    _        <- parent.ensure(_ => ())
+                    _        <- child.ensure(_ => gate.await.andThen(released.incrementAndGet))
+                    _        <- Sync.Unsafe.defer(parent.addChild(child))
+                    start    <- Latch.init(1)
+                    closers  <- Kyo.fill(2)(Fiber.initUnscoped(start.await.andThen(parent.close(Absent)).andThen(parent.await)))
+                    _        <- start.release
+                    // Both drains have started (the parent's, and the child's that the parent's close spawned), and the
+                    // child's release is held on the gate: no await may have returned yet.
+                    _      <- assertEventually(Sync.Unsafe.defer(spawns.get() == 2))
+                    before <- released.get
+                    early  <- Kyo.foreach(closers)(_.done)
+                    _      <- gate.release
+                    _      <- Kyo.foreachDiscard(closers)(_.get)
+                    after  <- released.get
+                yield (before, early.count(identity), after, spawns.get())
+                end for
+            }.map { rounds =>
+                assert(
+                    rounds.forall(_ == (0, 0, 1, 2)),
+                    s"(released before the gate, closers done early, released after, drains) per round: $rounds"
+                )
+            }
+        }
+
         // A late nested run would otherwise be dropped: the parent's drain has already taken its children.
         "a nested run added after the close is closed at once" in {
             import AllowUnsafe.embrace.danger
