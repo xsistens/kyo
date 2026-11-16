@@ -1,6 +1,8 @@
 package kyo.uic
 
 import java.nio.file.Files
+import java.nio.file.FileSystems
+import java.nio.file.Path
 import java.nio.file.Paths
 import scala.jdk.CollectionConverters.*
 
@@ -24,15 +26,23 @@ class NodeTest extends UicTest:
 
     /** Public, concrete, top-level `kyo.uic` classes implementing [[Node]], by simple name. */
     private def componentNames: List[String] =
-        val marker    = classOf[Button]
-        val classesIn = Paths.get(marker.getProtectionDomain.getCodeSource.getLocation.toURI).resolve("kyo").resolve("uic")
-        val loader    = marker.getClassLoader
+        val marker   = classOf[Button]
+        val location = Paths.get(marker.getProtectionDomain.getCodeSource.getLocation.toURI)
+        val loader   = marker.getClassLoader
         // `Files.list` opens a descriptor on the directory; the suite's leak check fails
         // the run if it is not closed, so the stream is drained inside `use`.
-        val stream = Files.list(classesIn)
-        val files  =
+        def listed(root: Path): List[Path] =
+            val stream = Files.list(root.resolve("kyo").resolve("uic"))
             try stream.iterator.asScala.toList
             finally stream.close()
+        end listed
+        // A build hands the module's classes over as a directory or as a jar (sbt 2 does the latter), and the surface is the same.
+        val files =
+            if Files.isDirectory(location) then listed(location)
+            else
+                val jar = FileSystems.newFileSystem(location)
+                try listed(jar.getPath("/"))
+                finally jar.close()
         files
             .map(_.getFileName.toString)
             .filter(_.endsWith(".class"))
