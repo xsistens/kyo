@@ -2068,39 +2068,60 @@ class SignalTest extends kyo.test.Test[Any]:
         }
 
         // A write that lands after the hold saw a new value, while the pass's scope closes, can take the value back to the one the
-        // pass delivered: the loop then reads that value again and runs no pass. The stamp must answer for that read, or the
-        // observation looks behind for good.
-        def revertsWhileClosing(observed: SignalRef[Int] => Signal[Int])(using Frame, kyo.test.AssertScope) =
+        // pass delivered. That pass's scope is closed by then and what its setup acquired is released, so the value gets a pass of its
+        // own: an observation that only rested there would leave the current value with nothing running for it. The stamp answers
+        // for that pass, where the signal has a suspension-free read to answer from (`tellsWrites`); one without counts as behind.
+        def revertsWhileClosing(observed: SignalRef[Int] => Signal[Int], tellsWrites: Boolean = true)(using
+            Frame,
+            kyo.test.AssertScope
+        ) =
             for
-                ref      <- Signal.initRef(0)
-                armed    <- AtomicBoolean.init(false)
-                first    <- Latch.init(1)
-                reverted <- Latch.init(1)
-                rested   <- Latch.init(1)
-                stamp = restingStamp(rested)
+                ref    <- Signal.initRef(0)
+                armed  <- AtomicBoolean.init(false)
+                live   <- AtomicInt.init(0)
+                events <- Channel.init[String](8)
+                // Unsafe: a rest is reported on the observation's fiber, outside any effect context.
+                stamp = new Signal.ReadStamp(() => discard(events.unsafe.offer("rest")(using AllowUnsafe.embrace.danger)))
                 fiber <- Fiber.init(observed(ref).observeStamped(stamp) { v =>
-                    first.release.andThen(Scope.ensure(armed.compareAndSet(true, false).map(go =>
-                        if go && v == 0 then ref.set(0).andThen(reverted.release) else Kyo.unit
-                    )))
+                    live.incrementAndGet
+                        .andThen(Scope.ensure(live.decrementAndGet.andThen(armed.compareAndSet(true, false)).map(go =>
+                            if go && v == 0 then ref.set(0) else Kyo.unit
+                        )))
+                        .andThen(events.put(s"pass $v"))
                 })
-                _      <- first.await
+                first  <- events.take
                 _      <- armed.set(true)
                 _      <- ref.set(1)
-                _      <- reverted.await
-                _      <- rested.await
+                second <- events.take
+                alive  <- live.get
                 behind <- behindOf(stamp)
                 passes <- Sync.defer(stamp.passes)
                 _      <- fiber.interrupt
             yield
-                assert(!behind, "a value that came back to the delivered one left the observer behind")
-                assert(passes == 1, s"a value that came back to the delivered one ran a pass: $passes passes")
+                assert(
+                    (first, second) == ("pass 0", "pass 0"),
+                    s"a value that came back after its pass closed was not delivered again: $first, then $second"
+                )
+                assert(alive == 1, s"the current value has $alive scopes open")
+                assert(behind == !tellsWrites, s"after the pass for the value that came back the observer says behind=$behind")
+                assert(passes == 2, s"the stamp counted $passes passes")
 
-        "a SignalRef observation whose value comes back while its pass closes is current again" in {
+        "a SignalRef observation whose value comes back while its pass closes runs a pass for it" in {
             revertsWhileClosing(ref => ref)
         }
 
-        "an exact combinator observation whose value comes back while its pass closes is current again" in {
+        "an exact combinator observation whose value comes back while its pass closes runs a pass for it" in {
             Signal.initRef(0).map(other => revertsWhileClosing(ref => ref.combineLatest(other).map(_._1)))
+        }
+
+        // The repairing loop can miss the wakeup of the write and then waits for its repair timer, so the clock is driven here.
+        "an observation through the repairing loop whose value comes back while its pass closes runs a pass for it" in {
+            Clock.withTimeControl { control =>
+                Scope.run {
+                    Fiber.init(Loop.forever(control.advance(ri, 1.millis)))
+                        .andThen(revertsWhileClosing(ref => rawView(ref), tellsWrites = false))
+                }
+            }
         }
 
         // An observation through the repairing loop of a signal without a suspension-free read cannot tell whether a write landed: it

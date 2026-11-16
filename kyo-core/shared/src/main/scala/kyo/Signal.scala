@@ -100,6 +100,8 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       * interrupt, the current value's `Scope` closes too. This is switch-with-resources: the inner lifetime is bounded by the outer value,
       * structurally, with no manual cleanup. A value that forks nothing just opens and closes an empty scope. Because each value's `Scope` is
       * closed before the next `f` runs, at most one value's children are alive at a time and no waiter or fiber accumulates across changes.
+      * Once a value's `Scope` has closed, the value read next gets an `f` of its own, so the current value always has one open: where a
+      * write and its revert land while the `Scope` closes, `f` runs again for a value equal to the one before.
       *
       * It is designed never to permanently miss the latest value, even under a write that races the observation, and never to tear a
       * still-current value's `Scope` down on an idle timer. Delivery comes in two tiers. A signal whose value comes from [[SignalRef]]s
@@ -281,37 +283,40 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                             recheck(b)
                     end match
                 })
-            def repairing(last: Maybe[B]): Unit < (S & Async) =
+            // `seen` is the caller's baseline until the first pass and `Absent` after every pass: a pass ends with its scope closed,
+            // so the value read next gets a pass of its own even when it is the one that pass delivered (a write and its revert
+            // while the scope closed). Resting there would leave the current value with nothing its setup acquired.
+            def repairing(seen: Maybe[B]): Unit < (S & Async) =
                 currentWith { cur =>
                     val b = image(cur)
-                    if last.exists(_ == b) then
-                        // The value came back to the one delivered last: current again without a pass.
+                    if seen.exists(_ == b) then
+                        // Still the image the caller processed: current without a pass.
                         if stamp.nonEmpty then stamp.get.restRepairing(repairingRead(b))
-                        await.andThen(loop(last))
+                        await.andThen(loop(seen))
                     else
                         if stamp.nonEmpty then stamp.get.passRepairing(repairingRead(b))
-                        Scope.run(g(b).andThen(holdUntilChanged(b))).andThen(loop(Present(b)))
+                        Scope.run(g(b).andThen(holdUntilChanged(b))).andThen(loop(Absent))
                     end if
                 }
-            def loop(last: Maybe[B]): Unit < (S & Async) =
-                if !exact then repairing(last)
+            def loop(seen: Maybe[B]): Unit < (S & Async) =
+                if !exact then repairing(seen)
                 else
                     Sync.Unsafe.defer {
                         val read = new Signal.ExactRead(locals)
                         readExact(read, wakesOnAnyInput) match
                             case Present(cur) =>
                                 val b = image(cur)
-                                if last.exists(_ == b) then
-                                    // The value came back to the one delivered last: current again, with this read, without a pass.
+                                if seen.exists(_ == b) then
+                                    // Still the image the caller processed: current, with this read, without a pass.
                                     if stamp.nonEmpty then stamp.get.restExact(read)
-                                    read.awaitChange.andThen(loop(last))
+                                    read.awaitChange.andThen(loop(seen))
                                 else
                                     if stamp.nonEmpty then stamp.get.passExact(read)
-                                    Scope.run(g(b).andThen(holdExact(read, b))).andThen(loop(Present(b)))
+                                    Scope.run(g(b).andThen(holdExact(read, b))).andThen(loop(Absent))
                                 end if
                             case Absent =>
                                 exact = false
-                                repairing(last)
+                                repairing(seen)
                         end match
                     }
             loop(baseline)
@@ -1444,17 +1449,19 @@ object Signal:
                         else (): Unit < Async
                         end if
                     })
-                def loop(last: Maybe[B]): Unit < (S & Async) =
+                // `seen` is the caller's baseline until the first pass and `Absent` after every pass, as in the default loop: the
+                // value read after a pass's scope closed gets a pass of its own, even when a revert made it the one just delivered.
+                def loop(seen: Maybe[B]): Unit < (S & Async) =
                     Sync.Unsafe.defer {
                         val v0 = root.version()
                         val b  = image(root.get())
-                        if last.exists(_ == b) then
-                            // The value came back to the one delivered last: current again, at this version, without a pass.
+                        if seen.exists(_ == b) then
+                            // Still the image the caller processed: current, at this version, without a pass.
                             if stamp.nonEmpty then stamp.get.restRef(root, v0)
-                            nextSince(v0).andThen(loop(last))
+                            nextSince(v0).andThen(loop(seen))
                         else
                             if stamp.nonEmpty then stamp.get.passRef(root, v0)
-                            Scope.run(g(b).andThen(hold(v0, b))).andThen(loop(Present(b)))
+                            Scope.run(g(b).andThen(hold(v0, b))).andThen(loop(Absent))
                         end if
                     }
                 loop(baseline)
