@@ -820,10 +820,19 @@ class SelectTest extends ReactiveValueContract:
     // A pick writes two refs (the selection, then the panel), read by two regions, one inside the other. The inner one must not
     // paint the older state over the outer one's close, and the closed field must leave the panel's state unread.
     "a pick from the open panel ends on the pick with the panel gone, and nothing paints the panel after it closes" in {
-        val log                                     = new kyo.internal.RecordingExchange
-        def paints: List[UI] < Sync                 = Sync.defer(UicTest.publishedIn(log))
-        def has(t: UI, cls: String): Boolean < Sync =
-            UicTest.walkingLive.let(true)(elementsWithClass(t, cls)).map(_.nonEmpty)
+        val log = new kyo.internal.RecordingExchange
+        // Every paint, oldest first, each as the region that sent it drew it: a region inside it is not entered, since it paints
+        // itself.
+        def paints: List[UI] < Sync           = Sync.defer(UicTest.publishedIn(log).reverse)
+        def drew(u: UI, cls: String): Boolean = u match
+            case e: UI.Ast.Element       => e.attrs.cssClasses.contains(cls) || e.children.exists(drew(_, cls))
+            case f: UI.Ast.Fragment[?]   => f.children.exists(drew(_, cls))
+            case k: UI.Ast.KeyedChild[?] => drew(k.child, cls)
+            case _                       => false
+        // The root's first paint from `from` on that closes the panel, or -1 while none has come: every paint of rows after it
+        // paints over the close, whatever the root sends again later.
+        def closed(ps: List[UI], from: Int): Int =
+            ps.indexWhere(u => drew(u, "p-select") && !drew(u, "p-select-overlay"), from)
         for
             open  <- Signal.initRef(true)
             hi    <- Signal.initRef(0)
@@ -838,12 +847,10 @@ class SelectTest extends ReactiveValueContract:
                         _      <- pickRow(fruit(2))(ui)
                         _      <- waitFor(open.get.map(!_))
                         _      <- waitFor(hi.waiters.map(_ == 0))
-                        _      <- waitFor(open.waiters.map(_ > 0))
-                        after  <- paints.map(ps => ps.take(ps.size - before))
-                        // Newest first: the root's close, and whatever came after it.
-                        closing <- Kyo.foreach(after)(t => has(t, "p-select").map(r => (t, r)))
-                        upTo = closing.takeWhile(!_._2).map(_._1) ++ closing.find(_._2).map(_._1).toList
-                        stale <- Kyo.foreach(upTo)(has(_, "p-select-option")).map(_.count(identity))
+                        _      <- waitFor(paints.map(closed(_, before) >= 0))
+                        ps     <- paints
+                        // A paint of rows after the root closed the panel is a region painting older state over the close.
+                        stale = ps.drop(closed(ps, before) + 1).count(drew(_, "p-select-option"))
                         held  <- value.get
                         label <- UicTest.walkingLive.let(true)(elementWithClass(ui, "p-select-label")).map(textOf)
                     yield (held.map(_.name), label, stale)
