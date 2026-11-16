@@ -4336,6 +4336,17 @@ lazy val `kyo-ui-components-base` =
         // No ModuleKind here: the Wasm backend requires ESModule, which WasmPlatform pins.
         .wasmSettings(`wasm-settings`)
 
+// Writes the setters of `@member` props fields as real members of their component (kyo.uic.setters.SettersPlugin).
+// A JVM compiler plugin, so it builds once for every platform of the components that load it.
+lazy val `kyo-ui-setters-plugin` =
+    project
+        .in(file("kyo-ui/components/setters-plugin"))
+        .settings(
+            scalaVersion := scala39Version,
+            publish / skip := true,
+            libraryDependencies += "org.scala-lang" %% "scala3-compiler" % scala39Version % Provided
+        )
+
 // The component library for kyo-ui: ready-made controls (inputs, overlays, menus, tables) built on
 // kyo-ui-components-base, plus the generated design tokens, icon set, and component CSS. Its own
 // build of Prime's anatomy (the `.p-*` markup Prime's stylesheets target), not PrimeTek's code.
@@ -4356,6 +4367,9 @@ lazy val `kyo-ui-components-prime` =
         .dependsOn(`kyo-ui-components-base`, `kyo-direct`)
         .withKyoTest
         .settings(`kyo-settings`)
+        .settings(
+            Compile / scalacOptions += "-Xplugin:" + (`kyo-ui-setters-plugin` / Compile / packageBin).value.getAbsolutePath
+        )
         .jvmSettings(mimaCheck(false))
         // `openssl-native-settings` as in kyo-ui: kyo-net's bundled TLS shim compiles into THIS binary,
         // and nativeConfig does not cross a project dependency, so without the system OpenSSL flags the
