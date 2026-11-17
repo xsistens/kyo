@@ -6,7 +6,7 @@
 # is the only thing that stands the backend up and points the client suites at it.
 #
 # Both sbt runs go through scripts/sbt.sh, which takes the driver heap from
-# scripts/sbt-heap-lib.sh: `compile` for the classpath export, which compiles the server
+# scripts/sbt-heap-lib.sh: `compile` to resolve the server's classpath, which compiles it
 # and everything it depends on, `link` for the client suites, whose heaviest step is
 # linking the Native and Wasm test binaries in one driver.
 #
@@ -19,9 +19,20 @@ PLATFORMS=("$@")
 [ ${#PLATFORMS[@]} -eq 0 ] && PLATFORMS=(JVM JS Native Wasm)
 
 # The caliban server is JVM-only, so it is launched as a plain java process (decoupled
-# from the sbt instances that run the client suites) via its exported runtime classpath.
+# from the sbt instances that run the client suites) via its runtime classpath. sbt 2's
+# `export` prints no classpath and its `print` shows entries as `${OUT}`-style references,
+# so a throwaway task on the server's project maps them to paths through the build's file
+# converter and prints them joined. It is scoped to that one project: a key in ThisBuild
+# prints once for every project the root aggregates.
 echo ">> resolving itserver classpath"
-CP=$(scripts/sbt.sh compile -batch "export kyo-apollo-itserverJVM/Runtime/fullClasspath" | grep -vE '^\[|^>|Total time|^$' | tail -1)
+SERVER=kyo-apollo-itserverJVM
+CP_TASK='LocalProject("'$SERVER'") / TaskKey[String]("apolloItClasspath") := {
+    val conv = fileConverter.value
+    (LocalProject("'$SERVER'") / Runtime / fullClasspath).value
+        .map(entry => conv.toPath(entry.data).toString)
+        .mkString(java.io.File.pathSeparator)
+}'
+CP=$(scripts/sbt.sh compile -batch "set $CP_TASK" "print $SERVER/apolloItClasspath" | grep -vE '^\[|^>|Total time|^$' | tail -1 | sed -E 's/^[[:space:]]+//')
 [ -z "$CP" ] && { echo "failed to resolve classpath"; exit 1; }
 
 LOG=$(mktemp)
