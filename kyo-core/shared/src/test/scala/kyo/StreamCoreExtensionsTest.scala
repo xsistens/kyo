@@ -1563,6 +1563,142 @@ class StreamCoreExtensionsTest extends kyo.test.Test[Any]:
             releasesEveryElementWhenTheConsumerStops(f => fourChunks.mapChunkParUnordered(8)(Kyo.foreach(_)(f)).take(1).run)
         }
 
+        // A consumer interrupted while the operator runs leaves no element fiber parked. The interrupt races the hand-off
+        // of fibers to the consumer and the spawning of new ones, so one run rarely lands in a window and each scenario
+        // repeats under contention. A fiber that was not interrupted stays parked on the gate and never counts as released,
+        // which the leaf timeout reports.
+        "interrupting the consumer stops every element fiber" - {
+            type Operator = (Stream[Int, Any], Int => Int < Async) => Any < Async
+
+            val operators = Seq[(String, Operator)](
+                ("mapPar", (s, f) => s.mapPar(64)(f).run),
+                ("mapParUnordered", (s, f) => s.mapParUnordered(64)(f).run),
+                ("mapChunkPar", (s, f) => s.mapChunkPar(64)(c => Kyo.foreach(c)(f)).run),
+                ("mapChunkParUnordered", (s, f) => s.mapChunkParUnordered(64)(c => Kyo.foreach(c)(f)).run),
+                ("mapParUnordered with an unbounded buffer", (s, f) => s.mapParUnordered(64, Int.MaxValue)(f).run)
+            )
+
+            def source(elements: Int): Stream[Int, Any] =
+                Stream.init(Chunk.from(1 to elements)).rechunk(1)
+
+            // Elements for which free(v) holds finish at once, and the rest park until the leaf is done with them.
+            def stopsEveryFiber(elements: Int, waitFor: Int, free: Int => Boolean)(operator: Operator)(using
+                kyo.test.AssertScope,
+                Frame
+            ) =
+                Async.foreachDiscard(Chunk.from(1 to 3000), 32) { _ =>
+                    for
+                        started  <- Latch.init(waitFor)
+                        acquired <- AtomicInt.init(0)
+                        released <- AtomicInt.init(0)
+                        gate     <- Latch.init(1)
+                        consumer <- Fiber.initUnscoped {
+                            operator(
+                                source(elements),
+                                v =>
+                                    if free(v) then started.release.andThen(v)
+                                    else
+                                        // The bracket pairs the counts: no interrupt lands between acquiring and owing the release.
+                                        Sync.acquireReleaseWith(acquired.incrementAndGet)((_, _) => released.incrementAndGet) { _ =>
+                                            started.release.andThen(gate.await).andThen(v)
+                                        }
+                            )
+                        }
+                        _ <- started.await
+                        _ <- consumer.interrupt
+                        _ <- consumer.getResult
+                        _ <- Sync.ensure(gate.release) {
+                            assertEventually(acquired.get.map(a => released.get.map(_ == a)))
+                        }
+                    yield ()
+                }.andThen(succeed)
+
+            operators.foreach { (name, operator) =>
+                name - {
+                    "with every element fiber parked" in {
+                        stopsEveryFiber(4, 4, _ => false)(operator)
+                    }
+
+                    // New fibers keep being spawned as the interrupt lands.
+                    "with spawns racing the interrupt" in {
+                        stopsEveryFiber(32, 1, _ => false)(operator)
+                    }
+
+                    // Joins finish as the interrupt lands, with parked fibers behind them.
+                    "with earlier element fibers finishing" in {
+                        stopsEveryFiber(8, 8, _ <= 4)(operator)
+                    }
+                }
+            }
+        }
+
+        // A source ending on Closed ends like a source that runs out: the stream succeeds with every element the source emitted
+        // before, and stopping the element fibers stays the consumer's exit. How far the background has got when the Closed
+        // arrives depends on the run, so each scenario repeats.
+        "a source failing with Closed" - {
+            type Operator = (Stream[Int, Abort[Closed] & Async], Int => Int < Async) => Chunk[Int] < (Abort[Closed] & Async)
+
+            // The flag says whether the operator keeps the source's order; the result of one that does not is compared sorted.
+            val operators = Seq[(String, Operator, Boolean)](
+                ("mapPar", (s, f) => s.mapPar(8)(f).run, true),
+                ("mapParUnordered", (s, f) => s.mapParUnordered(8)(f).run, false),
+                ("mapChunkPar", (s, f) => s.mapChunkPar(8)(c => Kyo.foreach(c)(f)).run, true),
+                ("mapChunkParUnordered", (s, f) => s.mapChunkParUnordered(8)(c => Kyo.foreach(c)(f)).run, false)
+            )
+
+            // Emits each element as its own chunk, then fails with Closed once `before` is done.
+            def failingAfter(elements: Chunk[Int], before: Unit < Async)(using Frame): Stream[Int, Abort[Closed] & Async] =
+                Stream(Kyo.foreachDiscard(elements)(v => Emit.value(Chunk(v))).andThen(before).andThen(Abort.fail(Closed(
+                    "source",
+                    summon[Frame]
+                ))))
+
+            operators.foreach { (name, operator, ordered) =>
+                def observed(result: Result[Closed, Chunk[Int]]) = if ordered then result else result.map(_.sorted)
+
+                name - {
+                    // The element in the consumer's hand when the Closed arrives is not interrupted into a panic.
+                    "never ends in a panic" in {
+                        Kyo.foreachDiscard(Chunk.from(1 to 500)) { _ =>
+                            for
+                                started <- Latch.init(1)
+                                gate    <- Latch.init(1)
+                                fiber   <- Fiber.initUnscoped {
+                                    operator(failingAfter(Chunk(1), started.await), v => started.release.andThen(gate.await).andThen(v))
+                                }
+                                _      <- started.await
+                                _      <- gate.release
+                                result <- fiber.getResult
+                            yield assert(result == Result.succeed(Chunk(1)), s"$result")
+                            end for
+                        }.andThen(succeed)
+                    }
+
+                    // Both element fibers are parked when the source fails and are let go only after it has, so the background
+                    // meets the Closed while they still run.
+                    "delivers every element it emitted" in {
+                        Kyo.foreachDiscard(Chunk.from(1 to 200)) { _ =>
+                            for
+                                started <- Latch.init(2)
+                                failed  <- Latch.init(1)
+                                gate    <- Latch.init(1)
+                                fiber   <- Fiber.initUnscoped {
+                                    operator(
+                                        failingAfter(Chunk(1, 2), started.await.andThen(failed.release)),
+                                        v => started.release.andThen(gate.await).andThen(v)
+                                    )
+                                }
+                                _      <- failed.await
+                                _      <- gate.release
+                                result <- fiber.getResult
+                            yield assert(observed(result) == Result.succeed(Chunk(1, 2)), s"$result")
+                            end for
+                        }.andThen(succeed)
+                    }
+                }
+            }
+        }
+
         "the rest of a public peel cannot be forked" in {
             typeCheckFailure(
                 """
