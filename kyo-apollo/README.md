@@ -1641,8 +1641,8 @@ const [loadCountry, queryRef] = useLoadableQuery(GERMANY);
 kyo-apollo-ui has no separate API for it. `Apollo.lazyQuery(call)` is the query a click
 starts: its `state` stays `Idle` until its `load` runs. `handle.state.dataSignal` is the
 read that waits: it suspends the mount that calls it until the first data arrives, then
-follows every later result. `Apollo.preload(call)` is the same read for a query that
-starts at once.
+follows every later result. A query that starts at once is `Apollo.preload(call)`,
+whose `read` waits the same way.
 
 **Why:** a React hook runs at the top of a component on every render, so a query that a
 click starts needs a handle made before the click, and the hook bundles that handle with
