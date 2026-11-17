@@ -13,7 +13,7 @@ import kyo.apollo.network.ExecutionContext
   *
   * This module does not reduce responses itself. `ApolloCall.stream`, `execute` and
   * `watch()` always return the full [[kyo.apollo.network.ApolloResponse]] with
-  * `data`, `errors` and `exception` as values, whatever the policy. The policy is
+  * its `data` and its one `error` as values, whatever the policy. The policy is
   * for a layer on top that turns a response into either its data or a failure, such
   * as kyo-apollo-ui's `call.data`:
   *
