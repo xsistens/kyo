@@ -247,6 +247,19 @@ class DatePickerTest extends ReactiveValueContract:
         yield assert(!still && got == List("dp-field"), "or the next Tab starts at the top of the document")
     }
 
+    "and so does a month pick, which closes the panel of a picker that picks in the month grid" in {
+        for
+            (value, open, moved, ui) <- recording(uic.DatePicker[YearMonth](), Absent, month = "2026-07", cursor = "2026-07")
+            grid                     <- elementWithClass(ui, "p-datepicker-month-view")
+            _                        <- press(grid, UI.Keyboard.Enter)
+            picked                   <- value.get
+            still                    <- open.get
+            got                      <- moved.get
+        yield
+            assert(picked == Present(YearMonth.of(2026, 7)))
+            assert(!still && got == List("dp-field"))
+    }
+
     "the button bar closes on the same terms, and its button goes with the panel" in {
         for
             (_, open, moved, ui) <- recording(uic.DatePicker[LocalDate]().showButtonBar(true), Present(day(july)))
