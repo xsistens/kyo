@@ -35,6 +35,16 @@ object StreamCoreExtensions:
         Abort.run[Closed](emit).unit
     end emitElementsFromChannel
 
+    // The source as the parallel maps read it: a Closed the source fails with ends it like its last chunk does, so the elements it
+    // emitted before are delivered. Without this the background takes it for the consumer's exit and stops every element fiber:
+    // what they still compute is lost, and an element fiber the consumer is joining ends it in a panic. A Closed from the
+    // operator's own channels or ElementFibers is raised outside and still means the consumer has left.
+    private def sourceEndingOnClosed[V, S, E](stream: Stream[V, S & Abort[E] & Async])(using
+        Frame
+    ): Unit < (Emit[Chunk[V]] & S & Abort[E] & Async) =
+        Abort.recover[Closed](_ => ())(stream.emit)
+    end sourceEndingOnClosed
+
     /** The element fibers a parallel map has forked and not yet seen complete.
       *
       * A channel of element fibers does not own them: a fiber the consumer has taken but not yet joined, or one the producer has forked but
@@ -458,7 +468,7 @@ object StreamCoreExtensions:
 
                             // Handle original stream by running transformations in parallel, limiting concurrency
                             // via semaphore
-                            val handleEmit = ArrowEffect.handleLoop(t1, stream.emit)(
+                            val handleEmit = ArrowEffect.handleLoop(t1, sourceEndingOnClosed(stream))(
                                 handle = [C] =>
                                     input =>
                                         // Fork async generation of chunks (with each transformation limited by semaphore)
@@ -564,7 +574,7 @@ object StreamCoreExtensions:
 
                                 // Handle original stream, asynchronously transforming input and publishing output
                                 // using semaphore as rate limiter
-                                val handleEmit = ArrowEffect.handleLoop(t1, stream.emit)(
+                                val handleEmit = ArrowEffect.handleLoop(t1, sourceEndingOnClosed(stream))(
                                     handle = [C] =>
                                         input =>
                                             // For each element in input chunk, transform and publish each to channelOut
@@ -675,7 +685,7 @@ object StreamCoreExtensions:
 
                             // Handle original stream by running transformations in parallel, limiting concurrency
                             // via semaphore
-                            val handleEmit = ArrowEffect.handleLoop(t1, stream.emit)(
+                            val handleEmit = ArrowEffect.handleLoop(t1, sourceEndingOnClosed(stream))(
                                 handle = [C] =>
                                     input =>
                                         // Transform chunk in background, publishing fiber to channelOut. The outer
@@ -788,7 +798,7 @@ object StreamCoreExtensions:
 
                                 // Handle original stream, asynchronously transforming input and publishing output
                                 // using semaphore as rate limiter
-                                val handleEmit = ArrowEffect.handleLoop(t1, stream.emit)(
+                                val handleEmit = ArrowEffect.handleLoop(t1, sourceEndingOnClosed(stream))(
                                     handle = [C] =>
                                         input =>
                                             // Transform chunks and publish to channelOut in background fiber, placing
