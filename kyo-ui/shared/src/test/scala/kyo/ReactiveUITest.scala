@@ -1,6 +1,7 @@
 package kyo
 
 import kyo.Browser.*
+import kyo.UI.foreachKeyed
 import kyo.internal.HtmlOp
 import kyo.internal.KeyboardEventData
 import kyo.internal.MouseEventData
@@ -207,6 +208,34 @@ class ReactiveUITest extends UITest:
                 _ <- Browser.click(Selector.id("inc"))
                 _ <- Browser.click(Selector.id("inc"))
                 _ <- Browser.assertText(Selector.id("cnt"), "5")
+            yield ()
+        }
+    }
+
+    "keyed foreach row whose root is a reactive region patches at the row path" in {
+        // A row rendered AS a Reactive (signal.map) is a fragment child whose root is itself a region. The renderer
+        // paints its markers under the row's own region id, the one that spells the row path. The walk must subscribe
+        // the row under that same identity, not under one nested below it, or every patch names a range the page does
+        // not have and the row keeps showing its first value.
+        val app: UI < Async =
+            for
+                rows   <- Signal.initRef(Chunk("a", "b"))
+                status <- Signal.initRef("s0")
+            yield UI.div(
+                UI.ul(
+                    rows.foreachKeyed(identity) { item =>
+                        status.map(s => UI.li.id(s"rrow-$item")(s"$item:$s"))
+                    }
+                ),
+                UI.button("bump").id("rbump").onClick(status.set("s1"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("rrow-a"), "a:s0")
+                _ <- Browser.assertText(Selector.id("rrow-b"), "b:s0")
+                _ <- Browser.click(Selector.id("rbump"))
+                _ <- Browser.assertText(Selector.id("rrow-a"), "a:s1")
+                _ <- Browser.assertText(Selector.id("rrow-b"), "b:s1")
             yield ()
         }
     }
