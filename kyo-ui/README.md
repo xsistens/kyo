@@ -28,6 +28,8 @@ import kyo.*
 val hello: UI = div(h1("Hello"), button("Click").onClick(Console.printLine("clicked")))
 ```
 
+Ready-made controls live one level down, in [kyo-ui-components](components/README.md): typed builder values wearing PrimeOne's `.p-*` markup (inputs, overlays, menus, tables, plus a form layer), all built from the primitives on this page. They ship as their own artifacts, `io.getkyo %% kyo-ui-components-prime` for the controls over `kyo-ui-components-base` for what they are built from; kyo-ui itself depends on neither.
+
 ## Build a UI tree
 
 Every visible element is a factory call on `UI`: `UI.div`, `UI.button`, `UI.h1`, `UI.input`. Each factory returns a typed element value (`Div`, `Button`, `H1`, `Input`) that you chain attribute and event setters on, then call `.apply(children*)` to attach children. The element value is immutable; every setter returns a new instance of the same type.
