@@ -78,6 +78,22 @@ class JsWebSocketConnectionSpec extends kyo.test.Test[Any]:
 
     "JsWebSocketConnection" - {
 
+        // That the open waits for the event at all is "a close before open fails the opened handshake".
+        "opened completes when the socket fires open" in {
+            val fake = new FakeSocket
+            for
+                conn <- open(fake)
+                _    <- conn.send("hello")
+                _    <- Sync.defer(fake.message("world"))
+                _    <- Sync.defer(fake.closeEvent(WebSocketConnection.NormalClosure))
+                seen <- conn.incoming.run.map(_.toList)
+            yield
+                assert(fake.sent == List("hello"), "the connection it hands back sends")
+                assert(seen == List("world"), "and hears the socket")
+                assert(fake.closedWith.isEmpty, "and a completed open closes nothing")
+            end for
+        }
+
         "a normal (1000) close makes the liveness signal succeed" in {
             val fake = new FakeSocket
             for
