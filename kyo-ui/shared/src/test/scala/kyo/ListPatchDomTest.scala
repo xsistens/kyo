@@ -12,8 +12,9 @@ import scala.language.implicitConversions
   * what it painted before, and this is the suite that says so. `DomBackend`'s own override is covered in jsdom
   * by `DomBackendReactiveRangesTest`.
   *
-  * Every assert is about placement: which rows, in what order, how many. A test that only checked presence
-  * would pass on a list that reconciled into the wrong sequence, which is the failure this path can produce.
+  * Nearly every assert is about placement: which rows, in what order, how many. A test that only checked presence
+  * would pass on a list that reconciled into the wrong sequence, which is the failure this path can produce. The
+  * one exception is what a moved row carries with it: the focus and the caret of the input inside it.
   *
   * [[ListPatchProtocolTest]] covers the command the region emits; this covers painting it unchanged.
   */
@@ -137,6 +138,34 @@ class ListPatchDomTest extends UITest:
                 _ <- Browser.assertCount(Selector.css("span.r"), 2)
                 _ <- Browser.assertPageTextOrder(Seq("a", "a!", "c", "c!"))
             yield succeed
+        }
+    }
+
+    "a moved row keeps focus AND the caret inside it" in {
+        // The assumption this catches out: "a retained row cannot lose the caret, so every pass may skip it".
+        // True for a row left in place, false for one moved: insertBefore on a live node is a remove and an
+        // insert, and that blurs whatever it holds. A pure reorder disturbs no row at all, which makes it
+        // exactly the case a focus capture scoped to the disturbed rows gets wrong.
+        val ui: UI < Async =
+            for rows <- Signal.initRef(Chunk("a", "b", "c"))
+            yield UI.div(
+                UI.ul(rows.foreachKeyed(identity)(item => UI.li(UI.input.id(s"i-$item")))),
+                UI.button("go").id("go").onClick(rows.set(Chunk("c", "b", "a")))
+            )
+        withUI(ui) {
+            for
+                _ <- Browser.fill(Selector.id("i-b"), "hello")
+                _ <- Browser.evalDiscard("document.getElementById('i-b').focus();document.getElementById('i-b').setSelectionRange(2,2)")
+                // The reorder is triggered through `.click()` rather than a real mouse click, which would
+                // move focus to the button first and leave nothing in the region to preserve.
+                _ <- Browser.evalDiscard("document.getElementById('go').click()")
+                // Wait for the reorder itself: read before it lands, focus and caret are trivially intact.
+                _ <- Browser.waitFor(
+                    "Array.from(document.querySelectorAll('li input')).map(function(e){return e.id}).join(',')==='i-c,i-b,i-a'"
+                )
+                _     <- Browser.assertFocused(Selector.id("i-b"))
+                caret <- Browser.selectionStart(Selector.id("i-b"))
+            yield assert(caret == 2, s"caret landed at $caret")
         }
     }
 
