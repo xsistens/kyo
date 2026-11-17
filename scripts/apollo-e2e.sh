@@ -2,8 +2,13 @@
 # Cross-platform apollo end-to-end suite: start one caliban GraphQL backend, then run
 # kyo.apollo.ApolloE2ESpec on every client platform (JVM/JS/Native/Wasm) against it.
 #
-# The spec is env-gated on APOLLO_IT_URL, so a plain `sbt test` skips it — this script
+# The spec is env-gated on APOLLO_IT_URL, so a plain `sbt test` skips it: this script
 # is the only thing that stands the backend up and points the client suites at it.
+#
+# Both sbt runs go through scripts/sbt.sh, which takes the driver heap from
+# scripts/sbt-heap-lib.sh: `compile` for the classpath export, which compiles the server
+# and everything it depends on, `link` for the client suites, whose heaviest step is
+# linking the Native and Wasm test binaries in one driver.
 #
 # Usage:  scripts/apollo-e2e.sh          # all four platforms
 #         scripts/apollo-e2e.sh JVM JS   # a subset
@@ -16,7 +21,7 @@ PLATFORMS=("$@")
 # The caliban server is JVM-only, so it is launched as a plain java process (decoupled
 # from the sbt instances that run the client suites) via its exported runtime classpath.
 echo ">> resolving itserver classpath"
-CP=$(sbt -batch "export kyo-apollo-itserverJVM/Runtime/fullClasspath" | grep -vE '^\[|^>|Total time|^$' | tail -1)
+CP=$(scripts/sbt.sh compile -batch "export kyo-apollo-itserverJVM/Runtime/fullClasspath" | grep -vE '^\[|^>|Total time|^$' | tail -1)
 [ -z "$CP" ] && { echo "failed to resolve classpath"; exit 1; }
 
 LOG=$(mktemp)
@@ -41,5 +46,5 @@ for p in "${PLATFORMS[@]}"; do
     CMDS+=("kyo-apollo${p}/testOnly kyo.apollo.ApolloE2ESpec")
 done
 echo ">> running ApolloE2ESpec on: ${PLATFORMS[*]}"
-sbt -batch "${CMDS[@]}"
+scripts/sbt.sh link -batch "${CMDS[@]}"
 echo ">> apollo E2E complete"
