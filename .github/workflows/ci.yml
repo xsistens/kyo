@@ -8,6 +8,9 @@ name: ci
 # instantiate on Windows: every module, with or without native code, dies at startup on an
 # emitted import whose module name is empty).
 #
+# After the poles, apollo-e2e runs the apollo client of every platform against one live server on
+# linux-x64.
+#
 # Dispatching a custom run lives in ci-dispatch.yml. Keeping it out of this file is what stops a
 # pull request from reporting a set of skipped jobs it can never run: a job whose condition is
 # false still appears as a Skipped check, so the only way to not report one is to not define it
@@ -60,3 +63,36 @@ jobs:
       targets: ${{ matrix.pole.targets }}
       # pull_request runs testDiff, push to main runs the full test.
       mode: ${{ github.event_name == 'pull_request' && 'diff' || 'full' }}
+
+  # Cross-platform apollo interop: stand up one caliban ItServer and drive
+  # kyo.apollo.ApolloE2ESpec from every client platform against it (scripts/apollo-e2e.sh).
+  # The spec is env-gated on APOLLO_IT_URL, so nothing else in CI exercises the live JVM and
+  # Native (kyo-http socket) or JS and Wasm (fetch, WebSocket) engines end to end: a plain test
+  # run reports it Cancelled. It waits for build, so a broken build skips this expensive job,
+  # and it runs on one pole: it proves client against server interop, not per-arch codegen,
+  # which the build matrix already covers.
+  apollo-e2e:
+    needs: build
+    timeout-minutes: 180
+    # An exact image release, as for the build poles above.
+    runs-on: ubuntu-26.04
+    env:
+      # One sbt task at a time, as in build.yml: the Native and Wasm links run in the driver heap
+      # beside the forked server.
+      SBT_TASK_LIMIT: 1
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          # github.sha, not github.ref: a queued job must validate the commit that triggered the run.
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      # target Native provisions the heaviest toolchain (BoringSSL, liburing, the native libraries),
+      # which also covers the JVM server and the JVM client; the action installs Node for every
+      # target, which the JS and Wasm engines run on.
+      - uses: ./.github/actions/setup
+        with:
+          os: linux-x64
+          target: Native
+      - name: cross-platform apollo E2E (JVM, JS, Native, Wasm)
+        shell: bash
+        run: ./scripts/apollo-e2e.sh JVM JS Native Wasm
