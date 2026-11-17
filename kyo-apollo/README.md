@@ -999,6 +999,19 @@ When the page needs a field the component also shows, it selects that field itse
 (`Country.name ~ CountryPlace.fields.spread`). The server sends it once, and the page's
 dependency on it is visible in the page's own selection.
 
+A selection that spreads a masked fragment stays a named tuple. `mapInto` cannot take it
+into a case class, because a ref has no `Schema`, so a case class holding one derives
+none:
+
+```scala doctest:scope=nested expect=fails-compile
+final case class PlaceCard(code: String, countryPlace: CountryPlace.fields.Ref) derives Schema
+```
+
+That is on purpose. A page hands each ref on to its component, which the named tuple
+already does, and a view model that embeds a ref mixes the page's data with data the
+page may not read. Each fragment's `Ref` is also a type of its own, so a `Schema` for it
+would be bound to the fragment value it belongs to.
+
 An entity ref opens in two ways in kyo-apollo, and in one more in kyo-apollo-ui:
 
 | Opener | Gives |
@@ -1326,6 +1339,41 @@ reported by the compiler at every match that misses it, instead of falling into 
 failure cannot be called as if it always succeeded, and `Abort.fail(error)` moves a
 response failure onto the same row kyo code already handles.
 
+### `ErrorPolicy` decides about the server's errors, never a transport failure
+
+Apollo Client 4 resolves a query under `errorPolicy: "all"` even when no response
+arrived, with the failure in its one `error` field:
+
+```ts
+const { data, error } = await client.query({ query: GERMANY, errorPolicy: "all" });
+```
+
+kyo-apollo's `execute` returns every response as a value whatever the policy, a
+transport failure included:
+
+```scala
+import kyo.apollo.ErrorPolicy
+
+def germanyWithItsErrors(client: ApolloClient) =
+    client.query(germany).errorPolicy(ErrorPolicy.All).execute
+```
+
+The policy is for the layer that reduces a response to its data, kyo-apollo-ui's
+`call.data`: under `None` the server's GraphQL errors fail it, under `Ignore` and `All`
+it returns the data the server sent beside them. A transport failure fails `call.data`
+under every policy, and `call.response` hands it over as a value.
+
+**Why:** Apollo Client 4 makes the change so that no caller has to guess whether a call
+can throw. The two calls already answer that here: `call.data` declares its failure on
+`Abort[ApolloException]`, and `call.response` returns everything as a value. A
+`call.data` that answered "no data and an error" under some policy would be
+`call.response` under another name.
+
+> **Note:** kyo-apollo-ui's `QueryState.PartialData` is data that arrived with GraphQL
+> errors. Apollo Client 4's `partial` (`dataState: "partial"`) is a cache read that is
+> missing fields, and kyo-apollo has no mode that returns one (no `returnPartialData`).
+> The two never meet, but the word names a different thing in each client.
+
 ### The client is a scoped resource, configured by a value
 
 apollo-kotlin's client is `Closeable`, and closing it covers the client alone:
@@ -1480,6 +1528,29 @@ server never sees a `fragment` definition.
 fragment value that does not exist is a compile error, the IDE navigates to its
 definition, and no registry has to be set up before the first query runs.
 
+### `@nonreactive` has nothing to carve out
+
+A React component renders again as a whole when its query result changes. Apollo
+Client's `@nonreactive` on a spread takes the fragment's fields out of that, so a new
+capital renders only the component that reads the fragment:
+
+```ts
+const GERMANY = gql`
+  query Germany { country(code: "DE") { code ...CountryPlace @nonreactive } }
+`;
+```
+
+kyo-apollo has no such directive. The spread stays as it is in `placeQuery` (see
+[Data a component owns](#data-a-component-owns-masked-fragments)), and a watch on that
+query does emit again for a new capital, since the ref carries the fields it selected.
+
+**Why:** kyo-ui draws again only the region that reads a changed value, never a
+component as a whole. A page region that reads `code` through a projection of the
+query's signal is not drawn again for a new capital, because a mapped signal whose value
+stays equal notifies nobody. The component reads its fields through its own signal
+(kyo-apollo-ui's `Apollo.fragment(ref)`), so its region follows the capital alone. What
+the directive buys in React is how kyo-ui draws in the first place.
+
 ### A retain ends with its `Scope`
 
 Apollo Client keeps a record from garbage collection between two calls:
@@ -1555,3 +1626,25 @@ def finalCapital(client: ApolloClient): Chunk[Maybe[String]] < (Async & Scope) =
 **Why:** the type already forces the code to handle a part that has not arrived, so a
 second flag for the same fact would only repeat it. `complete` answers the one question
 the type cannot: whether to keep waiting.
+
+### A query a click starts is a lazy query read as data
+
+Apollo Client 4's `useLoadableQuery` returns a function that starts the query and a
+reference that a child reads with `useReadQuery`, which suspends until the data is
+there:
+
+```ts
+const [loadCountry, queryRef] = useLoadableQuery(GERMANY);
+// a click runs loadCountry(); the child calls useReadQuery(queryRef)
+```
+
+kyo-apollo-ui has no separate API for it. `Apollo.lazyQuery(call)` is the query a click
+starts: its `state` stays `Idle` until its `load` runs. `handle.state.dataSignal` is the
+read that waits: it suspends the mount that calls it until the first data arrives, then
+follows every later result. `Apollo.preload(call)` is the same read for a query that
+starts at once.
+
+**Why:** a React hook runs at the top of a component on every render, so a query that a
+click starts needs a handle made before the click, and the hook bundles that handle with
+its suspending read. In kyo-apollo-ui both are values already, the lazy handle and the
+suspense form of a signal, and they combine without a third API.
