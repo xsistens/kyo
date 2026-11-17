@@ -55,8 +55,8 @@ extension [D](call: ApolloCall[D])
     /** Execute this operation once and yield its typed `data`.
       *
       * A one-shot effect: `D < (Async & Abort[ApolloException])`. Success yields
-      * the decoded payload; a transport/parse `exception`, any GraphQL `errors`,
-      * or missing `data` surface as a typed [[kyo.apollo.exception.ApolloException]] on
+      * the decoded payload; the response's `error` (a transport or parse failure,
+      * or the server's GraphQL errors) or missing `data` surface as a typed [[kyo.apollo.exception.ApolloException]] on
       * the `Abort` channel (never a thrown exception). This is the strict path —
       * for a response that keeps partial data alongside its errors, use
       * [[response]].
@@ -77,8 +77,9 @@ extension [D](call: ApolloCall[D])
     /** Execute this operation once and yield its full [[kyo.apollo.network.ApolloResponse ApolloResponse]].
       *
       * `ApolloResponse[D] < Async` — no `Abort`. The response preserves partial
-      * `data`, GraphQL `errors`, and any transport `exception` as values, so the
-      * caller inspects them directly. `call.execute` already answers a stream that
+      * `data` and its one `error` (a transport failure, or the server's GraphQL
+      * errors, which `errors` reads typed) as values, so the caller inspects them
+      * directly. `call.execute` already answers a stream that
       * completes with no emission with such a value; a genuine wiring failure (an
       * exhausted interceptor chain) is folded back into an `ApolloResponse.error`
       * value too, keeping this path total.
