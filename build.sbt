@@ -4389,7 +4389,9 @@ lazy val `kyo-ui-components-prime` =
         .withKyoTest
         .settings(`kyo-settings`)
         .settings(
-            Compile / scalacOptions += "-Xplugin:" + fileConverter.value.toPath((`kyo-ui-setters-plugin` / Compile / packageBin).value).toFile.getAbsolutePath
+            Compile / scalacOptions += "-Xplugin:" + fileConverter.value.toPath(
+                (`kyo-ui-setters-plugin` / Compile / packageBin).value
+            ).toFile.getAbsolutePath
         )
         .jvmSettings(mimaCheck(false))
         // `openssl-native-settings` as in kyo-ui: kyo-net's bundled TLS shim compiles into THIS binary,
