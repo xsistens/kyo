@@ -14,6 +14,7 @@ target
 graal_dumps
 .idea
 metals.sbt
+*.sbt.semanticdb
 jmh-result.json
 *.jfr
 *.json
