@@ -2,7 +2,7 @@
 name: "kyo-ui instance identity"
 task: "kyo-ui and uic: predictable identity, props and robustness"
 slug: 20261106-104000_kyo-ui-stage1-identity
-project: kyo-ui (fork, fork/uic)
+project: kyo-ui (fork, hauptlinie)
 phase: climbing
 progress: 16/36
 started: 2026-11-06T10:40:00Z
@@ -16,7 +16,7 @@ interview_invoked: false
 absence_review: skipped; anti-criteria come from findings already reviewed with the principal over three sessions; the principal asked to save tokens
 ---
 
-<!-- Fork-only file. Lives in its own commit on fork/uic and never reaches an upstream PR branch. -->
+<!-- Fork-only file. Lives in its own commit on hauptlinie and never reaches an upstream PR branch. -->
 
 ## Ideal State
 
