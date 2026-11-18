@@ -47,7 +47,6 @@ ThisBuild / scalaVersion := scala39Version
 // sbt start in a tree with uncommitted changes recompiled all that depends on kyo-net. A local build keeps
 // the tag and drops the rest, so the version only moves with a release.
 ThisBuild / version ~= (_.takeWhile(_ != '+') + "+local-SNAPSHOT")
-publish / skip := true
 
 inThisBuild(List(
     organization := "io.getkyo",
@@ -403,6 +402,9 @@ lazy val kyoJVM: Project = project
     .settings(
         name := "kyoJVM",
         `kyo-settings`,
+        // The root itself ships nothing. Under sbt 2 a bare setting in build.sbt goes to every project, so this
+        // lives here: at the top of the file it turned off publishing of every module.
+        publish / skip := true,
         // Document everything kyoJVM aggregates, minus the projects that have
         // no public API surface or cannot produce Scala 3 scaladoc:
         //   - kyo-bench:    benchmarks, not public API
