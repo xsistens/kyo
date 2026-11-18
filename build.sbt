@@ -42,6 +42,11 @@ val compilerOptions = Set(
 )
 
 ThisBuild / scalaVersion := scala39Version
+// sbt-dynver puts the commit into the version and, with uncommitted changes, the minute. kyo-net writes the
+// version into a resource of its jar, and sbt 2 tells a changed dependency by the content of its jar: every
+// sbt start in a tree with uncommitted changes recompiled all that depends on kyo-net. A local build keeps
+// the tag and drops the rest, so the version only moves with a release.
+ThisBuild / version ~= (_.takeWhile(_ != '+') + "+local-SNAPSHOT")
 publish / skip           := true
 
 inThisBuild(List(
