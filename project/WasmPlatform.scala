@@ -36,10 +36,10 @@ case object WasmPlatform extends Platform {
             // Give kyo's own wasm artifacts a distinct coordinate the way the ScalaJS and ScalaNative platforms do for theirs. External
             // `%%%` dependencies stay on `_sjs1`, since no upstream Scala.js library publishes a wasm build yet and the `_sjs1` artifacts
             // link to WasmGC unchanged.
-            crossVersion                     := wasmCrossVersion,
+            crossVersion := wasmCrossVersion,
             // sbt 2 lays outputs out by platform, and a wasm row is a Scala.js row (platform sjs1, which `%%` needs to resolve the
             // `_sjs1` artifacts above). Its own prefix keeps it from sharing the JS row's output directory.
-            sbt.Keys.outputPath := s"wasm/scala-${sbt.Keys.scalaVersion.value}/${sbt.Keys.moduleName.value}",
+            sbt.Keys.outputPath              := s"wasm/scala-${sbt.Keys.scalaVersion.value}/${sbt.Keys.moduleName.value}",
             sbt.Keys.publish / sbt.Keys.skip := true
         )
 }

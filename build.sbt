@@ -47,7 +47,7 @@ ThisBuild / scalaVersion := scala39Version
 // sbt start in a tree with uncommitted changes recompiled all that depends on kyo-net. A local build keeps
 // the tag and drops the rest, so the version only moves with a release.
 ThisBuild / version ~= (_.takeWhile(_ != '+') + "+local-SNAPSHOT")
-publish / skip           := true
+publish / skip := true
 
 inThisBuild(List(
     organization := "io.getkyo",
@@ -380,7 +380,7 @@ Global / onLoad := {
         def skipsPublish(ref: ProjectRef): Boolean =
             Project.extract(state).runTaskUnhandled(ref / publish / skip, state) match {
                 case Some((_, Result.Value(skipped))) => skipped
-                case _                             => false
+                case _                                => false
             }
         val unpublished = extracted.structure.allProjectRefs
             .filterNot(ref => aggregateIds.values.exists(_ == ref.project) || ref.project == rootId)
@@ -853,7 +853,7 @@ lazy val `kyo-scheduler` =
         .jvmSettings(mimaCheck(false))
         .nativeSettings(
             `native-settings`,
-            crossScalaVersions                         := List(scala33Version),
+            crossScalaVersions                        := List(scala33Version),
             libraryDependencies += "org.scala-native" %% "scala-native-java-logging" % "1.0.0"
         )
         .jsSettings(
@@ -874,7 +874,7 @@ lazy val `kyo-scheduler-zio` = sbtcrossproject.CrossProject("kyo-scheduler-zio",
         `kyo-settings`,
         release17,
         scalacOptions ++= scalacOptionToken(ScalacOptions.source3).value,
-        crossScalaVersions                      := List(scala33Version, scala213Version),
+        crossScalaVersions                     := List(scala33Version, scala213Version),
         libraryDependencies += "dev.zio"       %% "zio"       % zioVersion,
         libraryDependencies += "org.scalatest" %% "scalatest" % scalaTestVersion % Test
     )
@@ -3548,7 +3548,7 @@ lazy val `kyo-compat-kyo` =
         .dependsOn(`kyo-core`, `kyo-data`)
         .settings(
             `kyo-settings`,
-            ClassNameCheck.classNameGroup           := Some("kyo-compat"),
+            ClassNameCheck.classNameGroup          := Some("kyo-compat"),
             libraryDependencies += "org.scalatest" %% "scalatest" % scalaTestVersion % Test,
             Test / unmanagedSourceDirectories += {
                 (ThisBuild / baseDirectory).value / "kyo-compat" / "test" / "shared" / "src" / "test" / "scala"
@@ -3583,8 +3583,8 @@ lazy val `kyo-compat-zio` =
             ClassNameCheck.classNameGroup := Some("kyo-compat"),
             release17,
             libraryDependencies += "org.scalatest" %% "scalatest" % scalaTestVersion % Test,
-            crossScalaVersions                      := List(scala33Version),
-            publish / skip                          := scalaVersion.value != scala33Version,
+            crossScalaVersions                     := List(scala33Version),
+            publish / skip                         := scalaVersion.value != scala33Version,
             scalacOptions += "-Xmax-inlines:1024",
             libraryDependencies += "dev.zio" %% "zio"            % zioVersion,
             libraryDependencies += "dev.zio" %% "zio-concurrent" % zioVersion,
@@ -3619,8 +3619,8 @@ lazy val `kyo-compat-ox` =
             ClassNameCheck.classNameGroup := Some("kyo-compat"),
             release17,
             libraryDependencies += "org.scalatest" %% "scalatest" % scalaTestVersion % Test,
-            crossScalaVersions                      := List(scala33Version),
-            publish / skip                          := scalaVersion.value != scala33Version,
+            crossScalaVersions                     := List(scala33Version),
+            publish / skip                         := scalaVersion.value != scala33Version,
             scalacOptions += "-Xmax-inlines:1024",
             libraryDependencies += "com.softwaremill.ox" %% "core" % oxVersion,
             Test / unmanagedSourceDirectories += {
@@ -3650,8 +3650,8 @@ lazy val `kyo-compat-twitter-future` =
             ClassNameCheck.classNameGroup := Some("kyo-compat"),
             release17,
             libraryDependencies += "org.scalatest" %% "scalatest" % scalaTestVersion % Test,
-            crossScalaVersions                      := List(scala33Version),
-            publish / skip                          := scalaVersion.value != scala33Version,
+            crossScalaVersions                     := List(scala33Version),
+            publish / skip                         := scalaVersion.value != scala33Version,
             scalacOptions += "-Xmax-inlines:1024",
             libraryDependencies += ("com.twitter" %% "util-core" % "24.2.0")
                 .exclude("org.scala-lang.modules", "scala-collection-compat_2.13"),
@@ -4363,8 +4363,8 @@ lazy val `kyo-ui-setters-plugin` =
     project
         .in(file("kyo-ui/components/setters-plugin"))
         .settings(
-            scalaVersion := scala39Version,
-            publish / skip := true,
+            scalaVersion                            := scala39Version,
+            publish / skip                          := true,
             libraryDependencies += "org.scala-lang" %% "scala3-compiler" % scala39Version % Provided
         )
 
@@ -4436,7 +4436,7 @@ lazy val `kyo-ui-components-gen` = project
     .in(file("kyo-ui/components/prime/gen"))
     .settings(
         `kyo-settings`,
-        publish / skip := true,
+        publish / skip                       := true,
         libraryDependencies += "com.lihaoyi" %% "ujson" % "4.1.0"
     )
 
@@ -4619,7 +4619,7 @@ lazy val `kyo-bench` =
         .jvmConfigure(_.disablePlugins(KyoDoctestPlugin))
         .settings(
             `kyo-settings`,
-            publish / skip                          := true,
+            publish / skip                         := true,
             libraryDependencies += "org.scalatest" %% "scalatest" % scalaTestVersion % Test,
             // The Jmh fork runs on the background-job service's re-materialized classpath, where an
             // internal dependency travels as its packageBin jar, and kyo-net's main jar carries no
@@ -4630,7 +4630,10 @@ lazy val `kyo-bench` =
                 val artifacts = (`kyo-net`.jvm / kyoNetClassifierArtifacts).value
                 val jar       = artifacts.collectFirst { case (a, f) if a.classifier.contains("all-natives") => f }
                 val conv      = fileConverter.value
-                Attributed.blank(virtualFile(jar.getOrElse(sys.error("[kyo-bench] kyo-net all-natives classifier jar was not produced")), conv))
+                Attributed.blank(virtualFile(
+                    jar.getOrElse(sys.error("[kyo-bench] kyo-net all-natives classifier jar was not produced")),
+                    conv
+                ))
             }),
             Test / testForkedParallel := true,
             // Forks each test suite individually
@@ -4801,7 +4804,7 @@ lazy val `native-settings-base` = Seq(
     Test / parallelExecution                          := false,
     Test / testForkedParallel                         := false,
     Test / envVars += "SCALANATIVE_THREAD_STACK_SIZE" -> "33554432",
-    libraryDependencies += "io.github.cquiroz"       %% "scala-java-time" % "2.7.0",
+    libraryDependencies += "io.github.cquiroz"        %% "scala-java-time" % "2.7.0",
     // Off-JVM these java.time/java.util types exist but carry no data (named zones, locales, currencies), so
     // resolving one throws at run time, invisible to compile and link. The tzdb artifact supplies the zones;
     // scala-java-locales falls back to the root locale and no currency data. The full CLDR data
@@ -4873,10 +4876,10 @@ lazy val `js-settings` = Seq(
     Compile / doc / sources := Seq.empty,
     fork                    := false,
     // Node test process options are configured through jsEnv.
-    Test / javaOptions                          := Nil,
-    bspEnabled                                  := false,
-    Test / parallelExecution                    := false,
-    jsEnv                                       := Def.uncached(new NodeJSEnv(NodeJSEnv.Config().withArgs(List("--max_old_space_size=5120")))),
+    Test / javaOptions       := Nil,
+    bspEnabled               := false,
+    Test / parallelExecution := false,
+    jsEnv                    := Def.uncached(new NodeJSEnv(NodeJSEnv.Config().withArgs(List("--max_old_space_size=5120")))),
     libraryDependencies += "io.github.cquiroz" %% "scala-java-time" % "2.7.0",
     // Off-JVM these java.time/java.util types exist but carry no data (named zones, locales, currencies), so
     // resolving one throws at run time, invisible to compile and link. The tzdb artifact supplies the zones;
