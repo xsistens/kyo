@@ -72,6 +72,24 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
         }
     }
 
+    // Content equal to what the range shows is left as it is, so no morph walks it and stamps its mount slots as
+    // adopted. The unchanged path adopts them itself; without that, a keyless slot stays `s`, and the next repaint
+    // of the region around it morphs the mount's content back to the placeholder the region rendered.
+    "embedded mount in content left unchanged keeps its content through the next repaint of the region around it" in {
+        Sync.defer {
+            install("<!--kyo-rs:r--><section id='frame'><!--kyo-rs:r.0 s-->placeholder<!--kyo-re:r.0--></section><!--kyo-re:r-->")
+            val result = evalString("""(() => {
+                const markup = '<section id="frame"><!--kyo-rs:r.0 s-->placeholder<!--kyo-re:r.0--></section>';
+                kyoRangeReplace('r', markup);
+                kyoRangeReplace('r.0', 'mounted');
+                kyoRangeReplace('r', markup.replace('id="frame"', 'id="frame" class="next"'));
+                const frame = document.getElementById('frame');
+                return [frame.className, frame.textContent].join('|');
+            })()""")
+            assert(result == "next|mounted", s"class and text of the region after its repaint: $result")
+        }
+    }
+
     // The same markup over fields the reader edited is not left as it is: the state differs, so the range takes the
     // morph, which reconciles each control by the morph rule (DomBackendMorphParityTest) on the live nodes. A field
     // with a value attribute and a box the render binds take the render's state; a textarea whose content did not

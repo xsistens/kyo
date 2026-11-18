@@ -93,6 +93,23 @@ private[kyo] object DomBackend:
     private[kyo] def morphRun(parent: dom.Element, fromStart: dom.Node, fromEnd: dom.Node, toStart: dom.Node, toEnd: dom.Node): Unit =
         discard(morphScript.run(parent, fromStart, fromEnd, toStart, toEnd))
 
+    /** Reconcile a region's live nodes toward the incoming payload instead of replacing them: the `tryMorph` the browser mount hands
+      * [[DomReactiveRegions.replaceWith]].
+      *
+      * Nested ranges are reconciled as logical children, so a region containing another region morphs like any
+      * other; `replaceWith` re-reads the live markers afterwards and hands the registry what is actually there.
+      */
+    private[kyo] def tryMorphRange(target: DomReactiveRegions.MorphTarget)(using Frame): Boolean =
+        morphRun(
+            target.parent.asInstanceOf[dom.Element],
+            target.start.nextSibling,
+            target.end,
+            target.fragment.firstChild,
+            null
+        )
+        true
+    end tryMorphRange
+
     /** Reconcile a list region against a row order rather than a rendered document. The payload holds only the rows that changed; every other
       * row is named by key and stays where it is. Answers `false`, having changed nothing, when the rows are not individually addressable;
       * the caller then repaints the whole list.
@@ -944,22 +961,6 @@ private[kyo] object DomBackend:
         override val classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]                    = Present(classPatchNow)
         override val stylePatcherNow: Maybe[(Seq[String], Seq[(String, String)], Seq[String]) => Unit] = Present(stylePatchNow)
         override val textPatcherNow: Maybe[(Seq[String], String) => Unit]                              = Present(textPatchNow)
-
-        /** Reconcile the region's live nodes toward the incoming payload instead of replacing them.
-          *
-          * Nested ranges are reconciled as logical children, so a region containing another region morphs like any
-          * other; `replaceWith` re-reads the live markers afterwards and hands the registry what is actually there.
-          */
-        private def tryMorphRange(target: DomReactiveRegions.MorphTarget)(using Frame): Boolean =
-            morphRun(
-                target.parent.asInstanceOf[dom.Element],
-                target.start.nextSibling,
-                target.end,
-                target.fragment.firstChild,
-                null
-            )
-            true
-        end tryMorphRange
 
         private def prepareRangePatch(oldElements: Seq[dom.Element], newElements: Seq[dom.Element]): RangePatchState =
             val active = Maybe(document.activeElement).filter(el => (el ne document.body) && containsAny(oldElements, el))

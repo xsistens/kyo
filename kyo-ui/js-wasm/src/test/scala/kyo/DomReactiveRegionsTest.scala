@@ -1,5 +1,6 @@
 package kyo
 
+import kyo.internal.DomBackend
 import kyo.internal.DomReactiveRegions
 import kyo.internal.ReactiveRegion
 import org.scalajs.dom
@@ -24,6 +25,10 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
 
     private def initResult(html: String)(using Frame): Result[Any, DomReactiveRegions] < Async =
         Fiber.initUnscoped(Scope.run(DomReactiveRegions.init(host(html)))).map(_.getResult)
+
+    /** A later paint of a range as the browser mount makes it: reconciled in place by the mount's own `tryMorph`. */
+    private def morphReplace(regions: DomReactiveRegions, regionId: String, html: String)(using Frame): Unit < Sync =
+        regions.replaceWith(regionId, html, keepCurrent = false)(DomBackend.tryMorphRange)((_, _) => ())((_, _, _) => ())
 
     private def assertPanicContains[E, A](result: Result[E, A], expected: String)(using kyo.test.AssertScope): Unit =
         result match
@@ -74,6 +79,25 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
             yield
                 assert(same)
                 assert(state == ("changed", 1))
+        }
+    }
+
+    // Content equal to what the range shows is left as it is, so no morph walks it and stamps its mount slots as
+    // adopted. The unchanged path adopts them itself; without that, a keyless slot stays `s`, and the next repaint
+    // of the region around it morphs the mount's content back to the placeholder the region rendered.
+    "a mount in content left unchanged keeps its content through the next repaint of the region around it" in {
+        val slot = s"<!--kyo-rs:$Two s-->placeholder<!--kyo-re:$Two-->"
+        val html = s"<section id='frame'>$slot</section>"
+        val root = host(s"<!--kyo-rs:$One-->$html<!--kyo-re:$One-->")
+        Scope.run {
+            for
+                regions <- DomReactiveRegions.init(root)
+                _       <- morphReplace(regions, One, html)
+                // The mount publishes into its slot.
+                _     <- regions.replace(Two, "mounted")
+                _     <- morphReplace(regions, One, html.replace("id='frame'", "id='frame' class='next'"))
+                frame <- Sync.defer((root.querySelector("#frame").getAttribute("class"), root.querySelector("#frame").textContent))
+            yield assert(frame == ("next", "mounted"), s"class and text of the region after its repaint: $frame")
         }
     }
 
