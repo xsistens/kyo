@@ -34,6 +34,21 @@ private[kyo] trait UIExchange:
       * `removed` (the ones the previous value had and this one lacks), in place.
       */
     def onStylePatch(path: Seq[String], set: Seq[(String, String)], removed: Seq[String])(using Frame): Unit < Async = Kyo.unit
+
+    /** Synchronous twins of the four channel patches above.
+      *
+      * A channel's whole job is one attribute write, so it needs no fiber to deliver it. These sinks run on the
+      * writer's stack, inside the `set` that changed the signal, and therefore must not suspend, which is why
+      * they return `Unit` rather than `Unit < Async`. Each is the same write as its `on*Patch` twin, and a backend
+      * offering one routes the effectful twin through it so the two cannot drift apart.
+      *
+      * `Absent` for an exchange with no synchronous sink (the server transport has to go over a wire), which keeps
+      * its channels on the fiber path.
+      */
+    def attrPatcherNow: Maybe[(Seq[String], String, String) => Unit]                      = Absent
+    def boolAttrPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]                 = Absent
+    def classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]                    = Absent
+    def stylePatcherNow: Maybe[(Seq[String], Seq[(String, String)], Seq[String]) => Unit] = Absent
 end UIExchange
 
 private[kyo] object UIExchange:

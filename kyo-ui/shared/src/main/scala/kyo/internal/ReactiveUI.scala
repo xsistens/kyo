@@ -734,22 +734,32 @@ private[kyo] object ReactiveUI:
         style: Maybe[Signal[Style]] = Absent,
         renderedStyle: Maybe[Seq[(String, String)]] = Absent
     )(using Frame): Unit < (Async & Scope) =
-        // Each channel is seeded with the render-time value: normalize happens-before the HTML render on every
-        // paint path, so the DOM already shows it, while a change landing between render and subscribe differs
-        // from it and still fires.
-        Kyo.foreachDiscard(attrs.toSeq) { case (name, sig) =>
-            Fiber.init(sig.observe(Maybe.fromOption(renderedAttrs.get(name)), Signal.defaultRepairInterval)(v =>
-                exchange.onAttrPatch(path, name, v)
-            )).unit
-        }.andThen(Kyo.foreachDiscard(boolAttrs.toSeq) { case (name, sig) =>
-            Fiber.init(sig.observe(Maybe.fromOption(renderedBools.get(name)), Signal.defaultRepairInterval)(v =>
-                exchange.onBoolAttrPatch(path, name, v)
-            )).unit
-        }).andThen(Kyo.foreachDiscard(classes.toSeq) { case (name, sig) =>
-            Fiber.init(sig.observe(Maybe.fromOption(renderedClasses.get(name)), Signal.defaultRepairInterval)(v =>
-                exchange.onClassPatch(path, name, v)
-            )).unit
-        }).andThen(style.fold(Kyo.unit: Unit < (Async & Scope))(bindStyle(path, _, renderedStyle, exchange)))
+        // A channel's handler is one attribute write, so where the exchange offers a synchronous sink the
+        // channel binds through `Signal.onChange`: for a signal rooted in a SignalRef the patch runs inside the
+        // writer's own `set`, and the comparison with the previous value happens before any scheduler hop.
+        // An exchange without a sink (the server transport) runs the channel on its own fiber. Both are seeded
+        // with the render-time value: normalize happens-before the HTML render on every paint path, so the DOM
+        // already shows it, while a change landing between render and subscribe differs from it and still fires.
+        def bindAll[A](
+            signals: Map[String, Signal[A]],
+            rendered: Map[String, A],
+            patcher: Maybe[(Seq[String], String, A) => Unit],
+            slow: (String, A) => Unit < Async
+        )(using CanEqual[A, A]): Unit < (Async & Scope) =
+            if signals.isEmpty then Kyo.unit
+            else
+                Kyo.foreachDiscard(signals.toSeq) { (name, sig) =>
+                    val baseline = Maybe.fromOption(rendered.get(name))
+                    patcher match
+                        case Present(patch) => bindChannel(sig, baseline, (v: A) => patch(path, name, v))
+                        case Absent         => Fiber.init(sig.observe(baseline, Signal.defaultRepairInterval)(slow(name, _))).unit
+                }
+        end bindAll
+
+        bindAll(attrs, renderedAttrs, exchange.attrPatcherNow, exchange.onAttrPatch(path, _, _))
+            .andThen(bindAll(boolAttrs, renderedBools, exchange.boolAttrPatcherNow, exchange.onBoolAttrPatch(path, _, _)))
+            .andThen(bindAll(classes, renderedClasses, exchange.classPatcherNow, exchange.onClassPatch(path, _, _)))
+            .andThen(style.fold(Kyo.unit: Unit < (Async & Scope))(bindStyle(path, _, renderedStyle, exchange)))
     end forkChannelObservers
 
     /** The inline-style channel. A value is its declarations, and a patch sets them and removes the properties the previous value had
@@ -761,15 +771,40 @@ private[kyo] object ReactiveUI:
     ): Unit < (Async & Scope) =
         given CanEqual[Seq[(String, String)], Seq[(String, String)]] = CanEqual.derived
         val decls                                                    = sig.map(CssStyleRenderer.declarations)
-        // Unsafe: one channel's own last write, read and replaced in one step by its observer fiber; it never leaves this observer.
+        // Unsafe: one channel's own last write, read and replaced in one step by whichever of its writes runs, on the writer's
+        // stack (the synchronous sink) or on its fiber; it never leaves this observer.
         val last = AtomicRef.Unsafe.init[Seq[(String, String)]](renderedStyle.getOrElse(Nil))(using AllowUnsafe.embrace.danger)
-        def write(next: Seq[(String, String)]): Unit < Async =
-            Sync.Unsafe.defer {
-                val names = next.iterator.map(_._1).toSet
-                last.getAndSet(next).map(_._1).filterNot(names.contains)
-            }.map(removed => exchange.onStylePatch(path, next, removed))
-        Fiber.init(decls.observe(renderedStyle, Signal.defaultRepairInterval)(write)).unit
+        def step(next: Seq[(String, String)])(using AllowUnsafe): Seq[String] =
+            val names = next.iterator.map(_._1).toSet
+            last.getAndSet(next).map(_._1).filterNot(names.contains)
+        exchange.stylePatcherNow match
+            case Present(patch) =>
+                bindChannel(
+                    decls,
+                    renderedStyle,
+                    (next: Seq[(String, String)]) => patch(path, next, step(next)(using AllowUnsafe.embrace.danger))
+                )
+            case Absent =>
+                Fiber.init(decls.observe(renderedStyle, Signal.defaultRepairInterval)(next =>
+                    Sync.Unsafe.defer(step(next)).map(exchange.onStylePatch(path, next, _))
+                )).unit
+        end match
     end bindStyle
+
+    /** Binds a channel's synchronous `write` as a callback on `sig`: inside the writer's `set` where the signal provides that path, through
+      * `onChange` where it does not. The Log is read here, where the subscription is made: a write runs inside somebody else's `set`, where
+      * none can be read, so a failing write is logged to the Log bound at the subscription.
+      */
+    private def bindChannel[A](sig: Signal[A], rendered: Maybe[A], write: A => Unit)(using CanEqual[A, A], Frame): Unit < (Sync & Scope) =
+        Log.use { log =>
+            Sync.Unsafe.defer {
+                val report: Throwable => Unit = ex => log.unsafe.error("kyo-ui: channel binding failed", ex)
+                sig.unsafeObserveProjected[A](identity, rendered, write, report) match
+                    case Present(release) => Scope.ensure(Sync.defer(release()))
+                    case Absent           => sig.onChange(rendered)(v => Sync.defer(write(v)))
+            }
+        }
+    end bindChannel
 
     // ---- Shared UI tree utilities (used by both backends) ----
 

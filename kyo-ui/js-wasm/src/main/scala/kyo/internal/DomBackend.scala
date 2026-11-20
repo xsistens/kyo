@@ -585,44 +585,59 @@ private[kyo] object DomBackend:
         // render writes a path channel's value into the HTML, so a morph that repaints the element carries the value
         // the channel stands for, and the observer the repaint starts is seeded with that value. Owning it instead
         // kept the morph from ever reconciling the attribute again, so an element repainted with a different value
-        // (a list row whose item changed) kept the one the first patch wrote.
-        override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
-            Sync.defer {
-                val el = queryByPath(path)
-                if el != null then
-                    el.setAttribute(name, value)
-                    syncFieldProperty(el, name, value)
-                end if
-            }
+        // (a list row whose item changed) kept the one the first patch wrote. The `*Now` forms are the patches
+        // themselves, written without the Sync wrapper for a caller that already holds the thread (see UIExchange's
+        // synchronous sinks); the effectful twins do nothing but defer to them, so the two can never drift apart.
+        private def attrPatchNow(path: Seq[String], name: String, value: String): Unit =
+            val el = queryByPath(path)
+            if el != null then
+                el.setAttribute(name, value)
+                syncFieldProperty(el, name, value)
+            end if
+        end attrPatchNow
 
-        override def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async =
-            Sync.defer {
-                val el = queryByPath(path)
-                if el != null then
-                    if value then el.setAttribute(name, "") else el.removeAttribute(name)
-            }
+        private def boolAttrPatchNow(path: Seq[String], name: String, value: Boolean): Unit =
+            val el = queryByPath(path)
+            if el != null then
+                if value then el.setAttribute(name, "") else el.removeAttribute(name)
+        end boolAttrPatchNow
 
         // Toggle in place (so CSS transitions fire) rather than re-render.
-        override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
-            Sync.defer {
-                val el = queryByPath(path)
-                if el != null then
-                    discard(el.classList.toggle(name, on))
-            }
+        private def classPatchNow(path: Seq[String], name: String, on: Boolean): Unit =
+            val el = queryByPath(path)
+            if el != null then
+                discard(el.classList.toggle(name, on))
+        end classPatchNow
 
         // The inline-style channel: drop what the previous value had and this one lacks, then set this one's declarations,
         // property by property, so the element's other inline properties stay as they are.
+        private def stylePatchNow(path: Seq[String], set: Seq[(String, String)], removed: Seq[String]): Unit =
+            val el = queryByPath(path)
+            if el != null then
+                val style = el.asInstanceOf[dom.HTMLElement].style
+                removed.foreach(n => discard(style.removeProperty(n)))
+                set.foreach((n, v) => style.setProperty(n, v))
+            end if
+        end stylePatchNow
+
+        override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
+            Sync.defer(attrPatchNow(path, name, value))
+
+        override def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async =
+            Sync.defer(boolAttrPatchNow(path, name, value))
+
+        override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
+            Sync.defer(classPatchNow(path, name, on))
+
         override def onStylePatch(path: Seq[String], set: Seq[(String, String)], removed: Seq[String])(using
             Frame
         ): Unit < Async =
-            Sync.defer {
-                val el = queryByPath(path)
-                if el != null then
-                    val style = el.asInstanceOf[dom.HTMLElement].style
-                    removed.foreach(n => discard(style.removeProperty(n)))
-                    set.foreach((n, v) => style.setProperty(n, v))
-                end if
-            }
+            Sync.defer(stylePatchNow(path, set, removed))
+
+        override val attrPatcherNow: Maybe[(Seq[String], String, String) => Unit]                      = Present(attrPatchNow)
+        override val boolAttrPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]                 = Present(boolAttrPatchNow)
+        override val classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]                    = Present(classPatchNow)
+        override val stylePatcherNow: Maybe[(Seq[String], Seq[(String, String)], Seq[String]) => Unit] = Present(stylePatchNow)
 
         private def prepareRangePatch(oldElements: Seq[dom.Element], newElements: Seq[dom.Element]): RangePatchState =
             val active = Maybe(document.activeElement).filter(el => (el ne document.body) && containsAny(oldElements, el))
