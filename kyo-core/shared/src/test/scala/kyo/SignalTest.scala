@@ -1435,6 +1435,48 @@ class SignalTest extends kyo.test.Test[Any]:
         }
     }
 
+    "readOnly" - {
+        "is not a SignalRef" in {
+            for
+                ref <- Signal.initRef(1)
+                view = ref.readOnly
+            yield assert(!view.isInstanceOf[Signal.SignalRef[?]] && ref.isInstanceOf[Signal.SignalRef[?]])
+        }
+
+        "reads the source's current value" in {
+            for
+                ref <- Signal.initRef(1)
+                view = ref.readOnly
+                v1 <- view.current
+                _  <- ref.set(2)
+                v2 <- view.current
+            yield assert(v1 == 1 && v2 == 2)
+        }
+
+        "delivers changes through the source's exact protocol" in {
+            for
+                ref    <- Signal.initRef(0)
+                f      <- Fiber.initUnscoped(ref.readOnly.streamChanges(Present(0), Duration.Infinity).take(2).run)
+                _      <- assertEventually(ref.waiters.map(_ == 1))
+                _      <- ref.set(1)
+                _      <- assertEventually(ref.waiters.map(_ == 1))
+                _      <- ref.set(2)
+                values <- f.get
+            yield assert(values == Chunk(1, 2))
+        }
+
+        "parks on the source, so the view costs no extra waiter" in {
+            for
+                ref <- Signal.initRef(0)
+                f   <- Fiber.initUnscoped(ref.readOnly.next)
+                _   <- assertEventually(ref.waiters.map(_ == 1))
+                _   <- ref.set(1)
+                v   <- f.get
+                w   <- ref.waiters
+            yield assert(v == 1 && w == 0)
+        }
+    }
+
     /** Observes `sig` with the clock frozen and runs `write` while `f` runs for the first value. Answers whether `f` then sees `expected`
       * before the observation arms a repair timer: an exact observation needs none, a repairing one finds nothing until the timer fires.
       * The observation runs inside `observeIn` in its own fiber, for a binding that does not cross a fork.
@@ -1495,6 +1537,14 @@ class SignalTest extends kyo.test.Test[Any]:
                 a  <- Signal.initRef(0)
                 b  <- Signal.initRef(0)
                 ok <- seesWriteDuringF(a.combineLatest(b), (0, 1))(b.set(1))
+            yield assert(ok)
+        }
+
+        "combineLatest over a readOnly view delivers a write that lands while f runs, without repair" in {
+            for
+                a  <- Signal.initRef(0)
+                b  <- Signal.initRef(0)
+                ok <- seesWriteDuringF(a.readOnly.combineLatest(b), (1, 0))(a.set(1))
             yield assert(ok)
         }
 

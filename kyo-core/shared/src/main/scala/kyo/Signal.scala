@@ -826,6 +826,26 @@ object Signal:
         end new
     end _initRawF
 
+    /** A one-way view of another signal, deliberately not a [[SignalRef]]. See [[SignalRef.readOnly]].
+      *
+      * Every observation path forwards to the source, so the view costs one allocation and keeps the source's delivery protocol instead
+      * of falling back to the repairing loop.
+      */
+    final private class ReadOnly[A](source: Signal[A])(using CanEqual[A, A]) extends Signal[A]:
+
+        def currentWith[B, S](f: A => B < S)(using Frame): B < (S & Sync) = source.currentWith(f)
+
+        def nextWith[B, S](f: A => B < S)(using Frame): B < (S & Async) = source.nextWith(f)
+
+        override private[kyo] def observeProjected[B, S](proj: A => B, baseline: Maybe[B], repairInterval: Duration)(
+            g: B => Unit < (S & Async & Scope)
+        )(using CanEqual[B, B], Frame): Unit < (S & Async) =
+            source.observeProjected(proj, baseline, repairInterval)(g)
+
+        override private[kyo] def readExact(read: ExactRead, wakesOnAnyInput: Boolean)(using AllowUnsafe): Maybe[A] =
+            source.readExact(read, wakesOnAnyInput)
+    end ReadOnly
+
     /** The [[SignalRef]]s an exact read went through, each with the version it had before its value was read (see
       * [[Signal.readExact]]), and the wakeup an observation of that read parks on.
       *
@@ -1011,6 +1031,17 @@ object Signal:
           *   The transformed value wrapped in combined effects S & Sync
           */
         inline def use[B, S](inline f: A => B < S)(using Frame): B < (S & Sync) = Sync.Unsafe.defer(f(_unsafe.get()))
+
+        /** A one-way view of this reference: the same values through the same delivery protocol, but not a `SignalRef`.
+          *
+          * A consumer that decides from the runtime class whether a binding is two-way treats a `SignalRef` as "write back to me", and a
+          * type ascription cannot say otherwise, since `ref: Signal[A]` leaves the runtime class untouched. This is how a caller hands out
+          * the values of a reference while keeping the writes to itself.
+          *
+          * @return
+          *   A `Signal[A]` forwarding every read and observation to this reference
+          */
+        def readOnly: Signal[A] = ReadOnly(this)
 
         /** Sets the reference to a new value.
           *
