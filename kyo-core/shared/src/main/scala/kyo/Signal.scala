@@ -307,6 +307,24 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       */
     private[kyo] def readExact(read: Signal.ExactRead, wakesOnAnyInput: Boolean)(using AllowUnsafe): Maybe[A] = Absent
 
+    /** The current value, read on the caller's stack with no suspension.
+      *
+      * `Present` when the read is a field read behind pure projections: a [[SignalRef]], a constant, `map`/`changesTo`/`readOnly`
+      * chains over those, and a [[Signal.withLocal]] whose chosen signal is one of them. `Absent` for any other signal
+      * ([[Signal.initRaw]], the async combinators), which the caller then reads through [[current]], with `locals` bound
+      * (`kyo.internal.SignalNow` does both).
+      *
+      * For a synchronous pass that reads many signals, such as a UI tree walk and its HTML render. Through [[current]] every read is a
+      * `Sync` suspension, which costs the pass a continuation for each frame enclosing the read. The value is the one [[current]]
+      * would produce at the same point of the same pass.
+      *
+      * @param locals
+      *   The [[Local]] values bound where the pass runs (see [[Local.snapshotWith]]). A read on the caller's stack has no fiber to read
+      *   a `Local` from, so a signal that chooses by one ([[Signal.withLocal]]) reads it here. There is deliberately no form without
+      *   them: a read that leaves them out answers with the `Local`'s default.
+      */
+    private[kyo] def unsafeCurrent(locals: Map[Local[?], AnyRef])(using AllowUnsafe): Maybe[A] = Absent
+
     /** Fiber-free observation for trivial, non-suspending sinks.
       *
       * `cb` is invoked on the writer's own stack, inside the `set` that changed the projected image, instead of waking a fiber through the
@@ -346,6 +364,7 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
         Signal._initRawF(
             [C, S] => g => self.currentWith(a => g(f(a))),
             [C, S] => g => self.nextWith(a => g(f(a))),
+            (locals, allow) => self.unsafeCurrent(locals)(using allow).map(f),
             // A projection of `x.map(f)` is one of `x` through `proj` after `f`, so a chain rooted in a SignalRef keeps
             // that ref's exact protocol past every map. `proj` is called through `lastProjection` keyed on `f`'s result,
             // so an unchanged value at this stage hands on the same image and nothing is delivered for it.
@@ -381,6 +400,7 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
         Signal._initRawF(
             [C, S] => g => self.currentWith(_ => g(b)),
             [C, S] => g => self.nextWith(_ => g(b)),
+            (_, _) => Present(b),
             [C, S] =>
                 (proj, baseline, ri, g, canEqualC) =>
                     given CanEqual[C, C] = canEqualC
@@ -718,6 +738,7 @@ object Signal:
             // Completing this immediately would let a constant win every `awaitAny` arm, firing
             // `combineLatest(ref, const).next` with no change to report and spinning an enclosing `observe`.
             [B, S] => _ => Async.never,
+            (_, _) => Present(value),
             // A constant cannot change, so there is nothing for a reconciliation timer to reconcile: the repairing loop would
             // re-arm a `nextWith`/`sleep` race every interval, forever, for each observer. Deliver once and hold the scope
             // instead; interrupting the observation still closes it.
@@ -799,11 +820,16 @@ object Signal:
         @implicitNotFound(missingCanEqual)
         canEqual: CanEqual[A, A]
     ): Signal[A] =
-        _initExact(
-            [B, S] => g => local.use(l => f(l).currentWith(g)),
-            [B, S] => g => local.use(l => f(l).nextWith(g)),
-            (read, wakesOnAnyInput) => f(local.getIn(read.locals)).readExact(read, wakesOnAnyInput)
-        )
+        new Signal[A]:
+            def currentWith[B, S](g: A => B < S)(using Frame): B < (S & Sync) = local.use(l => f(l).currentWith(g))
+            def nextWith[B, S](g: A => B < S)(using Frame): B < (S & Async)   = local.use(l => f(l).nextWith(g))
+            override private[kyo] def readExact(read: ExactRead, wakesOnAnyInput: Boolean)(using AllowUnsafe): Maybe[A] =
+                f(local.getIn(read.locals)).readExact(read, wakesOnAnyInput)
+            // A read on the caller's stack takes the local's value from the locals the pass runs with, as `readExact` does.
+            override private[kyo] def unsafeCurrent(locals: Map[Local[?], AnyRef])(using AllowUnsafe): Maybe[A] =
+                f(local.getIn(locals)).unsafeCurrent(locals)
+        end new
+    end withLocal
 
     /** Creates a new signal by specifying its fundamental operations.
       *
@@ -910,6 +936,8 @@ object Signal:
     private inline def _initRawF[A](
         inline _currentWith: [B, S] => (A => B < S) => B < (S & Sync),
         inline _nextWith: [B, S] => (A => B < S) => B < (S & Async),
+        // The suspension-free read (see `unsafeCurrent`), composed down the chain like the projections below.
+        inline _unsafeCurrent: (Map[Local[?], AnyRef], AllowUnsafe) => Maybe[A],
         inline _observeProjected: [C, S] => (
             A => C,
             Maybe[C],
@@ -936,6 +964,8 @@ object Signal:
                 _currentWith(f)
             def nextWith[B, S](f: A => B < S)(using frame: Frame): B < (S & Async) =
                 _nextWith(f)
+            override private[kyo] def unsafeCurrent(locals: Map[Local[?], AnyRef])(using allow: AllowUnsafe): Maybe[A] =
+                _unsafeCurrent(locals, allow)
             override private[kyo] def observeProjected[C, S](proj: A => C, baseline: Maybe[C], repairInterval: Duration)(
                 g: C => Unit < (S & Async & Scope)
             )(using canEqualC: CanEqual[C, C], frame: Frame): Unit < (S & Async) =
@@ -1018,6 +1048,9 @@ object Signal:
         def currentWith[B, S](f: A => B < S)(using Frame): B < (S & Sync) = source.currentWith(f)
 
         def nextWith[B, S](f: A => B < S)(using Frame): B < (S & Async) = source.nextWith(f)
+
+        override private[kyo] def unsafeCurrent(locals: Map[Local[?], AnyRef])(using AllowUnsafe): Maybe[A] =
+            source.unsafeCurrent(locals)
 
         override private[kyo] def observeProjected[B, S](proj: A => B, baseline: Maybe[B], repairInterval: Duration)(
             g: B => Unit < (S & Async & Scope)
@@ -1147,6 +1180,8 @@ object Signal:
     final class SignalRef[A] private[Signal] (_unsafe: SignalRef.Unsafe[A])(using CanEqual[A, A]) extends Signal[A]:
 
         def currentWith[B, S](f: A => B < S)(using Frame) = Sync.Unsafe.defer(f(unsafe.get()))
+
+        override private[kyo] def unsafeCurrent(locals: Map[Local[?], AnyRef])(using AllowUnsafe): Maybe[A] = Present(unsafe.get())
 
         def nextWith[B, S](f: A => B < S)(using Frame) = Sync.Unsafe.defer(unsafe.next().safe.use(f))
 
