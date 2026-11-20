@@ -614,7 +614,7 @@ object Signal:
         // Written only by the observation, one write at a time; read from any thread.
         @volatile private var passCount = 0L
         @volatile private var restCount = 0L
-        // What `behind` answers for: null, an `ExactRead`, the `SignalRef.Unsafe` whose version `seen` holds, or a `RepairingRead`.
+        // What `behind` answers for: null, an `ExactRead`, the `SignalRef.Root` whose version `seen` holds, or a `RepairingRead`.
         @volatile private var read: AnyRef = null
         @volatile private var seen         = 0L
 
@@ -630,14 +630,14 @@ object Signal:
                 case null                   => false
                 case r: ExactRead           => r.changed()
                 case r: RepairingRead[?, ?] => r.behind()
-                case r: SignalRef.Unsafe[?] => r.version() != seen
+                case r: SignalRef.Root[?]   => r.version() != seen
                 case _                      => false
 
         private[Signal] def passExact(r: ExactRead): Unit =
             passCount += 1
             read = r
 
-        private[Signal] def passRef(ref: SignalRef.Unsafe[?], version: Long): Unit =
+        private[Signal] def passRef(ref: SignalRef.Root[?], version: Long): Unit =
             passCount += 1
             seen = version
             read = ref
@@ -655,7 +655,7 @@ object Signal:
             read = r
             rest()
 
-        private[Signal] def restRef(ref: SignalRef.Unsafe[?], version: Long): Unit =
+        private[Signal] def restRef(ref: SignalRef.Root[?], version: Long): Unit =
             seen = version
             read = ref
             rest()
@@ -1275,19 +1275,19 @@ object Signal:
       */
     final private[kyo] class ExactRead(val locals: Map[Local[?], AnyRef])
         extends IOPromise[Nothing, Unit] with (Result[Any, Any] => Unit):
-        private var refs: Array[SignalRef.Unsafe[?]]    = null
+        private var refs: Array[SignalRef.Root[?]]      = null
         private var versions: Array[Long]               = null
         private var size                                = 0
         private var watched: Array[IOPromise[Any, Any]] = null
         // Published after the registrations and read by `onComplete`: one of the two sides sees the other (see `watch`).
         @volatile private var watchedCount = 0
 
-        def add(ref: SignalRef.Unsafe[?], version: Long): Unit =
+        def add(ref: SignalRef.Root[?], version: Long): Unit =
             if refs == null then
                 refs = new Array(4)
                 versions = new Array(4)
             else if size == refs.length then
-                val r = new Array[SignalRef.Unsafe[?]](size * 2)
+                val r = new Array[SignalRef.Root[?]](size * 2)
                 val v = new Array[Long](size * 2)
                 System.arraycopy(refs, 0, r, 0, size)
                 System.arraycopy(versions, 0, v, 0, size)
@@ -1372,11 +1372,10 @@ object Signal:
 
         override private[kyo] def unsafeCurrent(locals: Map[Local[?], AnyRef])(using AllowUnsafe): Maybe[A] = Present(unsafe.get())
 
-        def nextWith[B, S](f: A => B < S)(using Frame) = Sync.Unsafe.defer(unsafe.next().safe.use(f))
+        def nextWith[B, S](f: A => B < S)(using Frame) = _unsafe.nextWith(f)
 
         override private[kyo] def readExact(read: ExactRead, wakesOnAnyInput: Boolean)(using AllowUnsafe): Maybe[A] =
-            read.add(_unsafe, _unsafe.version())
-            Present(_unsafe.get())
+            Present(_unsafe.readInto(read))
 
         /** The callback twin of [[observeProjected]]: delivery happens inside the writer's own `set`, with no scheduler hop.
           *
@@ -1389,9 +1388,13 @@ object Signal:
             AllowUnsafe,
             Frame
         ): Maybe[() => Unit] =
-            val sub = new Signal.Sub[A, B](_unsafe, proj, cb, report, baseline)
-            _unsafe.subscribe(sub)
-            Present(() => _unsafe.unsubscribe(sub))
+            _unsafe match
+                case zoom: SignalRef.Zoom[?, A] => zoom.unsafeObserveProjected(proj, baseline, cb, report)
+                case root: SignalRef.Root[A]    =>
+                    val sub = new Signal.Sub[A, B](root, proj, cb, report, baseline)
+                    root.subscribe(sub)
+                    Present(() => root.unsubscribe(sub))
+            end match
         end unsafeObserveProjected
 
         /** Observes exactly, without a repair timer, through a version-validated register/validate/await protocol.
@@ -1414,14 +1417,24 @@ object Signal:
             repairInterval: Duration,
             stamp: Maybe[ReadStamp]
         )(g: B => Unit < (S & Async & Scope))(using CanEqual[B, B], Frame): Unit < (S & Async) =
+            _unsafe match
+                case zoom: SignalRef.Zoom[?, A] => zoom.observeProjected(proj, baseline, repairInterval, stamp)(g)
+                case root: SignalRef.Root[A]    => observeRoot(root, proj, baseline, stamp)(g)
+
+        private def observeRoot[B, S](
+            root: SignalRef.Root[A],
+            proj: A => B,
+            baseline: Maybe[B],
+            stamp: Maybe[ReadStamp]
+        )(g: B => Unit < (S & Async & Scope))(using CanEqual[B, B], Frame): Unit < (S & Async) =
             def nextSince(v0: Long): Unit < Async =
                 Sync.Unsafe.defer {
-                    if _unsafe.version() != v0 then ()
+                    if root.version() != v0 then ()
                     else
                         // Parks directly on the masked next-change promise: an interrupted fiber releases the wakeup it
                         // registered there (see `IOTask`), so the observer stays interruptible without a wrapper.
-                        val waiter = _unsafe.next().safe
-                        if _unsafe.version() != v0 then (): Unit < Async
+                        val waiter = root.next().safe
+                        if root.version() != v0 then (): Unit < Async
                         else waiter.use(_ => ())
                     end if
                 }
@@ -1429,9 +1442,9 @@ object Signal:
                 val image                              = Signal.lastProjection(proj)
                 def hold(v0: Long, b: B): Unit < Async =
                     nextSince(v0).andThen(Sync.Unsafe.defer {
-                        val v1 = _unsafe.version()
-                        if image(_unsafe.get()) == b then
-                            if stamp.nonEmpty then stamp.get.restRef(_unsafe, v1)
+                        val v1 = root.version()
+                        if image(root.get()) == b then
+                            if stamp.nonEmpty then stamp.get.restRef(root, v1)
                             hold(v1, b)
                         else (): Unit < Async
                         end if
@@ -1440,20 +1453,20 @@ object Signal:
                 // value read after a pass's scope closed gets a pass of its own, even when a revert made it the one just delivered.
                 def loop(seen: Maybe[B]): Unit < (S & Async) =
                     Sync.Unsafe.defer {
-                        val v0 = _unsafe.version()
-                        val b  = image(_unsafe.get())
+                        val v0 = root.version()
+                        val b  = image(root.get())
                         if seen.exists(_ == b) then
                             // Still the image the caller processed: current, at this version, without a pass.
-                            if stamp.nonEmpty then stamp.get.restRef(_unsafe, v0)
+                            if stamp.nonEmpty then stamp.get.restRef(root, v0)
                             nextSince(v0).andThen(loop(seen))
                         else
-                            if stamp.nonEmpty then stamp.get.passRef(_unsafe, v0)
+                            if stamp.nonEmpty then stamp.get.passRef(root, v0)
                             Scope.run(g(b).andThen(hold(v0, b))).andThen(loop(Absent))
                         end if
                     }
                 loop(baseline)
             }
-        end observeProjected
+        end observeRoot
 
         /** Retrieves the current value of the reference.
           *
@@ -1486,6 +1499,31 @@ object Signal:
           *   A `Signal[A]` forwarding every read and observation to this reference
           */
         def readOnly: Signal[A] = ReadOnly(this)
+
+        /** A writable view of one part of this reference's value: a `SignalRef[B]` that holds nothing of its own.
+          *
+          * It reads `get` of the whole and writes the whole through `set`, atomically with respect to every other write to the whole, so
+          * two fields of one value can be bound to two different consumers without either overwriting the other. Everything a `SignalRef`
+          * promises holds for the part: a write to another field neither wakes nor re-runs an observer of this one, `next` completes only
+          * when the part itself changes, and `onChange` runs inside the `set` that changed the part.
+          *
+          * Writing the part it already holds writes nothing: `set` is not called, so a `set` that also resets something else (a table's
+          * page, when its sort changes) only does so on a real change.
+          *
+          * `get` and `set` must be pure and cheap, because they run inside every write to the whole and may run more than once for one
+          * write, and they must obey the law `get(set(a, b)) == b`.
+          *
+          * @param get
+          *   Reads the part out of the whole
+          * @param set
+          *   The whole with the part replaced
+          * @tparam B
+          *   The type of the part. Must have an instance of `CanEqual[B, B]`
+          * @return
+          *   A `SignalRef[B]` over the part, also through its unsafe tier
+          */
+        def zoom[B](get: A => B)(set: (A, B) => A)(using Frame, CanEqual[B, B]): SignalRef[B] =
+            new SignalRef(_unsafe.zoomed(get, set))
 
         /** Sets the reference to a new value.
           *
@@ -1548,6 +1586,44 @@ object Signal:
 
         /** WARNING: Low-level API meant for integrations, libraries, and performance-sensitive code. See AllowUnsafe for more details.
           *
+          * The unsafe tier of a [[SignalRef]]: a [[Root]] holding the value, or a [[Zoom]] over one part of a root's value.
+          */
+        sealed abstract class Unsafe[A](using CanEqual[A, A]):
+
+            def get()(using AllowUnsafe): A
+
+            /** Monotonic change counter, incremented once per distinct-value update of the root. For a zoom it moves with every change of
+              * the root's value, including those that leave the part unchanged.
+              */
+            def version()(using AllowUnsafe): Long
+
+            def set(value: A)(using AllowUnsafe): Unit
+
+            def getAndSet(value: A)(using AllowUnsafe): A
+
+            def compareAndSet(curr: A, next: A)(using AllowUnsafe): Boolean
+
+            def getAndUpdate(f: A => A)(using AllowUnsafe): A
+
+            def updateAndGet(f: A => A)(using AllowUnsafe): A
+
+            def next()(using AllowUnsafe): Fiber.Unsafe[A, Any]
+
+            /** The waiters on the root's next change, which is what an observer of a zoom parks on. */
+            def waiters()(using AllowUnsafe): Int
+
+            def safe: SignalRef[A] = SignalRef(this)
+
+            private[kyo] def nextWith[B, S](f: A => B < S)(using Frame): B < (S & Async)
+
+            /** The current value, with the root it comes from recorded in `read` at the version it had before the value was read. */
+            private[kyo] def readInto(read: ExactRead)(using AllowUnsafe): A
+
+            private[kyo] def zoomed[B](get: A => B, set: (A, B) => A)(using Frame, CanEqual[B, B]): Unsafe[B]
+        end Unsafe
+
+        /** WARNING: Low-level API meant for integrations, libraries, and performance-sensitive code. See AllowUnsafe for more details.
+          *
           * The implementation uses two atomic references to manage state:
           *
           *   - An `AtomicRef[A]` storing the current value
@@ -1561,11 +1637,11 @@ object Signal:
           * Promises are uninterruptible to prevent interrupt propagation between observers: if one observer is interrupted, the
           * interruption won't affect other observers waiting on the same signal.
           */
-        final class Unsafe[A] private (
+        final private[kyo] class Root[A] private[SignalRef] (
             currentRef: AtomicRef.Unsafe[A],
             nextPromise: AtomicRef.Unsafe[Promise.Unsafe[A, Any]],
             versionRef: AtomicLong.Unsafe
-        )(using CanEqual[A, A]):
+        )(using CanEqual[A, A]) extends Unsafe[A]:
 
             def get()(using AllowUnsafe): A = currentRef.get()
 
@@ -1799,8 +1875,98 @@ object Signal:
                 end Arm
             end Hub
 
-            def safe: SignalRef[A] = SignalRef(this)
-        end Unsafe
+            private[kyo] def nextWith[B, S](f: A => B < S)(using Frame): B < (S & Async) = Sync.Unsafe.defer(next().safe.use(f))
+
+            private[kyo] def readInto(read: ExactRead)(using AllowUnsafe): A =
+                read.add(this, version())
+                get()
+
+            private[kyo] def zoomed[B](get: A => B, set: (A, B) => A)(using Frame, CanEqual[B, B]): Unsafe[B] =
+                new Zoom[A, B](this, get, set)
+
+        end Root
+
+        /** One part of a [[Root]]'s value, read through `part` and written through `withPart` (see [[SignalRef.zoom]]). It holds nothing of its
+          * own: its version and its waiters are the root's, a read records the root, and an observation is one of the root through the
+          * part, so a zoom of a zoom is one zoom of the root.
+          */
+        final private[kyo] class Zoom[P, A](root: Root[P], part: P => A, withPart: (P, A) => P)(using
+            frame: Frame,
+            canEqual: CanEqual[A, A]
+        ) extends Unsafe[A]:
+
+            def get()(using AllowUnsafe): A = part(root.get())
+
+            def version()(using AllowUnsafe): Long = root.version()
+
+            def set(value: A)(using AllowUnsafe): Unit = discard(getAndSet(value))
+
+            def getAndSet(value: A)(using AllowUnsafe): A = part(root.getAndUpdate(written(_, value)))
+
+            /** Only the part is compared: a write to another field of the whole that lands between the read and the swap retries. */
+            def compareAndSet(curr: A, next: A)(using AllowUnsafe): Boolean =
+                @tailrec def loop(): Boolean =
+                    val whole = root.get()
+                    if part(whole) != curr then false
+                    else if curr == next then true
+                    else root.compareAndSet(whole, withPart(whole, next)) || loop()
+                end loop
+                loop()
+            end compareAndSet
+
+            def getAndUpdate(f: A => A)(using AllowUnsafe): A = part(root.getAndUpdate(whole => written(whole, f(part(whole)))))
+
+            def updateAndGet(f: A => A)(using AllowUnsafe): A = part(root.updateAndGet(whole => written(whole, f(part(whole)))))
+
+            def next()(using AllowUnsafe): Fiber.Unsafe[A, Any] =
+                val before = get()
+                Fiber.Unsafe.init(changedFrom(before))
+
+            def waiters()(using AllowUnsafe): Int = root.waiters()
+
+            private[kyo] def nextWith[B, S](f: A => B < S)(using Frame): B < (S & Async) =
+                Sync.Unsafe.defer(changedFrom(get())).map(f)
+
+            private[kyo] def readInto(read: ExactRead)(using AllowUnsafe): A = part(root.readInto(read))
+
+            private[kyo] def zoomed[B](get: A => B, set: (A, B) => A)(using Frame, CanEqual[B, B]): Unsafe[B] =
+                new Zoom[P, B](root, whole => get(part(whole)), (whole, b) => withPart(whole, set(part(whole), b)))
+
+            private[kyo] def observeProjected[B, S](
+                proj: A => B,
+                baseline: Maybe[B],
+                repairInterval: Duration,
+                stamp: Maybe[ReadStamp]
+            )(g: B => Unit < (S & Async & Scope))(using CanEqual[B, B], Frame): Unit < (S & Async) =
+                Sync.defer {
+                    val image = Signal.lastProjection(proj)
+                    root.safe.observeProjected[B, S](whole => image(part(whole)), baseline, repairInterval, stamp)(g)
+                }
+
+            private[kyo] def unsafeObserveProjected[B](proj: A => B, baseline: Maybe[B], cb: B => Unit, report: Throwable => Unit)(
+                using
+                CanEqual[B, B],
+                AllowUnsafe,
+                Frame
+            ): Maybe[() => Unit] =
+                val image = Signal.sharedLastProjection(proj)
+                root.safe.unsafeObserveProjected[B](whole => image(part(whole)), baseline, cb, report)
+            end unsafeObserveProjected
+
+            /** The whole with `value` as its part, or the whole itself when it already is: the root then writes nothing. */
+            private def written(whole: P, value: A): P =
+                if part(whole) == value then whole else withPart(whole, value)
+
+            /** Waits until the part differs from `before`. The root's version is read before each value, so no write is lost between the read
+              * and the wait, and a write that leaves the part alone only costs another turn.
+              */
+            private def changedFrom(before: A)(using Frame): A < Async =
+                Sync.Unsafe.defer {
+                    val read = new ExactRead(Map.empty)
+                    val now  = readInto(read)
+                    if now != before then Kyo.lift(now) else read.awaitChange.andThen(changedFrom(before))
+                }
+        end Zoom
 
         object Unsafe:
 
@@ -1811,13 +1977,13 @@ object Signal:
                 /** Sets `ref`'s hub to `hub` if it has none yet; `true` for the call that set it. `hub` is the reference's own `Hub`,
                   * typed `AnyRef` because that class is private to the reference.
                   */
-                def install(ref: Unsafe[?], hub: AnyRef): Boolean
+                def install(ref: Root[?], hub: AnyRef): Boolean
             end HubSlot
 
             /** WARNING: Low-level API meant for integrations, libraries, and performance-sensitive code. See AllowUnsafe for more details.
               */
             def init[A](initial: A)(using AllowUnsafe, CanEqual[A, A]): Unsafe[A] =
-                Unsafe(
+                new Root(
                     AtomicRef.Unsafe.init(initial),
                     AtomicRef.Unsafe.init(Promise.Unsafe.initUninterruptible()),
                     AtomicLong.Unsafe.init(0L)
