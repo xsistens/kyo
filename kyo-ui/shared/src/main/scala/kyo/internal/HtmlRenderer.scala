@@ -385,7 +385,7 @@ private[kyo] object HtmlRenderer:
                 val region      = ReactiveRegion.from(context, namespace)
                 val placeholder = m.placeholderUI.getOrElse(UI.empty(using m.frame))
                 val host        = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(placeholder))
-                openInitialHost(sb, host)
+                openInitialHost(sb, host, ReactiveRegion.mountSlotFlags(m.key, m.frame))
                 renderTo(
                     sb,
                     placeholder,
@@ -420,11 +420,14 @@ private[kyo] object HtmlRenderer:
         render.andThen(host.foreach(closeInitialHost(sb, _)))
     end renderBoundElementBoundary
 
-    private def openInitialHost(sb: StringBuilder, host: ReactiveRegion.RenderHost): Unit =
+    /** Open a region's host. `flags` is the marker's flag section, empty for every region but a mount slot (see
+      * [[ReactiveRegion.mountSlotFlags]]); an SVG region has an element rather than markers and carries none.
+      */
+    private def openInitialHost(sb: StringBuilder, host: ReactiveRegion.RenderHost, flags: String = ""): Unit =
         host match
-            case ReactiveRegion.RenderHost.HtmlComments(id, _) => w(sb, s"<!--kyo-rs:$id-->")
+            case ReactiveRegion.RenderHost.HtmlComments(id, _) => w(sb, s"<!--kyo-rs:$id$flags-->")
             case ReactiveRegion.RenderHost.HtmlTableBody(id)   =>
-                w(sb, s"<tbody data-kyo-range-host=\"$id\"><!--kyo-rs:$id-->")
+                w(sb, s"<tbody data-kyo-range-host=\"$id\"><!--kyo-rs:$id$flags-->")
             case ReactiveRegion.RenderHost.SvgGroup(path) => w(sb, openSvgRegion(path))
 
     private def closeInitialHost(sb: StringBuilder, host: ReactiveRegion.RenderHost): Unit =
@@ -1093,9 +1096,12 @@ private[kyo] object HtmlRenderer:
           |  return i===end;
           |}
           |function kyoRangeFail(message){throw new Error("kyo-ui reactive range: "+message);}
+          |// A marker payload may carry a flag section after its id (a mount slot, and the m the client stamps on once
+          |// it adopts one), so the id is everything up to the first separator.
           |function kyoRangeMarker(comment,prefix){
           |  var value=comment.data;if(value.indexOf(prefix)!==0)return null;
-          |  var id=value.slice(prefix.length);if(!kyoRangeId(id))kyoRangeFail("malformed id: "+id);return id;
+          |  var rest=value.slice(prefix.length),sp=rest.indexOf(" "),id=sp<0?rest:rest.slice(0,sp);
+          |  if(!kyoRangeId(id))kyoRangeFail("malformed id: "+id);return id;
           |}
           |function kyoRangeScan(root){
           |  var found=new Map(),seen=new Map(),open=[];
@@ -1156,13 +1162,36 @@ private[kyo] object HtmlRenderer:
           |    __focusReturnStack.push({fa:fa,ret:ret,restore:cand[i].hasAttribute("data-kyo-focus-restore")});
           |    if(typeof cand[i].focus==="function")cand[i].focus({preventScroll:true});return;}}
           |}
-          |function kyoRangeMorph(active,oldRoots,newRoots,incoming){
-          |  if(!active||oldRoots.length!==1||newRoots.length!==1||active!==oldRoots[0]||incoming.size!==0)return false;
-          |  if((active.tagName!=="INPUT"&&active.tagName!=="TEXTAREA")||active.tagName!==newRoots[0].tagName)return false;
-          |  var fresh=newRoots[0];for(var i=0;i<fresh.attributes.length;i++){var a=fresh.attributes[i];if(active.getAttribute(a.name)!==a.value)active.setAttribute(a.name,a.value);}
-          |  for(var i=active.attributes.length-1;i>=0;i--){var name=active.attributes[i].name;if(!fresh.hasAttribute(name))active.removeAttribute(name);}
-          |  var value=active.tagName==="TEXTAREA"?fresh.textContent:(fresh.getAttribute("value")||"");if(value!==active.value)active.value=value;
-          |  applyJsProps(active);return true;
+          |// The morph lives in MorphScript: both clients run that one walk over their own hooks.
+          |var __kyoMorph=(function(h){
+          |""".stripMargin + MorphScript.js +
+            """})({syncField:__kyoSyncField,beginAnimations:ba});
+          |var __kyoMorphRun=__kyoMorph.run,__kyoSpanId=__kyoMorph.spanId;
+          |// Nested ranges reconcile as logical children, so a region containing another region morphs like any other;
+          |// kyoRangeReplace re-reads the live markers afterwards and hands the registry what is actually there.
+          |function kyoRangeMorph(endpoints,fragment){
+          |  __kyoMorphRun(endpoints.start.parentNode,endpoints.start.nextSibling,endpoints.end,fragment.firstChild,null);
+          |  return true;
+          |}
+          |// The ranges the live content holds right now, read off the DOM: the morph keeps the markers of a range that
+          |// survived and clones or drops the rest, so the registry cannot be updated from the payload the way the
+          |// wholesale path does it. Twin of rescanRange in DomReactiveRegions.
+          |function kyoRangeRescan(id,endpoints){
+          |  var found=new Map(),open=[];
+          |  function visit(node){
+          |    var sid=__kyoSpanId(node);
+          |    if(sid!==null)open.push({id:sid,node:node});
+          |    else if(node.nodeType===8&&node.data.indexOf("kyo-re:")===0){
+          |      var eid=node.data.slice(7);
+          |      if(!open.length||open[open.length-1].id!==eid)kyoRangeFail("crossed ranges after morphing "+id+": found "+eid);
+          |      found.set(eid,{start:open.pop().node,end:node});}
+          |    var child=node.firstChild;
+          |    while(child){var next=child.nextSibling;visit(child);child=next;}
+          |  }
+          |  var n=endpoints.start.nextSibling;
+          |  while(n&&n!==endpoints.end){var next=n.nextSibling;visit(n);n=next;}
+          |  if(open.length)kyoRangeFail("start marker has no end after morphing "+id+": "+open[open.length-1].id);
+          |  return found;
           |}
           |// A select chooses among the options it holds when its value is assigned, so a value assigned before its
           |// options arrived selects nothing: assign it again once options inside it were painted. applyJsProps calls
@@ -1199,7 +1228,7 @@ private[kyo] object HtmlRenderer:
           |  if(!kyoRangeId(id))kyoRangeFail("malformed replacement id: "+id);
           |  if(!__kyoRanges)kyoRangeFail("registry is closed");var endpoints=__kyoRanges.get(id);
           |  if(!endpoints)kyoRangeFail("unknown id: "+id);
-          |  if(endpoints.start.data!=="kyo-rs:"+id||endpoints.end.data!=="kyo-re:"+id)kyoRangeFail("markers are corrupted: "+id);
+          |  if(kyoRangeMarker(endpoints.start,"kyo-rs:")!==id||endpoints.end.data!=="kyo-re:"+id)kyoRangeFail("markers are corrupted: "+id);
           |  if(!endpoints.start.parentNode||endpoints.start.parentNode!==endpoints.end.parentNode)kyoRangeFail("anchors are no longer siblings: "+id);
           |  var ordered=endpoints.start.nextSibling;while(ordered&&ordered!==endpoints.end)ordered=ordered.nextSibling;
           |  if(!ordered)kyoRangeFail("end is not after start: "+id);
@@ -1212,18 +1241,31 @@ private[kyo] object HtmlRenderer:
           |  var oldRoots=kyoRangeRoots(endpoints.start,endpoints.end),newRoots=kyoRangeFragmentRoots(fragment),newSemanticRoots=kyoRangeSemanticRoots(newRoots,id),active=document.activeElement;
           |  var newHost=newRoots.length===1&&newRoots[0].tagName==="TBODY"&&newRoots[0].getAttribute("data-kyo-range-host")===id;
           |  // Compare synthetic table hosts separately from their semantic children. Keeping equivalent live nodes preserves a pressed click.
-          |  if(synthetic&&newHost&&parent.cloneNode(false).isEqualNode(newRoots[0].cloneNode(false))&&
-          |      kyoRangeSameElementState(parent,newRoots[0])&&kyoRangeSameContent(endpoints.start,endpoints.end,newRoots[0]))return;
-          |  if(!synthetic&&!newHost&&kyoRangeSameContent(endpoints.start,endpoints.end,fragment))return;
-          |  if(kyoRangeMorph(active,oldRoots,newSemanticRoots,incoming))return;
+          |  // Content equal to what the range shows takes the in-place path as a reconciliation that changes nothing.
+          |  var unchanged=synthetic&&newHost?parent.cloneNode(false).isEqualNode(newRoots[0].cloneNode(false))&&
+          |      kyoRangeSameElementState(parent,newRoots[0])&&kyoRangeSameContent(endpoints.start,endpoints.end,newRoots[0])
+          |    :!synthetic&&!newHost&&kyoRangeSameContent(endpoints.start,endpoints.end,fragment);
+          |  // The pre-patch reads (focused node, enter and leave path sets, ghost clones of what is about to depart)
+          |  // happen before either path touches the DOM, and the post-patch tail below runs for both: a morph is
+          |  // still a patch, and a leave transition has no business depending on which one painted.
           |  var inside=active&&active!==document.body&&kyoRangeContains(oldRoots,active);
           |  var activeLocator=inside?kyoRangeFocusLocator(oldRoots,active):null;
           |  var ss=inside&&typeof active.selectionStart==="number"?active.selectionStart:null;
           |  var se=inside&&typeof active.selectionEnd==="number"?active.selectionEnd:null;
           |  var oldEnter=kyoEnterPathsRoots(oldRoots),ghosts=kyoLeavePrepareRoots(oldRoots,kyoLeavePathsRoots(newSemanticRoots));
           |  var oldFocus=kyoFocusPathsRoots(oldRoots);
+          |  // Morph only siblings into siblings, as DomReactiveRegions does: rows arriving in a range host move the
+          |  // markers into that host below, which a morph of the live nodes into the wrapper would skip.
+          |  var hostWrapped=newHost;
+          |  var finalRoots,morphed=unchanged||(!synthetic&&!hostWrapped&&kyoRangeMorph(endpoints,fragment));
+          |  if(unchanged)__kyoMorph.adoptSlots(endpoints.start,endpoints.end);
+          |  if(morphed){finalRoots=kyoRangeRoots(endpoints.start,endpoints.end);
+          |    for(var i=0;i<removed.length;i++)__kyoRanges.delete(removed[i]);
+          |    kyoRangeRescan(id,endpoints).forEach(function(pair,key){__kyoRanges.set(key,pair);});
+          |    for(var i=0;i<finalRoots.length;i++)applyJsProps(finalRoots[i]);
+          |  }else{
           |  range.deleteContents();for(var i=0;i<removed.length;i++)__kyoRanges.delete(removed[i]);
-          |  var finalRoots=newSemanticRoots;if(synthetic&&newRoots.length===1&&newRoots[0].tagName==="TBODY"&&newRoots[0].getAttribute("data-kyo-range-host")===id){
+          |  finalRoots=newSemanticRoots;if(synthetic&&newRoots.length===1&&newRoots[0].tagName==="TBODY"&&newRoots[0].getAttribute("data-kyo-range-host")===id){
           |    var incomingHost=newRoots[0];kyoRangeSyncHost(parent,incomingHost,id);while(incomingHost.firstChild)parent.insertBefore(incomingHost.firstChild,endpoints.end);finalRoots=kyoRangeRoots(endpoints.start,endpoints.end);
           |  }else if(synthetic){var table=parent.parentNode;if(!table)kyoRangeFail("table range host is detached: "+id);
           |    table.insertBefore(endpoints.start,parent);table.insertBefore(fragment,parent);table.insertBefore(endpoints.end,parent);table.removeChild(parent);
@@ -1231,6 +1273,7 @@ private[kyo] object HtmlRenderer:
           |    newRoots[0].insertBefore(endpoints.start,newRoots[0].firstChild);newRoots[0].appendChild(endpoints.end);finalRoots=kyoRangeRoots(endpoints.start,endpoints.end);}}
           |  incoming.forEach(function(pair,key){__kyoRanges.set(key,pair);});
           |  for(var i=0;i<finalRoots.length;i++){applyJsProps(finalRoots[i]);ba(finalRoots[i]);}
+          |  }
           |  var restored=kyoRangeResolveFocus(finalRoots,activeLocator);if(restored){restored.focus({preventScroll:true});if(ss!==null)kyoSetCaret(restored,ss,se);}
           |  kyoSeedEnterRoots(finalRoots,oldEnter);kyoSeedFocusRoots(finalRoots,oldFocus);kyoSpawnGhosts(ghosts);sweepFocusAuto();
           |}
@@ -1249,6 +1292,14 @@ private[kyo] object HtmlRenderer:
            |function kyoSetCaret(t,s,e){if(typeof t.setSelectionRange!=="function")return;
            |  try{t.setSelectionRange(s,e);}catch(er){if(er.name!=="InvalidStateError")throw er;}}
            |$reactiveRangesJs
+           |// A field renders its .value PROPERTY, and the property stops tracking the attribute the first time the
+           |// user types. Patching the attribute alone is therefore invisible on any touched field, so mirror it onto
+           |// the property. Assigning only on a real difference leaves a focused field's caret alone (the echo of the
+           |// user's own keystroke compares equal). Twin of DomBackend.syncFieldProperty; keep in lockstep.
+           |function __kyoSyncField(el,name,value){
+           |  if(name==="value"&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&el.value!==value)el.value=value;
+           |  else if(name==="value"&&el.tagName==="SELECT"&&el.value!==value)el.value=value;
+           |}
            |${DragClientJs.script(basePath)}
            |var ws=null,__wsRetries=0,__wsGone=false,__live=false,__liveWaiters=[];
            |// Read-only test hook on the current socket; it follows each reconnect.
@@ -1409,10 +1460,11 @@ private[kyo] object HtmlRenderer:
            |}
            |// Apply data-kyo-prop-* HTML attributes as JS DOM properties then remove the attr.
            |// Mirrors DomBackend.applyJsPropsSync for the HTTP/JVM rendering path.
-           |// Each assignment is kept on the element (__kyoProps), for __kyoReassertSelect to assign again.
+           |// Each assignment is kept on the element (__kyoProps), for __kyoReassertSelect to assign again, with the value
+           |// the element had before the first one, for __kyoRestoreProps to give back.
            |function applyJsPropsElement(el,pfx){for(var i=el.attributes.length-1;i>=0;i--){var n=el.attributes[i].name;
            |  if(n.indexOf(pfx)===0){var p=n.slice(pfx.length),v=el.getAttribute(n),ps=el.__kyoProps||(el.__kyoProps={});
-           |    ps[p]={value:v};el[p]=v;el.removeAttribute(n);}}
+           |    ps[p]={base:ps[p]?ps[p].base:el[p],value:v};el[p]=v;el.removeAttribute(n);}}
            |}
            |function applyJsProps(root){
            |  var pfx="data-kyo-prop-";applyJsPropsElement(root,pfx);var els=root.querySelectorAll("*");
@@ -1490,14 +1542,18 @@ private[kyo] object HtmlRenderer:
            |    g.style.position="fixed";g.style.left=rect.left+"px";g.style.top=rect.top+"px";
            |    g.style.width=rect.width+"px";g.style.height=rect.height+"px";g.style.margin="0";g.style.pointerEvents="none";
            |    g.setAttribute("data-kyo-ghost","1");
-           |    ghosts.push({node:g,leave:leave});
+           |    ghosts.push({src:node,node:g,leave:leave});
            |  }
            |  return ghosts;
            |}
            |// Append prepared ghosts to <body>, add their leave classes next frame, remove on transitionend/animationend or a 1s safety.
+           |// The survivor set is a PREDICTION: a preserved subtree (the opaque mount boundary) survives the patch despite not
+           |// matching, so a ghost whose SOURCE is still in the document is dropped here, since a leave animation over the live
+           |// element would be a false departure. Twin of DomBackend.spawnGhosts; keep in lockstep.
            |function kyoSpawnGhosts(ghosts){
            |  if(!ghosts)return;
            |  for(var i=0;i<ghosts.length;i++){(function(gh){
+           |    if(gh.src&&document.contains(gh.src))return;
            |    var g=gh.node;document.body.appendChild(g);
            |    var cls=(gh.leave||"").split(/\\s+/);
            |    requestAnimationFrame(function(){for(var c=0;c<cls.length;c++){if(cls[c])g.classList.add(cls[c]);}});
