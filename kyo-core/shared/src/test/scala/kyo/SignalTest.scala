@@ -16,6 +16,16 @@ class SignalTest extends kyo.test.Test[Any]:
             won   <- race.get
         yield won
 
+    /** `a`, having written the values `writes` names for it into `ref`. A map's function runs between a read of the source and the wait
+      * behind that read, so a write from here lands exactly where a racing writer would have to.
+      */
+    private def writing(ref: SignalRef[Int], writes: (Int, Int)*)(a: Int): Int =
+        // Unsafe: a map's function is pure in its type, so only the unsafe tier can write from inside it.
+        import AllowUnsafe.embrace.danger
+        writes.foreach((on, to) => if a == on then ref.unsafe.set(to))
+        a
+    end writing
+
     "init" - {
         "initRef" - {
             "ok" in {
@@ -216,6 +226,162 @@ class SignalTest extends kyo.test.Test[Any]:
                 _  <- ref.set(2)
                 v2 <- mapped.current
             yield assert(v1 == 2 && v2 == 4)
+        }
+
+        "map's next ignores a change that leaves the image as it is" in {
+            for
+                ref <- Signal.initRef(0)
+                f   <- Fiber.initUnscoped(ref.map(_ % 2).next)
+                _   <- assertEventually(ref.waiters.map(_ == 1))
+                _   <- ref.set(2)
+                // The waiter either parked again on the next change, or finished with an image that did not change.
+                _    <- assertEventually(Kyo.zip(ref.waiters, f.done).map((parked, done) => parked == 1 || done))
+                done <- f.done
+                _    <- ref.set(3)
+                v    <- f.get
+            yield assert(!done && v == 1, s"finished on the unchanged image: $done, then $v")
+        }
+
+        "a chain of maps' next waits for the last image to change" in {
+            for
+                ref  <- Signal.initRef(0)
+                f    <- Fiber.initUnscoped(ref.map(_ + 1).map(_ / 10).next)
+                _    <- assertEventually(ref.waiters.map(_ == 1))
+                _    <- ref.set(3)
+                _    <- assertEventually(Kyo.zip(ref.waiters, f.done).map((parked, done) => parked == 1 || done))
+                done <- f.done
+                _    <- ref.set(9)
+                v    <- f.get
+            yield assert(!done && v == 1, s"finished on the unchanged image: $done, then $v")
+        }
+
+        "map's next does not wait past a write landing inside its function" - {
+            val kinds: Chunk[(String, (SignalRef[Int], Int => Int) => Signal[Int])] = Chunk(
+                ("a map", (ref, write) => ref.map(a => write(a) % 2)),
+                ("a chain, written in its first map", (ref, write) => ref.map(a => write(a)).map(_ % 2)),
+                ("a chain, written in its last map", (ref, write) => ref.map(a => a + 0).map(a => write(a) % 2)),
+                ("a map over a readOnly", (ref, write) => ref.readOnly.map(a => write(a) % 2))
+            )
+
+            kinds.foreach { (name, signal) =>
+                name - {
+                    "before its first wait" in {
+                        for
+                            ref <- Signal.initRef(0)
+                            v   <- signal(ref, writing(ref, 0 -> 1)).next
+                        yield assert(v == 1)
+                    }
+
+                    "on a wakeup that brought the same image" in {
+                        for
+                            ref <- Signal.initRef(0)
+                            f   <- Fiber.initUnscoped(signal(ref, writing(ref, 2 -> 4, 4 -> 5)).next)
+                            _   <- assertEventually(ref.waiters.map(_ == 1))
+                            _   <- ref.set(2)
+                            v   <- f.get
+                        yield assert(v == 1)
+                    }
+                }
+            }
+
+            "a write that leaves the image as it is keeps it waiting" in {
+                for
+                    ref  <- Signal.initRef(0)
+                    f    <- Fiber.initUnscoped(ref.map(a => writing(ref, 0 -> 2)(a) % 2).next)
+                    _    <- assertEventually(Kyo.zip(ref.waiters, f.done).map((parked, done) => parked == 1 || done))
+                    done <- f.done
+                    _    <- ref.set(3)
+                    v    <- f.get
+                yield assert(!done && v == 1, s"finished on the unchanged image: $done, then $v")
+            }
+
+            "over a combineLatest" in {
+                for
+                    a <- Signal.initRef(0)
+                    b <- Signal.initRef(0)
+                    v <- a.combineLatest(b).map((x, y) => writing(b, 0 -> 1)(y) + x).next
+                yield assert(v == 1)
+            }
+
+            "over a withLocal, under the Local bound where next was asked" in {
+                val local = Local.init(0)
+                for
+                    other  <- Signal.initRef(1)
+                    chosen <- Signal.initRef(0)
+                    signal = Signal.withLocal(local)(l => if l == 0 then other else chosen)
+                    v <- local.let(1)(signal.map(a => writing(chosen, 0 -> 3)(a)).next)
+                yield assert(v == 3)
+                end for
+            }
+        }
+
+        "map's next over a source with no exact protocol" - {
+            def raw(ref: SignalRef[Int])(using Frame): Signal[Int] =
+                Signal.initRaw[Int](currentWith = [B, S] => f => ref.currentWith(f), nextWith = [B, S] => f => ref.nextWith(f))
+
+            "ignores a change that leaves the image as it is" in {
+                for
+                    ref  <- Signal.initRef(0)
+                    f    <- Fiber.initUnscoped(raw(ref).map(_ % 2).next)
+                    _    <- assertEventually(ref.waiters.map(_ == 1))
+                    _    <- ref.set(2)
+                    _    <- assertEventually(Kyo.zip(ref.waiters, f.done).map((parked, done) => parked == 1 || done))
+                    done <- f.done
+                    _    <- ref.set(3)
+                    v    <- f.get
+                yield assert(!done && v == 1, s"finished on the unchanged image: $done, then $v")
+            }
+
+            "a zip keeps waiting for both inputs, also when one moved inside the function" in {
+                for
+                    a    <- Signal.initRef(0)
+                    b    <- Signal.initRef(0)
+                    f    <- Fiber.initUnscoped(a.zip(b).map((x, y) => writing(a, 0 -> 1)(x) + y).next)
+                    _    <- assertEventually(Kyo.zip(Kyo.zip(a.waiters, b.waiters), f.done).map((w, done) => w == (1, 1) || done))
+                    done <- f.done
+                    _    <- a.set(2)
+                    _    <- b.set(1)
+                    v    <- f.get
+                yield assert(!done && v == 3, s"finished before both changed: $done, then $v")
+            }
+
+            "a switch to it that brought another image completes" in {
+                for
+                    outer <- Signal.initRef(0)
+                    exact <- Signal.initRef(0)
+                    other <- Signal.initRef(1)
+                    f     <- Fiber.initUnscoped(outer.switchMap(o => if o == 0 then exact else raw(other)).map(_ % 2).next)
+                    _     <- assertEventually(exact.waiters.map(_ == 1))
+                    _     <- outer.set(1)
+                    v     <- f.get
+                yield assert(v == 1)
+            }
+
+            "a switch to it that brought the same image waits on it" in {
+                for
+                    outer <- Signal.initRef(0)
+                    exact <- Signal.initRef(0)
+                    other <- Signal.initRef(2)
+                    f     <- Fiber.initUnscoped(outer.switchMap(o => if o == 0 then exact else raw(other)).map(_ % 2).next)
+                    _     <- assertEventually(exact.waiters.map(_ == 1))
+                    _     <- outer.set(1)
+                    _     <- assertEventually(Kyo.zip(other.waiters, f.done).map((parked, done) => parked == 1 || done))
+                    done  <- f.done
+                    _     <- other.set(3)
+                    v     <- f.get
+                yield assert(!done && v == 1, s"finished on the unchanged image: $done, then $v")
+            }
+        }
+
+        "an interrupted map's next leaves no waiter" in {
+            for
+                ref     <- Signal.initRef(0)
+                f       <- Fiber.initUnscoped(ref.map(_ % 2).next)
+                _       <- assertEventually(ref.waiters.map(_ == 1))
+                _       <- f.interrupt
+                _       <- f.getResult
+                waiters <- ref.waiters
+            yield assert(waiters == 0)
         }
 
         "streamCurrent" in {

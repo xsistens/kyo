@@ -393,6 +393,8 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       * This operation creates a derived signal that automatically updates whenever the source signal changes, lazily applying the given
       * transformation to each value.
       *
+      * A change of the source that leaves the image as it is, is no change of this signal: `next` keeps waiting, as observation does.
+      *
       * @param f
       *   The transformation function to apply to signal values
       * @return
@@ -402,7 +404,7 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
     inline def map[B](inline f: A => B)(using canEqualB: CanEqual[B, B], frame: Frame): Signal[B] =
         Signal._initRawF(
             [C, S] => g => self.currentWith(a => g(f(a))),
-            [C, S] => g => self.nextWith(a => g(f(a))),
+            [C, S] => g => Signal.nextImage[A, B, C, S](self, a => f(a))(g),
             (locals, allow) => self.unsafeCurrent(locals)(using allow).map(f),
             // A projection of `x.map(f)` is one of `x` through `proj` after `f`, so a chain rooted in a SignalRef keeps
             // that ref's exact protocol past every map. `proj` is called through `lastProjection` keyed on `f`'s result,
@@ -729,6 +731,50 @@ object Signal:
     def awaitAny(signals: Seq[Signal[?]])(using Frame): Unit < Async =
         if signals.isEmpty then Async.never
         else Async.race(signals.map(_.next)).unit
+
+    /** The next value of `source` whose image under `f` differs from the image it has now, for `map`: a change that leaves the image as it is
+      * is no change of the mapped signal.
+      *
+      * While `source` answers [[Signal.readExact]], as a map chain rooted in a [[SignalRef]] does, no write that moves the image is missed. Each
+      * read records the version of every ref before it reads their values, and the wait checks those versions before it parks, so a write
+      * landing after a read, also while `f` runs, ends the wait behind that read at once.
+      *
+      * A source that does not answer has no such check: a signal over [[initRaw]], a `zip` or a `zipAll`, whose `next` waits for every
+      * input. There a write landing between a read and the wait behind it is missed, though this `next` was asked for before it: the `next`
+      * completes only with a later change that moves the image, and never if none comes. No timer repairs that, and `f` runs inside the
+      * window.
+      */
+    private[kyo] def nextImage[A, B, C, S](source: Signal[A], f: A => B)(g: B => C < S)(using CanEqual[B, B], Frame): C < (S & Async) =
+        Local.snapshotWith { locals =>
+            def exactly(read: ExactRead, before: B): C < (S & Async) =
+                read.awaitChange.andThen(Sync.Unsafe.defer {
+                    val again = new ExactRead(locals)
+                    source.readExact(again, wakesOnAnyInput = false) match
+                        case Present(a) =>
+                            val image = f(a)
+                            if image != before then g(image) else exactly(again, before)
+                        case Absent =>
+                            recheck(before)
+                    end match
+                })
+            def await(before: B): C < (S & Async) =
+                source.nextWith { a =>
+                    val image = f(a)
+                    if image != before then g(image) else recheck(before)
+                }
+            def recheck(before: B): C < (S & Async) =
+                source.currentWith { now =>
+                    val current = f(now)
+                    if current != before then g(current) else await(before)
+                }
+            Sync.Unsafe.defer {
+                val read = new ExactRead(locals)
+                source.readExact(read, wakesOnAnyInput = false) match
+                    case Present(a) => exactly(read, f(a))
+                    case Absent     => source.currentWith(a0 => await(f(a0)))
+            }
+        }
+    end nextImage
 
     /** Zips a sequence of signals, waiting for all to change before emitting.
       *
