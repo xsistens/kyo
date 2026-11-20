@@ -118,3 +118,32 @@ abstract private[kyo] class UIScreen extends kyo.test.Test[Any]:
     end Screen
 
 end UIScreen
+
+private[kyo] object UIScreen:
+
+    /** Collects the warnings a run logged. */
+    final class Warnings extends Log.Unsafe:
+        private val seen = new java.util.concurrent.ConcurrentLinkedQueue[String]
+
+        private val failures = new java.util.concurrent.ConcurrentLinkedQueue[String]
+
+        def lines: Chunk[String]  = Chunk.from(seen.toArray(Array.empty[String]))
+        def errors: Chunk[String] = Chunk.from(failures.toArray(Array.empty[String]))
+
+        def level: Log.Level                   = Log.Level.warn
+        def name: String                       = "warnings"
+        def withName(name: String): Log.Unsafe = this
+
+        def trace(msg: => String)(using Frame, AllowUnsafe): Unit                  = ()
+        def trace(msg: => String, t: => Throwable)(using Frame, AllowUnsafe): Unit = ()
+        def debug(msg: => String)(using Frame, AllowUnsafe): Unit                  = ()
+        def debug(msg: => String, t: => Throwable)(using Frame, AllowUnsafe): Unit = ()
+        def info(msg: => String)(using Frame, AllowUnsafe): Unit                   = ()
+        def info(msg: => String, t: => Throwable)(using Frame, AllowUnsafe): Unit  = ()
+        def warn(msg: => String)(using Frame, AllowUnsafe): Unit                   = discard(seen.add(msg))
+        def warn(msg: => String, t: => Throwable)(using Frame, AllowUnsafe): Unit  = discard(seen.add(msg))
+        def error(msg: => String)(using Frame, AllowUnsafe): Unit                  = discard(failures.add(msg))
+        def error(msg: => String, t: => Throwable)(using Frame, AllowUnsafe): Unit = discard(failures.add(msg))
+    end Warnings
+
+end UIScreen

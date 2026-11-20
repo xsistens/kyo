@@ -8,10 +8,14 @@ import scala.annotation.tailrec
   * The engine's tests read what reached the page from here. A test waits on [[awaitOp]], which a promise releases, or on an observer parked
   * on its signal; neither reads a clock.
   *
+  * @param synchronous
+  *   offers the `*Now` sinks, as the DOM backend does, so a channel patches on the writer's stack. Otherwise the channels go through their
+  *   fibers, as on the server transport
   * @param beforePaint
   *   runs before a paint is recorded, and may suspend it there, as a slow transport would
   */
 private[kyo] class RecordingExchange(
+    synchronous: Boolean = false,
     beforePaint: (Seq[String], UI) => Unit < Async = (_, _) => ()
 ) extends UIExchange:
     import RecordingExchange.*
@@ -48,16 +52,32 @@ private[kyo] class RecordingExchange(
         beforePaint(path, ui).andThen(recording(Op.Paint(path, previous, ui)))
 
     override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
-        recording(Op.Attr(path, name, value))
+        recording(Op.Attr(path, name, value, Sink.Fiber))
 
     override def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async =
-        recording(Op.BoolAttr(path, name, value))
+        recording(Op.BoolAttr(path, name, value, Sink.Fiber))
 
     override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
-        recording(Op.Class(path, name, on))
+        recording(Op.Class(path, name, on, Sink.Fiber))
 
     override def onStylePatch(path: Seq[String], set: Seq[(String, String)], removed: Seq[String])(using Frame): Unit < Async =
-        recording(Op.Style(path, set, removed))
+        recording(Op.Style(path, set, removed, Sink.Fiber))
+
+    // Unsafe: each of these four sinks is called on the writer's stack, inside its `set`, where no effect context exists.
+    override val attrPatcherNow: Maybe[(Seq[String], String, String) => Unit] =
+        if synchronous then Present((path, name, value) => record(Op.Attr(path, name, value, Sink.Now))(using AllowUnsafe.embrace.danger))
+        else Absent
+    override val boolAttrPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit] =
+        if synchronous then
+            Present((path, name, value) => record(Op.BoolAttr(path, name, value, Sink.Now))(using AllowUnsafe.embrace.danger))
+        else Absent
+    override val classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit] =
+        if synchronous then Present((path, name, on) => record(Op.Class(path, name, on, Sink.Now))(using AllowUnsafe.embrace.danger))
+        else Absent
+    override val stylePatcherNow: Maybe[(Seq[String], Seq[(String, String)], Seq[String]) => Unit] =
+        if synchronous then
+            Present((path, set, removed) => record(Op.Style(path, set, removed, Sink.Now))(using AllowUnsafe.embrace.danger))
+        else Absent
 
     /** Everything recorded so far, oldest first. */
     def ops(using Frame): Chunk[Op] < Sync = Sync.Unsafe.defer(log.get())
@@ -85,11 +105,15 @@ end RecordingExchange
 
 private[kyo] object RecordingExchange:
 
+    /** Which way a channel's patch came: on the writer's stack, or from the channel's fiber. */
+    enum Sink derives CanEqual:
+        case Now, Fiber
+
     enum Op derives CanEqual:
         case Paint(path: Seq[String], previous: Maybe[UI], ui: UI)
-        case Attr(path: Seq[String], name: String, value: String)
-        case BoolAttr(path: Seq[String], name: String, value: Boolean)
-        case Class(path: Seq[String], name: String, on: Boolean)
-        case Style(path: Seq[String], set: Seq[(String, String)], removed: Seq[String])
+        case Attr(path: Seq[String], name: String, value: String, sink: Sink)
+        case BoolAttr(path: Seq[String], name: String, value: Boolean, sink: Sink)
+        case Class(path: Seq[String], name: String, on: Boolean, sink: Sink)
+        case Style(path: Seq[String], set: Seq[(String, String)], removed: Seq[String], sink: Sink)
     end Op
 end RecordingExchange

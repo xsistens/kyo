@@ -2,6 +2,7 @@ package kyo.internal
 
 import kyo.*
 import kyo.internal.RecordingExchange.Op
+import kyo.internal.RecordingExchange.Sink
 
 class RecordingExchangeTest extends kyo.test.Test[Any]:
 
@@ -24,14 +25,33 @@ class RecordingExchangeTest extends kyo.test.Test[Any]:
             cls <- rec.classPatches
         yield
             assert(ops == Chunk[Op](
-                Op.Attr(Seq("a"), "title", "x"),
+                Op.Attr(Seq("a"), "title", "x", Sink.Fiber),
                 Op.Paint(Seq("b"), Absent, UI.empty),
-                Op.Class(Seq("c"), "hot", true),
-                Op.BoolAttr(Seq("d"), "disabled", false),
-                Op.Style(Seq("e"), Seq("color" -> "red"), Seq("width"))
+                Op.Class(Seq("c"), "hot", true, Sink.Fiber),
+                Op.BoolAttr(Seq("d"), "disabled", false, Sink.Fiber),
+                Op.Style(Seq("e"), Seq("color" -> "red"), Seq("width"), Sink.Fiber)
             ))
-            assert(cls == Chunk(Op.Class(Seq("c"), "hot", true)))
+            assert(cls == Chunk(Op.Class(Seq("c"), "hot", true, Sink.Fiber)))
         end for
+    }
+
+    "without the synchronous sinks a channel has nothing to patch on the writer's stack" in {
+        val rec = new RecordingExchange
+        assert(rec.attrPatcherNow.isEmpty && rec.boolAttrPatcherNow.isEmpty && rec.classPatcherNow.isEmpty && rec.stylePatcherNow.isEmpty)
+    }
+
+    "the synchronous sinks record inside the call and are labelled apart from the fiber ones" in {
+        val rec = new RecordingExchange(synchronous = true)
+        rec.attrPatcherNow.foreach(_(Seq("a"), "title", "x"))
+        rec.boolAttrPatcherNow.foreach(_(Seq("b"), "disabled", true))
+        rec.classPatcherNow.foreach(_(Seq("c"), "hot", false))
+        rec.stylePatcherNow.foreach(_(Seq("d"), Seq("color" -> "red"), Seq.empty))
+        assert(rec.recorded == Chunk[Op](
+            Op.Attr(Seq("a"), "title", "x", Sink.Now),
+            Op.BoolAttr(Seq("b"), "disabled", true, Sink.Now),
+            Op.Class(Seq("c"), "hot", false, Sink.Now),
+            Op.Style(Seq("d"), Seq("color" -> "red"), Seq.empty, Sink.Now)
+        ))
     }
 
     "keeps every paint in the order it arrived" in {
