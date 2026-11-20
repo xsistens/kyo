@@ -99,6 +99,8 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       * interrupt, the current value's `Scope` closes too. This is switch-with-resources: the inner lifetime is bounded by the outer value,
       * structurally, with no manual cleanup. A value that forks nothing just opens and closes an empty scope. Because each value's `Scope` is
       * closed before the next `f` runs, at most one value's children are alive at a time and no waiter or fiber accumulates across changes.
+      * Once a value's `Scope` has closed, the value read next gets an `f` of its own, so the current value always has one open: where a
+      * write and its revert land while the `Scope` closes, `f` runs again for a value equal to the one before.
       *
       * It is designed never to permanently miss the latest value, even under a write that races the observation, and never to tear a
       * still-current value's `Scope` down on an idle timer. Delivery comes in two tiers. A signal whose value comes from [[SignalRef]]s
@@ -213,25 +215,28 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                             recheck(b)
                     end match
                 })
-            def repairing(last: Maybe[B]): Unit < (S & Async) =
+            // `seen` is the caller's baseline until the first pass and `Absent` after every pass: a pass ends with its scope closed,
+            // so the value read next gets a pass of its own even when it is the one that pass delivered (a write and its revert
+            // while the scope closed). Resting there would leave the current value with nothing its setup acquired.
+            def repairing(seen: Maybe[B]): Unit < (S & Async) =
                 currentWith { cur =>
                     val b = image(cur)
-                    if last.exists(_ == b) then await.andThen(loop(last))
-                    else Scope.run(g(b).andThen(holdUntilChanged(b))).andThen(loop(Present(b)))
+                    if seen.exists(_ == b) then await.andThen(loop(seen))
+                    else Scope.run(g(b).andThen(holdUntilChanged(b))).andThen(loop(Absent))
                 }
-            def loop(last: Maybe[B]): Unit < (S & Async) =
-                if !exact then repairing(last)
+            def loop(seen: Maybe[B]): Unit < (S & Async) =
+                if !exact then repairing(seen)
                 else
                     Sync.Unsafe.defer {
                         val read = new Signal.ExactRead(locals)
                         readExact(read, wakesOnAnyInput) match
                             case Present(cur) =>
                                 val b = image(cur)
-                                if last.exists(_ == b) then read.awaitChange.andThen(loop(last))
-                                else Scope.run(g(b).andThen(holdExact(read, b))).andThen(loop(Present(b)))
+                                if seen.exists(_ == b) then read.awaitChange.andThen(loop(seen))
+                                else Scope.run(g(b).andThen(holdExact(read, b))).andThen(loop(Absent))
                             case Absent =>
                                 exact = false
-                                repairing(last)
+                                repairing(seen)
                         end match
                     }
             loop(baseline)
@@ -877,12 +882,15 @@ object Signal:
                 if changed() then ()
                 else
                     watch()
+                    // A write landing while `watch` registers completes a promise this read has yet to take, and only this check sees it. That
+                    // window lies between two atomics, so only a race reaches it and no test pins it.
                     if changed() then
                         completeDiscard(Result.unit)
                         (): Unit < Async
                     else
                         Sync.ensure { (error: Maybe[Result.Error[Any]]) =>
-                            // Winning the completion runs `unwatch` here through `onComplete`; losing it, the writer's may still run.
+                            // Winning the completion runs `unwatch` here through `onComplete`; losing it, the writer's may still run. Which
+                            // of the two it is lies between two atomics, so only a race tells them apart and no test pins it.
                             if error.isDefined && !complete(Result.unit) then unwatch()
                         }(Async.useResult(this)(_ => ()))
                     end if
@@ -898,7 +906,8 @@ object Signal:
                     loop(i + 1)
             loop(0)
             watched = promises
-            // A change may have completed this while the loop ran, and its `onComplete` may have read the count before this write.
+            // A change may have completed this while the loop ran, and its `onComplete` may have read the count before this write: a
+            // window between two atomics, which only a race reaches and no test pins.
             watchedCount = size
             if done() then unwatch()
         end watch
@@ -969,12 +978,14 @@ object Signal:
                         val v1 = _unsafe.version()
                         if image(_unsafe.get()) == b then hold(v1, b) else (): Unit < Async
                     })
-                def loop(last: Maybe[B]): Unit < (S & Async) =
+                // `seen` is the caller's baseline until the first pass and `Absent` after every pass, as in the default loop: the
+                // value read after a pass's scope closed gets a pass of its own, even when a revert made it the one just delivered.
+                def loop(seen: Maybe[B]): Unit < (S & Async) =
                     Sync.Unsafe.defer {
                         val v0 = _unsafe.version()
                         val b  = image(_unsafe.get())
-                        if last.exists(_ == b) then nextSince(v0).andThen(loop(last))
-                        else Scope.run(g(b).andThen(hold(v0, b))).andThen(loop(Present(b)))
+                        if seen.exists(_ == b) then nextSince(v0).andThen(loop(seen))
+                        else Scope.run(g(b).andThen(hold(v0, b))).andThen(loop(Absent))
                     }
                 loop(baseline)
             }
