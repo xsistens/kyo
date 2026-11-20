@@ -14,6 +14,9 @@ import scala.compiletime.uninitialized
   *   - `fanOutStamped`: the same fan-out with every observation reporting its passes to the engine, as kyo-ui's mount tables have them.
   *   - `fanOutCallback`: the same fan-out through `onChange`, delivered inside the write: the control the fiber paths are compared to.
   *   - `refSetGet`: writes and reads of a `SignalRef` nobody observes.
+  *   - `refSetGetZoomLoaded`: the same loop on a `SignalRef`, in a fork whose warmup has also driven its call sites with a zoom: what a
+  *     reference pays for sharing its unsafe tier with `SignalRef.zoom`.
+  *   - `zoomSetGet`: the same loop on a zoom of one field.
   *   - `withLocalRead`: reads of a signal chosen from a `Local`, on the caller's stack, as a synchronous UI pass reads it.
   *
   * Each fan-out invocation is one write and waits for all `size` observers to see it; the other cases repeat their step `size` times.
@@ -110,6 +113,30 @@ class SignalObserveBench extends BaseBench:
                 loop(i + 1, acc + r.get())
         loop(0, 0)
     end refSetGet
+
+    private def setGetLoop(r: SignalRef.Unsafe[Int]): Int =
+        @annotation.tailrec
+        def loop(i: Int, acc: Int): Int =
+            if i == size then acc
+            else
+                r.set(i)
+                loop(i + 1, acc + r.get())
+        loop(0, 0)
+    end setGetLoop
+
+    private def zoomOfField(): SignalRef.Unsafe[Int] =
+        Sync.Unsafe.evalOrThrow(Signal.initRef((0, 0))).zoom(_._1)((pair, v) => (v, pair._2)).unsafe
+
+    private var zoomWarmups = 20000
+
+    @Benchmark def refSetGetZoomLoaded(): Int =
+        if zoomWarmups > 0 then
+            zoomWarmups -= 1
+            discard(setGetLoop(zoomOfField()))
+        setGetLoop(Sync.Unsafe.evalOrThrow(Signal.initRef(0)).unsafe)
+    end refSetGetZoomLoaded
+
+    @Benchmark def zoomSetGet(): Int = setGetLoop(zoomOfField())
 
     @Benchmark def withLocalRead(): Int =
         val on      = Sync.Unsafe.evalOrThrow(Signal.initRef(1))
