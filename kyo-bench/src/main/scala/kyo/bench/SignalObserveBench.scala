@@ -11,6 +11,7 @@ import scala.compiletime.uninitialized
   *   - `observeStartStop`: an observation of a `SignalRef` started and stopped, the setup a region pays per subscription. The pass fails
   *     with an `Abort`, which ends the observation without a fiber or a scheduler hop.
   *   - `fanOutExact`: one write to a `SignalRef` woken observers read through a `map`, the exact protocol of the `SignalRef` override.
+  *   - `fanOutStamped`: the same fan-out with every observation reporting its passes to the engine, as kyo-ui's mount tables have them.
   *   - `fanOutCallback`: the same fan-out through `onChange`, delivered inside the write: the control the fiber paths are compared to.
   *   - `refSetGet`: writes and reads of a `SignalRef` nobody observes.
   *   - `withLocalRead`: reads of a signal chosen from a `Local`, on the caller's stack, as a synchronous UI pass reads it.
@@ -83,6 +84,17 @@ class SignalObserveBench extends BaseBench:
     @Benchmark def fanOutExact(): Int =
         if observers.isEmpty then start(_ => body => ref.map(_ + 1).observe(_ => body))
         fanOut()
+
+    @Benchmark def fanOutStamped(): Int =
+        if observers.isEmpty then
+            start(_ =>
+                body =>
+                    val stamp = new Signal.ReadStamp(() => ())
+                    ref.map(_ + 1).observeStamped(stamp)(_ => body)
+            )
+        end if
+        fanOut()
+    end fanOutStamped
 
     @Benchmark def fanOutCallback(): Int =
         if observers.isEmpty then start(_ => body => Scope.run(ref.map(_ + 1).onChange(_ => body.unit).andThen(Async.never[Unit])))

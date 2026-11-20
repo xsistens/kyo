@@ -161,7 +161,7 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
     final def observe[S](baseline: Maybe[A], repairInterval: Duration)(f: A => Unit < (S & Async & Scope))(using
         Frame
     ): Unit < (S & Async) =
-        observeProjected[A, S](Signal.identityProjection, baseline, repairInterval)(f)
+        observeProjected[A, S](Signal.identityProjection, baseline, repairInterval, Absent)(f)
 
     /** Runs `f` for the current value and then for every distinct value, until the enclosing `Scope` closes.
       *
@@ -228,16 +228,21 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       * This default observes exactly while [[readExact]] answers, with the protocol of the `SignalRef.observeProjected` override over
       * every ref the value was read from. From the first read that does not answer on, it runs the repairing loop described on [[observe]].
       *
+      * Every override forwards `stamp` to the observation it delegates to, or, where it runs one of its own, records its passes and rests
+      * in it (see [[Signal.ReadStamp]]); a constant leaves it untouched.
+      *
       * @param proj
       *   The view to observe, a pure function of the source value
       * @param baseline
       *   The image already processed by the caller: `g` is not run while the current image still equals it
       * @param repairInterval
       *   How often a parked observation re-reads `current` to reconcile a missed wakeup
+      * @param stamp
+      *   Where the observation records its passes and rests, for [[observeStamped]]; `Absent` for every other observation
       * @param g
       *   The per-image setup, run inside a fresh `Scope`
       */
-    private[kyo] def observeProjected[B, S](proj: A => B, baseline: Maybe[B], repairInterval: Duration)(
+    private[kyo] def observeProjected[B, S](proj: A => B, baseline: Maybe[B], repairInterval: Duration, stamp: Maybe[Signal.ReadStamp])(
         g: B => Unit < (S & Async & Scope)
     )(using CanEqual[B, B], Frame): Unit < (S & Async) =
         Local.snapshotWith { locals =>
@@ -251,7 +256,14 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
             def holdUntilChanged(b: B): Unit < (S & Async) =
                 await.andThen(recheck(b))
             def recheck(b: B): Unit < (S & Async) =
-                currentWith(c => if image(c) == b then holdUntilChanged(b) else (): Unit < (S & Async))
+                currentWith { c =>
+                    if image(c) == b then
+                        if stamp.nonEmpty then stamp.get.rest()
+                        holdUntilChanged(b)
+                    else (): Unit < (S & Async)
+                }
+            // The repairing loop records no read: the stamp compares the suspension-free current value, where there is one.
+            def repairingRead(b: B): Signal.RepairingRead[A, B] = new Signal.RepairingRead(self, proj, b, locals)
             // Cleared by the first read that is not exact, after which the observation stays on the repairing loop: without that
             // a signal over `initRaw` would run its exact parts twice per wakeup, once for the attempt and once for `currentWith`.
             var exact = true
@@ -260,9 +272,14 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                 read.awaitChange.andThen(Sync.Unsafe.defer {
                     val again = new Signal.ExactRead(locals)
                     readExact(again, wakesOnAnyInput) match
-                        case Present(c) => if image(c) == b then holdExact(again, b) else (): Unit < (S & Async)
-                        case Absent     =>
+                        case Present(c) =>
+                            if image(c) == b then
+                                if stamp.nonEmpty then stamp.get.restExact(again)
+                                holdExact(again, b)
+                            else (): Unit < (S & Async)
+                        case Absent =>
                             exact = false
+                            if stamp.nonEmpty then stamp.get.repairing(repairingRead(b))
                             recheck(b)
                     end match
                 })
@@ -272,8 +289,14 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
             def repairing(seen: Maybe[B]): Unit < (S & Async) =
                 currentWith { cur =>
                     val b = image(cur)
-                    if seen.exists(_ == b) then await.andThen(loop(seen))
-                    else Scope.run(g(b).andThen(holdUntilChanged(b))).andThen(loop(Absent))
+                    if seen.exists(_ == b) then
+                        // Still the image the caller processed: current without a pass.
+                        if stamp.nonEmpty then stamp.get.restRepairing(repairingRead(b))
+                        await.andThen(loop(seen))
+                    else
+                        if stamp.nonEmpty then stamp.get.passRepairing(repairingRead(b))
+                        Scope.run(g(b).andThen(holdUntilChanged(b))).andThen(loop(Absent))
+                    end if
                 }
             def loop(seen: Maybe[B]): Unit < (S & Async) =
                 if !exact then repairing(seen)
@@ -283,8 +306,14 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                         readExact(read, wakesOnAnyInput) match
                             case Present(cur) =>
                                 val b = image(cur)
-                                if seen.exists(_ == b) then read.awaitChange.andThen(loop(seen))
-                                else Scope.run(g(b).andThen(holdExact(read, b))).andThen(loop(Absent))
+                                if seen.exists(_ == b) then
+                                    // Still the image the caller processed: current, with this read, without a pass.
+                                    if stamp.nonEmpty then stamp.get.restExact(read)
+                                    read.awaitChange.andThen(loop(seen))
+                                else
+                                    if stamp.nonEmpty then stamp.get.passExact(read)
+                                    Scope.run(g(b).andThen(holdExact(read, b))).andThen(loop(Absent))
+                                end if
                             case Absent =>
                                 exact = false
                                 repairing(seen)
@@ -293,6 +322,16 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
             loop(baseline)
         }
     end observeProjected
+
+    /** [[observe]] for an engine that has to know where the observation stands: its passes and rests go to `stamp`, which answers from
+      * any thread whether a write landed since the latest of them (see [[Signal.ReadStamp]]). The repair interval is
+      * [[Signal.defaultRepairInterval]].
+      *
+      * Only this observation writes `stamp`. An observation one of its passes starts runs unstamped, unless it is itself started here
+      * with a stamp of its own.
+      */
+    final private[kyo] def observeStamped[S](stamp: Signal.ReadStamp)(f: A => Unit < (S & Async & Scope))(using Frame): Unit < (S & Async) =
+        observeProjected[A, S](Signal.identityProjection, Absent, Signal.defaultRepairInterval, Present(stamp))(f)
 
     /** Reads the current value together with every [[SignalRef]] it comes from, recording each ref with its version in `read`, or answers
       * `Absent` when the value does not come from refs alone, as for a signal defined with [[Signal.initRaw]].
@@ -369,10 +408,10 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
             // that ref's exact protocol past every map. `proj` is called through `lastProjection` keyed on `f`'s result,
             // so an unchanged value at this stage hands on the same image and nothing is delivered for it.
             [C, S] =>
-                (proj, baseline, ri, g, canEqualC) =>
+                (proj, baseline, ri, stamp, g, canEqualC) =>
                     Sync.defer {
                         val p = Signal.lastProjection(proj)
-                        self.observeProjected[C, S](a => p(f(a)), baseline, ri)(g)(using canEqualC, frame)
+                        self.observeProjected[C, S](a => p(f(a)), baseline, ri, stamp)(g)(using canEqualC, frame)
                     },
             (read, wakesOnAnyInput) => self.readExact(read, wakesOnAnyInput).map(a => f(a)),
             // The same composition for the callback path, made per subscription. Its dispatch walks can overlap, so the
@@ -402,12 +441,13 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
             [C, S] => g => self.nextWith(_ => g(b)),
             (_, _) => Present(b),
             [C, S] =>
-                (proj, baseline, ri, g, canEqualC) =>
+                (proj, baseline, ri, stamp, g, canEqualC) =>
                     given CanEqual[C, C] = canEqualC
                     val image            = proj(b)
                     // `g(image)` inside the lambda: each delivery builds the caller's setup afresh, as `observe` does.
-                    if baseline.exists(_ == image) then self.currentWith(a0 => self.observe[S](Present(a0), ri)(_ => g(image)))
-                    else self.observe[S](Absent, ri)(_ => g(image))
+                    def source(seed: Maybe[A]) = self.observeProjected[A, S](Signal.identityProjection, seed, ri, stamp)(_ => g(image))
+                    if baseline.exists(_ == image) then self.currentWith(a0 => source(Present(a0)))
+                    else source(Absent)
             ,
             (read, wakesOnAnyInput) => self.readExact(read, wakesOnAnyInput).map(_ => b),
             [C] => (_, _, _, _, _, _) => Absent
@@ -546,6 +586,98 @@ object Signal:
       * timer at all.
       */
     val defaultRepairInterval: Duration = 1.second
+
+    /** Where the observation of one engine stands, for kyo-ui's mount tables (see [[Signal.observeStamped]]).
+      *
+      * The engine has to know, at a given moment, whether an observer has seen every write so far: whether the value its latest pass
+      * consumed is still the value it would read now. Only the observation knows what it read (the refs and versions of its exact read,
+      * the version of a [[SignalRef]], or for the repairing loop the image it holds), so it records that read here, and the engine asks
+      * [[behind]] from any thread.
+      *
+      * The observation counts its passes, one per new image, in [[passes]], and counts each re-read that found its image unchanged in
+      * [[rests]], calling `onRest` after it: the observer is current again without a pass. A pass is counted before the stamp answers for
+      * its read: until then the stamp still answers for the read of the pass before, which a new value makes behind, so a reader that
+      * sees no new pass yet never sees the observer current. An observation through the repairing loop answers from the suspension-free
+      * current value where there is one, and counts as behind where there is none, since it cannot tell: only its re-reads, each pass and
+      * each rest (the latter at least once per repair interval), say it has caught up.
+      *
+      * A stamp serves one observation. An observation that a pass of it starts does not touch it: only [[Signal.observeStamped]] writes
+      * a stamp, and a stamp is never inherited. A stamp no observation has written yet answers current, as does the observation of a
+      * constant, which can never fall behind.
+      *
+      * @param onRest
+      *   Called on the observation's fiber after each rest, so the engine can recheck what waited on the observer
+      */
+    final private[kyo] class ReadStamp(onRest: () => Unit):
+        // Written only by the observation, one write at a time; read from any thread.
+        @volatile private var passCount = 0L
+        @volatile private var restCount = 0L
+        // What `behind` answers for: null, an `ExactRead`, the `SignalRef.Unsafe` whose version `seen` holds, or a `RepairingRead`.
+        @volatile private var read: AnyRef = null
+        @volatile private var seen         = 0L
+
+        /** The passes the observation has started. */
+        def passes: Long = passCount
+
+        /** The re-reads that found the observation's image unchanged. */
+        def rests: Long = restCount
+
+        /** Whether a write landed since the read of the latest pass or rest. */
+        def behind()(using AllowUnsafe): Boolean =
+            read match
+                case null                   => false
+                case r: ExactRead           => r.changed()
+                case r: RepairingRead[?, ?] => r.behind()
+                case r: SignalRef.Unsafe[?] => r.version() != seen
+                case _                      => false
+
+        private[Signal] def passExact(r: ExactRead): Unit =
+            passCount += 1
+            read = r
+
+        private[Signal] def passRef(ref: SignalRef.Unsafe[?], version: Long): Unit =
+            passCount += 1
+            seen = version
+            read = ref
+        end passRef
+
+        private[Signal] def passRepairing(r: RepairingRead[?, ?]): Unit =
+            passCount += 1
+            read = r
+
+        /** The observation moved to the repairing loop without a pass: the stamp answers for that loop's read from now on. */
+        private[Signal] def repairing(r: RepairingRead[?, ?]): Unit =
+            read = r
+
+        private[Signal] def restExact(r: ExactRead): Unit =
+            read = r
+            rest()
+
+        private[Signal] def restRef(ref: SignalRef.Unsafe[?], version: Long): Unit =
+            seen = version
+            read = ref
+            rest()
+        end restRef
+
+        private[Signal] def restRepairing(r: RepairingRead[?, ?]): Unit =
+            read = r
+            rest()
+
+        /** A re-read found the image unchanged, with the read the stamp already answers for. */
+        private[Signal] def rest(): Unit =
+            restCount += 1
+            onRest()
+    end ReadStamp
+
+    /** The read of the repairing loop behind a [[ReadStamp]]: the image `proj` gave the value of its latest pass or rest. */
+    final private class RepairingRead[A, B](signal: Signal[A], proj: A => B, image: B, locals: Map[Local[?], AnyRef])(using
+        CanEqual[B, B]
+    ):
+        def behind()(using AllowUnsafe): Boolean =
+            signal.unsafeCurrent(locals) match
+                case Present(c) => proj(c) != image
+                case Absent     => true
+    end RepairingRead
 
     private val identityAny: Any => Any = a => a
 
@@ -741,11 +873,13 @@ object Signal:
             (_, _) => Present(value),
             // A constant cannot change, so there is nothing for a reconciliation timer to reconcile: the repairing loop would
             // re-arm a `nextWith`/`sleep` race every interval, forever, for each observer. Deliver once and hold the scope
-            // instead; interrupting the observation still closes it.
+            // instead; interrupting the observation still closes it. Nor can it fall behind, so a stamp stays untouched: it answers
+            // current.
             [C, S] =>
-                (proj, baseline, repairInterval, g, canEqualC) =>
+                (proj, baseline, repairInterval, stamp, g, canEqualC) =>
                     given CanEqual[C, C] = canEqualC
                     discard(repairInterval)
+                    discard(stamp)
                     val image = proj(value)
                     if baseline.exists(_ == image) then Async.never[Unit]
                     else Scope.run(g(image).andThen(Async.never[Unit]))
@@ -942,6 +1076,7 @@ object Signal:
             A => C,
             Maybe[C],
             Duration,
+            Maybe[ReadStamp],
             C => Unit < (S & Async & Scope),
             CanEqual[C, C]
         ) => Unit < (S & Async),
@@ -966,10 +1101,15 @@ object Signal:
                 _nextWith(f)
             override private[kyo] def unsafeCurrent(locals: Map[Local[?], AnyRef])(using allow: AllowUnsafe): Maybe[A] =
                 _unsafeCurrent(locals, allow)
-            override private[kyo] def observeProjected[C, S](proj: A => C, baseline: Maybe[C], repairInterval: Duration)(
+            override private[kyo] def observeProjected[C, S](
+                proj: A => C,
+                baseline: Maybe[C],
+                repairInterval: Duration,
+                stamp: Maybe[ReadStamp]
+            )(
                 g: C => Unit < (S & Async & Scope)
             )(using canEqualC: CanEqual[C, C], frame: Frame): Unit < (S & Async) =
-                _observeProjected(proj, baseline, repairInterval, g, canEqualC)
+                _observeProjected(proj, baseline, repairInterval, stamp, g, canEqualC)
             override private[kyo] def readExact(read: ExactRead, wakesOnAnyInput: Boolean)(using AllowUnsafe): Maybe[A] =
                 _readExact(read, wakesOnAnyInput)
             override private[kyo] def unsafeObserveProjected[C](proj: A => C, baseline: Maybe[C], cb: C => Unit, report: Throwable => Unit)(
@@ -1052,10 +1192,13 @@ object Signal:
         override private[kyo] def unsafeCurrent(locals: Map[Local[?], AnyRef])(using AllowUnsafe): Maybe[A] =
             source.unsafeCurrent(locals)
 
-        override private[kyo] def observeProjected[B, S](proj: A => B, baseline: Maybe[B], repairInterval: Duration)(
-            g: B => Unit < (S & Async & Scope)
-        )(using CanEqual[B, B], Frame): Unit < (S & Async) =
-            source.observeProjected(proj, baseline, repairInterval)(g)
+        override private[kyo] def observeProjected[B, S](
+            proj: A => B,
+            baseline: Maybe[B],
+            repairInterval: Duration,
+            stamp: Maybe[ReadStamp]
+        )(g: B => Unit < (S & Async & Scope))(using CanEqual[B, B], Frame): Unit < (S & Async) =
+            source.observeProjected(proj, baseline, repairInterval, stamp)(g)
 
         override private[kyo] def readExact(read: ExactRead, wakesOnAnyInput: Boolean)(using AllowUnsafe): Maybe[A] =
             source.readExact(read, wakesOnAnyInput)
@@ -1216,11 +1359,15 @@ object Signal:
           * then wait on a promise that write has already completed and replaced. Observation stays level-based, so a change and its revert
           * during `g` wake the observer, which finds an unchanged image and waits again.
           *
-          * `repairInterval` is not used: only signals that can miss a wakeup need it.
+          * `repairInterval` is not used: only signals that can miss a wakeup need it. A `stamp` records each pass and each unchanged re-read
+          * with the version it consumed, so it answers behind exactly when the version moved since.
           */
-        override private[kyo] def observeProjected[B, S](proj: A => B, baseline: Maybe[B], repairInterval: Duration)(
-            g: B => Unit < (S & Async & Scope)
-        )(using CanEqual[B, B], Frame): Unit < (S & Async) =
+        override private[kyo] def observeProjected[B, S](
+            proj: A => B,
+            baseline: Maybe[B],
+            repairInterval: Duration,
+            stamp: Maybe[ReadStamp]
+        )(g: B => Unit < (S & Async & Scope))(using CanEqual[B, B], Frame): Unit < (S & Async) =
             def nextSince(v0: Long): Unit < Async =
                 Sync.Unsafe.defer {
                     if _unsafe.version() != v0 then ()
@@ -1237,7 +1384,11 @@ object Signal:
                 def hold(v0: Long, b: B): Unit < Async =
                     nextSince(v0).andThen(Sync.Unsafe.defer {
                         val v1 = _unsafe.version()
-                        if image(_unsafe.get()) == b then hold(v1, b) else (): Unit < Async
+                        if image(_unsafe.get()) == b then
+                            if stamp.nonEmpty then stamp.get.restRef(_unsafe, v1)
+                            hold(v1, b)
+                        else (): Unit < Async
+                        end if
                     })
                 // `seen` is the caller's baseline until the first pass and `Absent` after every pass, as in the default loop: the
                 // value read after a pass's scope closed gets a pass of its own, even when a revert made it the one just delivered.
@@ -1245,8 +1396,14 @@ object Signal:
                     Sync.Unsafe.defer {
                         val v0 = _unsafe.version()
                         val b  = image(_unsafe.get())
-                        if seen.exists(_ == b) then nextSince(v0).andThen(loop(seen))
-                        else Scope.run(g(b).andThen(hold(v0, b))).andThen(loop(Absent))
+                        if seen.exists(_ == b) then
+                            // Still the image the caller processed: current, at this version, without a pass.
+                            if stamp.nonEmpty then stamp.get.restRef(_unsafe, v0)
+                            nextSince(v0).andThen(loop(seen))
+                        else
+                            if stamp.nonEmpty then stamp.get.passRef(_unsafe, v0)
+                            Scope.run(g(b).andThen(hold(v0, b))).andThen(loop(Absent))
+                        end if
                     }
                 loop(baseline)
             }
