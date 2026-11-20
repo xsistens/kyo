@@ -102,6 +102,38 @@ private[kyo] object DomBackend:
         true
     end tryMorphRange
 
+    /** What one browser mount owns, so that tearing one mount down leaves another one on the page delivering.
+      *
+      * `commands` and `events` are late-bound: `commands` breaks the emit<->Commands construction cycle (emit resolves
+      * measure callbacks via Commands, Commands needs emit), and `events` is the mount's drain channel, through which
+      * its viewport listeners (raw JS callbacks, outside any Kyo context) bridge `deliverMeasureById` back in via
+      * [[fireFromJs]]. Both are set in `mountInto` before any op can be emitted. `viewportObservers` holds, per element
+      * id, the single handler registered for BOTH `window` scroll (capture phase) and resize; Unobserve removes it from
+      * both and drops the entry.
+      */
+    final private class LocalSession:
+        var commands: UI.Commands                                                   = null
+        var events: Maybe[Channel[Unit < Async]]                                    = Absent
+        val viewportObservers: js.WrappedMap[String, js.Function1[dom.Event, Unit]] =
+            new js.WrappedMap(js.Map.empty[String, js.Function1[dom.Event, Unit]])
+    end LocalSession
+
+    /** Mark attribute `name` on `el` as owned by the imperative id-addressed channel (SetClassById/SetStyleById),
+      * applied out of the render pass so CSS transitions on the toggled class/style fire. The owned names live in a
+      * `__kyoOwn` expando dict ON the element, so the flag is reclaimed with the node (no session-lived set that only
+      * ever grows) and [[MorphScript]] shields each owned attribute BY NAME. Mirrors `__kyoMark` in HtmlRenderer.clientJs.
+      */
+    private def markOwned(el: dom.Element, name: String): Unit =
+        val d   = el.asInstanceOf[js.Dynamic]
+        val own =
+            if js.isUndefined(d.__kyoOwn) then
+                val fresh = js.Dictionary.empty[Boolean]
+                d.__kyoOwn = fresh.asInstanceOf[js.Any]
+                fresh
+            else d.__kyoOwn.asInstanceOf[js.Dictionary[Boolean]]
+        own.update(name, true)
+    end markOwned
+
     /** Mount a UI into the page body. */
     def mount(ui: UI)(using Frame): Unit < (Async & Scope) =
         mountInto(ui, document.body, NoMountDiagnostics)
@@ -206,16 +238,14 @@ private[kyo] object DomBackend:
     private def mountInto(ui: UI, container: dom.Element, diagnostics: MountDiagnostics)(using Frame): Unit < (Async & Scope) =
         val attachments = new Attachments(container)
         val listeners   = new BodyListeners
-        // Late-bound to break the emit<->Commands construction cycle (emit resolves measure callbacks via
-        // Commands, Commands needs emit). Set before any op is emitted.
-        var sessionCommands: UI.Commands = null
+        val session     = new LocalSession
         for
             _        <- Sync.defer(discard(morphScript))
             _        <- DomStyleSheet.injectBase()
             root     <- ReactiveUI.normalize(ui, Seq.empty)
             html     <- HtmlRenderer.render(ui, Seq.empty)
-            commands <- UI.Commands.init(op => applyOpLocal(op, () => sessionCommands))
-            _ = sessionCommands = commands
+            commands <- UI.Commands.init(op => applyOpLocal(op, session))
+            _ = session.commands = commands
             // Installed so component handlers and mounted effects reach `UI.commands`: the region fibers subscribe
             // forks and the event drain all start inside it.
             _ <- UICommands.commands.let(Present(commands)) {
@@ -224,7 +254,8 @@ private[kyo] object DomBackend:
                     // between. So the queue, its drain and the listeners come before the paint, and what they hear waits in the queue until
                     // the subscription lets the drain go, as the server-push client's `__q` keeps what is raised before its session is live.
                     // Every listener on the page offers here, on the one JS thread; the drain is the only consumer.
-                    events     <- Channel.init[Unit < Async](256, Access.MultiProducerSingleConsumer)
+                    events <- Channel.init[Unit < Async](256, Access.MultiProducerSingleConsumer)
+                    _ = session.events = Present(events)
                     subscribed <- Promise.init[(Seq[String], UIEvent) => Boolean < Async, Any]
                     handle = (path: Seq[String], event: UIEvent) => subscribed.get.map(h => h(path, event))
                     // Single-consumer drain owned by the ambient page Scope. The single consumer preserves event ordering.
@@ -348,13 +379,34 @@ private[kyo] object DomBackend:
 
     // ---- local op application for the SPA transport (CommandById / RequestMeasureById) ----
 
+    private def queryByPath(path: Seq[String]): dom.Element =
+        document.querySelector(s"""[data-kyo-path="${path.mkString(".")}"]""")
+
+    /** A conservative "focusable" CSS selector: what a focus command may land on. Mirrors
+      * the reactive-focus-restore query used elsewhere in this backend / HtmlRenderer.
+      */
+    private val FocusableSelector = "input,textarea,select,button,a[href],[tabindex],[contenteditable]"
+
+    /** Focus `el` if it is itself focusable, else its FIRST focusable descendant. Lets a
+      * focus command target a non-focusable WRAPPER (e.g. an InputGroup around several
+      * fields) and land on the first field inside it. A focusable element (an `<input>`,
+      * …) matches the selector and focuses itself, so existing focus targets are unchanged.
+      */
+    private def focusInto(el: dom.Element): Unit =
+        if el != null then
+            val dyn         = el.asInstanceOf[scalajs.js.Dynamic]
+            val selfMatches = scalajs.js.typeOf(dyn.matches) == "function" && dyn.matches(FocusableSelector).asInstanceOf[Boolean]
+            val target      = if selfMatches then el else el.querySelector(FocusableSelector)
+            if target != null then
+                val tdyn = target.asInstanceOf[scalajs.js.Dynamic]
+                if scalajs.js.typeOf(tdyn.focus) == "function" then discard(tdyn.focus())
+
     /** Apply a whitelisted `verb` to `el`. Unknown verbs are ignored. */
     private def applyVerbDom(el: dom.Element, verb: String): Unit =
         if el != null then
             val dyn = el.asInstanceOf[scalajs.js.Dynamic]
             verb match
-                case "focus" =>
-                    if scalajs.js.typeOf(dyn.focus) == "function" then discard(dyn.focus())
+                case "focus"          => focusInto(el)
                 case "scrollIntoView" =>
                     if scalajs.js.typeOf(dyn.scrollIntoView) == "function" then
                         discard(dyn.scrollIntoView(scalajs.js.Dynamic.literal(block = "nearest")))
@@ -377,17 +429,95 @@ private[kyo] object DomBackend:
     private def measureDomById(id: String): Maybe[UI.Rect] =
         measureRect(document.getElementById(id))
 
-    private def applyOpLocal(op: HtmlOp, commands: () => UI.Commands)(using Frame): Unit < Async =
+    private def applyOpLocal(op: HtmlOp, session: LocalSession)(using Frame): Unit < Async =
         op match
             case HtmlOp.CommandById(id, verb)  => Sync.defer(applyCommandDomById(id, verb))
             case HtmlOp.RequestMeasureById(id) =>
                 Sync.defer(measureDomById(id)).map {
-                    case Present(rect) => commands().deliverMeasureById(id, rect)
-                    case Absent        => commands().deliverMeasureMissing(id)
+                    case Present(rect) => session.commands.deliverMeasureById(id, rect)
+                    case Absent        => session.commands.deliverMeasureMissing(id)
                 }
+            case HtmlOp.SetClassById(id, className, on) =>
+                Sync.defer {
+                    val el = document.getElementById(id)
+                    if el != null then
+                        markOwned(el, "class")
+                        discard(el.classList.toggle(className, on))
+                }
+            case HtmlOp.SetStyleById(id, css) =>
+                Sync.defer {
+                    val el = document.getElementById(id)
+                    if el != null then
+                        markOwned(el, "style")
+                        mergeStyleDomById(id, css)
+                }
+            // set an attribute in place (element stays in the DOM, so a CSS `>` anchored on it keeps matching).
+            case HtmlOp.SetAttrById(id, name, value) =>
+                Sync.defer {
+                    val el = document.getElementById(id)
+                    if el != null then
+                        markOwned(el, name)
+                        el.setAttribute(name, value)
+                        syncFieldProperty(el, name, value)
+                    end if
+                }
+            // measure now + deliver, then attach the continuous scroll/resize observer for `id`.
+            case HtmlOp.ObserveViewportById(id) =>
+                Sync.defer(registerViewportObserver(id, session)).andThen(
+                    Sync.defer(measureDomById(id)).map {
+                        case Present(rect) => session.commands.deliverMeasureById(id, rect)
+                        case Absent        => Kyo.unit
+                    }
+                )
+            case HtmlOp.UnobserveViewportById(id) =>
+                Sync.defer(unregisterViewportObserver(id, session))
             // Replace/Remove/InjectCss reach the DOM through LocalExchange, never this imperative channel.
             case _ => Kyo.unit
     end applyOpLocal
+
+    /** Merges a serialized `Style` declaration string ("prop:val;prop:val") onto getElementById(id) with setProperty
+      * per declaration, so it merges over other inline props rather than clobbering them (unlike a full `style=""`
+      * replace). Blank declarations and those without a `:` are skipped.
+      */
+    private def mergeStyleDomById(id: String, css: String): Unit =
+        val el = document.getElementById(id)
+        if el != null then
+            val style = el.asInstanceOf[dom.HTMLElement].style
+            css.split(';').foreach { decl =>
+                val trimmed = decl.trim
+                if trimmed.nonEmpty then
+                    val colon = trimmed.indexOf(':')
+                    if colon > 0 then
+                        style.setProperty(trimmed.substring(0, colon).trim, trimmed.substring(colon + 1).trim)
+                end if
+            }
+        end if
+    end mergeStyleDomById
+
+    /** Attaches a single handler to `window` scroll (capture) + resize that re-measures getElementById(id) and
+      * bridges the deliver back into the drain via [[fireFromJs]]. Guards against double-registration for the same id.
+      */
+    private def registerViewportObserver(id: String, session: LocalSession)(using Frame): Unit =
+        if !session.viewportObservers.contains(id) then
+            val handler: js.Function1[dom.Event, Unit] = (_: dom.Event) =>
+                measureDomById(id) match
+                    case Present(rect) => session.events.foreach(ev => fireFromJs(ev, session.commands.deliverMeasureById(id, rect)))
+                    case Absent        => ()
+            session.viewportObservers(id) = handler
+            dom.window.addEventListener("scroll", handler, true)
+            dom.window.addEventListener("resize", handler)
+        end if
+    end registerViewportObserver
+
+    /** Removes the scroll/resize handler registered for `id` (from both listeners) and drops the map entry. */
+    private def unregisterViewportObserver(id: String, session: LocalSession): Unit =
+        if session.viewportObservers.contains(id) then
+            val handler = session.viewportObservers(id)
+            dom.window.removeEventListener("scroll", handler, true)
+            dom.window.removeEventListener("resize", handler)
+            discard(session.viewportObservers.remove(id))
+        end if
+    end unregisterViewportObserver
 
     /** Exchange that renders UI to HTML and applies directly to the DOM. */
     private class LocalExchange(regions: DomReactiveRegions, diagnostics: MountDiagnostics, attachments: Attachments)
@@ -450,6 +580,49 @@ private[kyo] object DomBackend:
                     }
             }
         end onChange
+
+        // Each channel patches in place. Unlike the id-addressed channels it does NOT mark the attribute owned: the
+        // render writes a path channel's value into the HTML, so a morph that repaints the element carries the value
+        // the channel stands for, and the observer the repaint starts is seeded with that value. Owning it instead
+        // kept the morph from ever reconciling the attribute again, so an element repainted with a different value
+        // (a list row whose item changed) kept the one the first patch wrote.
+        override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
+            Sync.defer {
+                val el = queryByPath(path)
+                if el != null then
+                    el.setAttribute(name, value)
+                    syncFieldProperty(el, name, value)
+                end if
+            }
+
+        override def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async =
+            Sync.defer {
+                val el = queryByPath(path)
+                if el != null then
+                    if value then el.setAttribute(name, "") else el.removeAttribute(name)
+            }
+
+        // Toggle in place (so CSS transitions fire) rather than re-render.
+        override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
+            Sync.defer {
+                val el = queryByPath(path)
+                if el != null then
+                    discard(el.classList.toggle(name, on))
+            }
+
+        // The inline-style channel: drop what the previous value had and this one lacks, then set this one's declarations,
+        // property by property, so the element's other inline properties stay as they are.
+        override def onStylePatch(path: Seq[String], set: Seq[(String, String)], removed: Seq[String])(using
+            Frame
+        ): Unit < Async =
+            Sync.defer {
+                val el = queryByPath(path)
+                if el != null then
+                    val style = el.asInstanceOf[dom.HTMLElement].style
+                    removed.foreach(n => discard(style.removeProperty(n)))
+                    set.foreach((n, v) => style.setProperty(n, v))
+                end if
+            }
 
         private def prepareRangePatch(oldElements: Seq[dom.Element], newElements: Seq[dom.Element]): RangePatchState =
             val active = Maybe(document.activeElement).filter(el => (el ne document.body) && containsAny(oldElements, el))

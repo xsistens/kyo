@@ -23,20 +23,6 @@ import kyo.*
   */
 class ReactiveUITeardownTest extends kyo.test.Test[Any]:
 
-    // A no-op exchange: the teardown/cascade proof does not depend on rendered output, only on subscription liveness.
-    private val stubExchange: UIExchange =
-        new UIExchange:
-            def onChange(
-                region: ReactiveRegion,
-                path: Seq[String],
-                context: ReactiveRegion.RegionIdentity,
-                parentContext: ReactiveRegion.ParentContext,
-                previous: Maybe[UI],
-                ui: UI
-            )(using
-                Frame
-            ): Unit < Async = ()
-
     "bound element replacement does not recursively subscribe to itself" in {
         for
             ref           <- Signal.initRef("")
@@ -101,7 +87,8 @@ class ReactiveUITeardownTest extends kyo.test.Test[Any]:
             fiber <- Clock.withTimeControl { _ =>
                 Fiber.init(Scope.run {
                     for
-                        root <- ReactiveUI.normalize(ref.map(UI.span(_)), Seq.empty)
+                        // Nothing painted this tree, so the first emission reaches the exchange.
+                        root <- ReactiveUI.normalize(ref.map(UI.span(_)), Seq.empty).map(ReactiveUI.unpainted)
                         _    <- ReactiveUI.subscribe(root, exchange)
                         _    <- Async.never
                     yield ()
@@ -128,7 +115,7 @@ class ReactiveUITeardownTest extends kyo.test.Test[Any]:
             fiber <- Fiber.initUnscoped(Scope.run {
                 for
                     root <- ReactiveUI.normalize(tree, Seq.empty)
-                    _    <- ReactiveUI.subscribe(root, stubExchange)
+                    _    <- ReactiveUI.subscribe(root, UIExchange.noop)
                     _    <- Async.never
                 yield ()
             })
@@ -196,7 +183,7 @@ class ReactiveUITeardownTest extends kyo.test.Test[Any]:
                 Scope.run {
                     for
                         root <- ReactiveUI.normalize(ref.map(UI.span(_)), Seq.empty)
-                        _    <- ReactiveUI.subscribe(root, stubExchange)
+                        _    <- ReactiveUI.subscribe(root, UIExchange.noop)
                     yield ()
                 }.andThen(closed.set(true)),
                 Async.sleep(1.second)
@@ -218,8 +205,9 @@ class ReactiveUITeardownTest extends kyo.test.Test[Any]:
             )
             fiber <- Fiber.initUnscoped(Scope.run {
                 for
-                    _    <- Scope.ensure(closed.completeUnitDiscard)
-                    root <- ReactiveUI.normalize(ref.map(UI.span(_)), Seq.empty)
+                    _ <- Scope.ensure(closed.completeUnitDiscard)
+                    // Nothing painted this tree, so the first emission is the change that blocks.
+                    root <- ReactiveUI.normalize(ref.map(UI.span(_)), Seq.empty).map(ReactiveUI.unpainted)
                     _    <- ReactiveUI.subscribe(root, exchange)
                     _    <- Async.never
                 yield ()
@@ -299,7 +287,7 @@ class ReactiveUITeardownTest extends kyo.test.Test[Any]:
                 for
                     _    <- Scope.acquireRelease(live.incrementAndGet)(_ => live.decrementAndGet.unit)
                     root <- ReactiveUI.normalize(tree, Seq.empty)
-                    _    <- ReactiveUI.subscribe(root, stubExchange)
+                    _    <- ReactiveUI.subscribe(root, UIExchange.noop)
                     _    <- assertEventually(ref1.waiters.map(_ == 1))
                     _    <- assertEventually(ref2.waiters.map(_ == 1))
                     _    <- assertEventually(ref3.waiters.map(_ == 1))
@@ -338,7 +326,7 @@ class ReactiveUITeardownTest extends kyo.test.Test[Any]:
                 for
                     _    <- Scope.acquireRelease(live.incrementAndGet)(_ => live.decrementAndGet.unit)
                     root <- ReactiveUI.normalize(tree, Seq.empty)
-                    _    <- ReactiveUI.subscribe(root, stubExchange)
+                    _    <- ReactiveUI.subscribe(root, UIExchange.noop)
                     _    <- assertEventually(childRef.waiters.map(_ == 1))
                     _    <- Async.never
                 yield ()
@@ -381,7 +369,7 @@ class ReactiveUITeardownTest extends kyo.test.Test[Any]:
                 for
                     _    <- Scope.acquireRelease(live.incrementAndGet)(_ => live.decrementAndGet.unit)
                     root <- ReactiveUI.normalize(tree, Seq.empty)
-                    _    <- ReactiveUI.subscribe(root, stubExchange)
+                    _    <- ReactiveUI.subscribe(root, UIExchange.noop)
                     _    <- assertEventually(grandRef.waiters.map(_ == 1))
                     _    <- Async.never
                 yield ()

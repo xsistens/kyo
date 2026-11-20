@@ -364,7 +364,7 @@ A plain `Fiber.init` still runs on the node's `Scope`, but its failure does not 
 
 A mount effect runs before what it returns is on the page: the content shows once the effect has published it. Two things follow from that, and kyo-ui takes care of both.
 
-A command a mount sends about an element (`focusId`, `scrollIntoViewId`, `requestMeasureById`), from its effect or a fiber the effect forked, goes out once the mount's own content is on the page, behind the paints that put it there. A mount can therefore focus the field it just built. If that content never shows, because the region switched away first, the command is dropped, and a measure waiting for it answers `Absent`. A measure the effect itself waits for before it yields goes out at once, since it can only be about something already on the page, and so does a command from an event handler.
+A command a mount sends about an element (`focusId`, `scrollIntoViewId`, `requestMeasureById`, the `bind*ById` channels, `observeViewportById`), from its effect or a fiber the effect forked, goes out once the mount's own content is on the page, behind the paints that put it there. A mount can therefore focus the field it just built. If that content never shows, because the region switched away first, the command is dropped, and a measure waiting for it answers `Absent`. A measure the effect itself waits for before it yields goes out at once, since it can only be about something already on the page, and so does a command from an event handler.
 
 ```scala
 import UI.*
@@ -481,6 +481,8 @@ When to use which setter:
 - `.value(v: String)` / `.checked(v: Boolean)`: a constant initial value, no binding. Use when the field is read-only or fully controlled by `onChange`.
 - `.value(ref: SignalRef[A])` / `.checked(ref: SignalRef[Boolean])`: two-way binding. Use for any field whose value participates in app state.
 - `.checked(sig: Signal[Boolean])` on `BooleanInput`: read-only reactive binding. The element re-renders when `sig` changes; user clicks do NOT mutate `sig` (you have to wire `onChange` yourself). This returns `UI`, not `Self`.
+
+What a re-render shows: a field shows what the reader did to it until the app renders something else. A render that changes a checkbox's or radio's `checked` or an option's `selected` writes it to the control, so a "Clear" that empties a selection unticks every box the reader ticked. A render that leaves that state as it was leaves the control alone, which keeps the reader's tick on a box the app does not bind. A field bound with `.value` (a text field, a textarea, a select) shows the bound value on every render, except a focused text field or textarea, which keeps its caret.
 
 ### Signup form: the running example
 

@@ -21,4 +21,33 @@ private[kyo] trait UIExchange:
         previous: Maybe[UI],
         ui: UI
     )(using Frame): Unit < Async
+
+    /** Declarative reactive-channel patch: update the attribute/class on the element at `path` IN PLACE (no
+      * content replace). Defaulted to a no-op so exchanges without in-place patching (plain-HTML render) need
+      * not override.
+      */
+    def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async      = Kyo.unit
+    def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async = Kyo.unit
+    def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async       = Kyo.unit
+
+    /** The inline-style channel's patch: set the declarations in `set` on the element at `path` and remove the properties in
+      * `removed` (the ones the previous value had and this one lacks), in place.
+      */
+    def onStylePatch(path: Seq[String], set: Seq[(String, String)], removed: Seq[String])(using Frame): Unit < Async = Kyo.unit
+end UIExchange
+
+private[kyo] object UIExchange:
+
+    /** An exchange that takes every change and paints nothing: what runs a tree for its effects alone (its mounts, its
+      * handlers, the signals they feed), where no page is there to paint.
+      */
+    val noop: UIExchange = new UIExchange:
+        def onChange(
+            region: ReactiveRegion,
+            path: Seq[String],
+            contentContext: ReactiveRegion.RegionIdentity,
+            parentContext: ReactiveRegion.ParentContext,
+            previous: Maybe[UI],
+            ui: UI
+        )(using Frame): Unit < Async = Kyo.unit
 end UIExchange

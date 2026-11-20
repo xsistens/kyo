@@ -931,4 +931,59 @@ class HtmlRendererTest extends UITest:
         }
     }
 
+    "a client-side marker set to false is unset, and a later false takes an earlier true back" in {
+        val off: Seq[SpanElement => SpanElement] = Seq(
+            _.focusAuto(false),
+            _.focusRestore(false),
+            _.focusTrap(false),
+            _.stopPropagation(false)
+        )
+        val takenBack: Seq[SpanElement => SpanElement] = Seq(
+            _.focusAuto(true).focusAuto(false),
+            _.focusRestore(true).focusRestore(false),
+            _.focusTrap(true).focusTrap(false),
+            _.stopPropagation(true).stopPropagation(false)
+        )
+        val plain = UI.span("a")
+        for
+            offHtml  <- kyo.internal.HtmlRenderer.render(UI.div(off.map(f => f(plain): UI)*), Seq.empty)
+            backHtml <- kyo.internal.HtmlRenderer.render(UI.div(takenBack.map(f => f(plain): UI)*), Seq.empty)
+        yield
+            val attrs = (off ++ takenBack).map(f => f(plain).attrs)
+            assert(
+                attrs.forall(a => a.focusAuto.isEmpty && a.focusRestore.isEmpty && a.focusTrap.isEmpty && a.stopPropagation.isEmpty),
+                s"$attrs"
+            )
+            val markers = Seq("data-kyo-focus-auto", "data-kyo-focus-restore", "data-kyo-focus-trap")
+            assert(!markers.exists(m => offHtml.contains(m) || backHtml.contains(m)), s"$offHtml | $backHtml")
+        end for
+    }
+
+    "where a channel holds an attribute, the static value of the same name is not written, in either setter order" in {
+        // The PRECEDENCE rule above Element.withReactiveAttr: the channel is the value. Written beside it, the static value is a
+        // second attribute of the same name, and the browser's parser keeps the first one, so the page shows the static value
+        // until the channel's first patch.
+        def render(ui: UI)(using Frame): String < Sync = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
+        def count(html: String, attr: String): Int     = html.split(s" $attr=", -1).length - 1
+        def held(html: String, attr: String): Boolean  = count(html, attr) == 1 && html.contains(s""" $attr="b"""")
+        for
+            ref <- Signal.initRef("b")
+            sig = ref: Signal[String]
+            input1 <- render(UI.input.placeholder("a").placeholder(sig))
+            input2 <- render(UI.input.placeholder(sig).placeholder("a"))
+            area   <- render(UI.textarea.placeholder("a").placeholder(sig))
+            aria1  <- render(UI.span("x").aria("label", "a").aria("label", sig))
+            aria2  <- render(UI.span("x").aria("label", sig).aria("label", "a"))
+            frame  <- render(UI.iframe("/f").title("a").title(sig))
+            data1  <- render(UI.span("x").data("k", "a").withReactiveAttr("data-k", sig))
+            data2  <- render(UI.span("x").withReactiveAttr("data-k", sig).data("k", "a"))
+        yield
+            assert(held(input1, "placeholder") && held(input2, "placeholder"), s"$input1 | $input2")
+            assert(held(area, "placeholder"), area)
+            assert(held(aria1, "aria-label") && held(aria2, "aria-label"), s"$aria1 | $aria2")
+            assert(held(frame, "title"), frame)
+            assert(held(data1, "data-k") && held(data2, "data-k"), s"$data1 | $data2")
+        end for
+    }
+
 end HtmlRendererTest

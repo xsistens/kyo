@@ -253,15 +253,37 @@ private[kyo] object HtmlRenderer:
                 val tag  = tagName(elem)
                 val void = elem.isInstanceOf[Void]
                 renderBoundElementBoundary(sb, elem, context, namespace, parentContext, boundaryMode) {
-                    w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}"""")
-                    renderCommonAttrs(sb, elem, cssRules)
-                    renderEventAttr(sb, elem)
-                    // Which element value this is: the browser mount starts the onAttached hook again for a rebuilt
-                    // element, and leaves the content of one shown again unchanged, which the hook may own, alone.
-                    if elem.attrs.onAttached.nonEmpty then
-                        discard(sb.append(" data-kyo-attach=\"")
-                            .append(Integer.toHexString(java.lang.System.identityHashCode(elem))).append('"'))
-                    for _ <- renderElementAttrs(sb, elem)
+                    // Reactive classes currently true, folded into the class list so SSR is correct. Empty when
+                    // none are bound, so the `class` attribute is byte-identical there.
+                    def openTag(extraClasses: Seq[String], channelStyle: Seq[(String, String)]): Unit =
+                        w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}"""")
+                        renderCommonAttrs(
+                            sb,
+                            if extraClasses.isEmpty then elem.attrs
+                            else elem.attrs.copy(cssClasses = elem.attrs.cssClasses ++ extraClasses),
+                            elem.isInstanceOf[Svg.SvgElement],
+                            cssRules,
+                            channelStyle
+                        )
+                        renderEventAttr(sb, elem)
+                        // Which element value this is: the browser mount starts the onAttached hook again for a rebuilt
+                        // element, and leaves the content of one shown again unchanged, which the hook may own, alone.
+                        if elem.attrs.onAttached.nonEmpty then
+                            discard(sb.append(" data-kyo-attach=\"")
+                                .append(Integer.toHexString(java.lang.System.identityHashCode(elem))).append('"'))
+                    end openTag
+                    // Reading a reactive class is an effect, so only an element that binds one suspends before its
+                    // tag is written. Every other element keeps the open tag on the eager path, which is what makes
+                    // an attribute the renderer rejects (an oversized drag config, say) fail where the render is
+                    // built rather than where it is later run.
+                    val opened: Unit < Sync =
+                        if elem.attrs.reactiveClasses.isEmpty && elem.attrs.reactiveStyle.isEmpty then openTag(Seq.empty, Nil)
+                        else reactiveTrueClasses(elem.attrs).map(classes => reactiveStyleNow(elem.attrs).map(openTag(classes, _)))
+                    for
+                        _ <- opened
+                        _ <- renderElementAttrs(sb, elem)
+                        _ <- renderReactiveAttrs(sb, elem.attrs)
+                        _ <- renderReactiveBoolAttrs(sb, elem.attrs)
                     yield
                         if void then
                             w(sb, " />")
@@ -455,17 +477,18 @@ private[kyo] object HtmlRenderer:
         Frame
     ): Unit < Sync =
         val baseId = dd.attrs.identifier.getOrElse("")
-        // Read current selected value for initial highlight
-        val currentValueEffect: Unit < Sync = dd.value match
-            case Present(Bound.Ref(ref)) =>
-                ref.get.map { currentVal =>
-                    renderDropdownWithValue(sb, dd, path, baseId, currentVal, cssRules)
-                }
-            case Present(Bound.Const(s)) =>
-                renderDropdownWithValue(sb, dd, path, baseId, s, cssRules)
-            case _ =>
-                renderDropdownWithValue(sb, dd, path, baseId, "", cssRules)
-        currentValueEffect
+        reactiveStyleNow(dd.attrs).map { ddStyle =>
+            // Read current selected value for initial highlight
+            dd.value match
+                case Present(Bound.Ref(ref)) =>
+                    ref.get.map { currentVal =>
+                        renderDropdownWithValue(sb, dd, path, baseId, currentVal, cssRules, ddStyle)
+                    }
+                case Present(Bound.Const(s)) =>
+                    renderDropdownWithValue(sb, dd, path, baseId, s, cssRules, ddStyle)
+                case _ =>
+                    renderDropdownWithValue(sb, dd, path, baseId, "", cssRules, ddStyle)
+        }
     end renderDropdown
 
     private def renderDropdownWithValue(
@@ -474,7 +497,8 @@ private[kyo] object HtmlRenderer:
         path: Seq[String],
         baseId: String,
         currentVal: String,
-        cssRules: Maybe[CssCollector]
+        cssRules: Maybe[CssCollector],
+        channelStyle: Seq[(String, String)] = Nil
     )(using
         Frame
     ): Unit =
@@ -485,12 +509,8 @@ private[kyo] object HtmlRenderer:
         val hidAttr     = if dd.attrs.hidden.getOrElse(false) then " hidden" else ""
         val tabAttr     = dd.attrs.tabIndex.map(n => s""" tabindex="$n"""").getOrElse("")
         val pseudoClass = registerPseudoClass(cssRules, dd.attrs.uiStyle)
-        // A generated pseudoClass already carries the base props in its own rule (see
-        // registerPseudoClass); rendering them inline too would shadow the pseudo-state override.
-        val styleStr = if pseudoClass.nonEmpty then ""
-        else
-            val styleAttr = CssStyleRenderer.render(dd.attrs.uiStyle)
-            if styleAttr.nonEmpty then s""" style="${esc(styleAttr)}"""" else ""
+        val styleAttr   = inlineCss(dd.attrs.uiStyle, pseudoClass.nonEmpty, channelStyle)
+        val styleStr    = if styleAttr.nonEmpty then s""" style="${esc(styleAttr)}"""" else ""
         // The dropdown wrapper carries its cssClasses (the same `.cssClass(...)` hook every other
         // element honors), plus the generated pseudoClass when present, so callers can style the
         // trigger container via a class selector.
@@ -615,14 +635,26 @@ private[kyo] object HtmlRenderer:
         }
 
     private def renderCommonAttrs(sb: StringBuilder, elem: Element, cssRules: Maybe[CssCollector] = Absent)(using Frame): Unit =
-        val attrs = elem.attrs
+        renderCommonAttrs(sb, elem.attrs, elem.isInstanceOf[Svg.SvgElement], cssRules, Nil)
+
+    /** The `attrs` overload lets a caller render an element with a MODIFIED attribute set (the reactive
+      * classes currently true are folded into the class list) without rebuilding the element itself.
+      */
+    private def renderCommonAttrs(
+        sb: StringBuilder,
+        attrs: Attrs,
+        isSvg: Boolean,
+        cssRules: Maybe[CssCollector],
+        channelStyle: Seq[(String, String)]
+    )(using Frame): Unit =
         attrs.identifier.foreach(id => w(sb, s""" id="${esc(id)}""""))
         val pseudoClass = registerPseudoClass(cssRules, attrs.uiStyle)
         val classes     = pseudoClass match
             case Present(cls) => attrs.cssClasses :+ cls
             case Absent       => attrs.cssClasses
         if classes.nonEmpty then w(sb, s""" class="${esc(classes.mkString(" "))}"""")
-        attrs.hidden.foreach(v => if v then w(sb, " hidden"))
+        // Skipped when a `.hidden(Signal)` channel owns the attribute; see renderElementAttrs on precedence.
+        if !attrs.reactiveBoolAttrs.contains("hidden") then attrs.hidden.foreach(v => if v then w(sb, " hidden"))
         attrs.tabIndex.foreach(n => w(sb, s""" tabindex="$n""""))
         attrs.focusTrap.foreach(v => if v then w(sb, """ data-kyo-focus-trap="1""""))
         attrs.focusGroup.foreach(id => w(sb, s""" data-kyo-focus-group="${esc(id)}""""))
@@ -632,7 +664,7 @@ private[kyo] object HtmlRenderer:
             w(sb, s""" data-kyo-drag-source="${esc(encodedDragSource(source))}"""")
             w(sb, s""" data-kyo-drag-source-key="${esc(source.key)}"""")
             val nativeActivation = source.activation == Drag.Activation.Native || source.activation == Drag.Activation.Both
-            if nativeActivation && !elem.isInstanceOf[Svg.SvgElement] then w(sb, """ draggable="true"""")
+            if nativeActivation && !isSvg then w(sb, """ draggable="true"""")
         }
         attrs.dropTarget.foreach { target =>
             w(sb, s""" data-kyo-drop-target="${esc(encodedDropTarget(target))}"""")
@@ -648,22 +680,28 @@ private[kyo] object HtmlRenderer:
         // enter/leave transition class lists (read client-side by the patch-application code).
         attrs.enterTransition.foreach(c => w(sb, s""" data-kyo-enter="${esc(c)}""""))
         attrs.leaveTransition.foreach(c => w(sb, s""" data-kyo-leave="${esc(c)}""""))
-        // A generated pseudoClass already carries the base props in its own rule (see
-        // registerPseudoClass); rendering them inline too would shadow the pseudo-state override.
-        if pseudoClass.isEmpty then
-            val css = CssStyleRenderer.render(attrs.uiStyle)
-            if css.nonEmpty then w(sb, s""" style="${esc(css)}"""")
+        val css = inlineCss(attrs.uiStyle, pseudoClass.nonEmpty, channelStyle)
+        if css.nonEmpty then w(sb, s""" style="${esc(css)}"""")
+        // A static value is left out where a channel of the same name is bound: the channel is the value (see
+        // renderElementAttrs on precedence). The name is only built when the element has a channel at all.
+        val channelled = attrs.reactiveAttrs.nonEmpty
         attrs.ariaAttrs.toSeq.sortBy(_._1).foreach { case (name, value) =>
-            w(sb, s""" aria-$name="${esc(value)}"""")
+            if !channelled || !ownsAttr(attrs, s"aria-$name") then w(sb, s""" aria-$name="${esc(value)}"""")
         }
-        attrs.role.foreach(r => w(sb, s""" role="${esc(r)}""""))
+        attrs.role.foreach(r => if !channelled || !ownsAttr(attrs, "role") then w(sb, s""" role="${esc(r)}""""))
         attrs.dataAttrs.toSeq.sortBy(_._1).foreach { case (name, value) =>
-            w(sb, s""" data-$name="${esc(value)}"""")
+            if !channelled || !ownsAttr(attrs, s"data-$name") then w(sb, s""" data-$name="${esc(value)}"""")
         }
+        // A property of the same name as a channel's attribute (`title`) would be assigned after every paint and so
+        // overwrite what the channel wrote.
         attrs.jsProps.toSeq.sortBy(_._1).foreach { case (name, value) =>
-            w(sb, s""" data-kyo-prop-$name="${esc(value)}"""")
+            if !channelled || !ownsAttr(attrs, name) then w(sb, s""" data-kyo-prop-$name="${esc(value)}"""")
         }
     end renderCommonAttrs
+
+    /** Whether an attribute channel writes `name`, so that the static value of that name is not written. */
+    private def ownsAttr(attrs: Attrs, name: String): Boolean =
+        attrs.reactiveAttrs.contains(name)
 
     private def encodedDragSource(source: Drag.Source)(using Frame): String =
         DragProtocol.encodedSourceConfig(source, DragProtocol.Limits.default) match
@@ -687,7 +725,64 @@ private[kyo] object HtmlRenderer:
         ci.inputMask.foreach(m => w(sb, s""" data-kyo-mask="${esc(m)}""""))
     end renderInputConstraints
 
+    /** Emits each reactive attribute's current value as an ordinary `name="value"` so SSR carries it; the client
+      * then patches it in place (HtmlOp.SetAttrByPath). Sorted for deterministic output.
+      */
+    private def renderReactiveAttrs(sb: StringBuilder, attrs: Attrs)(using Frame): Unit < Sync =
+        Kyo.foreachDiscard(attrs.reactiveAttrs.toSeq.sortBy(_._1)) { case (name, sig) =>
+            sig.current.map(v => w(sb, s""" $name="${esc(v)}""""))
+        }
+
+    /** Emits each reactive boolean attribute as a bare present attribute while its signal is true (mirrors
+      * `boolAttr`); the client toggles it in place (HtmlOp.SetBoolAttrByPath). Sorted for deterministic output.
+      */
+    private def renderReactiveBoolAttrs(sb: StringBuilder, attrs: Attrs)(using Frame): Unit < Sync =
+        Kyo.foreachDiscard(attrs.reactiveBoolAttrs.toSeq.sortBy(_._1)) { case (name, sig) =>
+            sig.current.map(v => if v then w(sb, s" $name"))
+        }
+
+    /** The inline-style channel's current declarations, for writing inline at render; the client patches them in place
+      * afterwards (HtmlOp.SetStyleByPath). Empty when no channel is bound.
+      */
+    private def reactiveStyleNow(attrs: Attrs)(using Frame): Seq[(String, String)] < Sync =
+        attrs.reactiveStyle match
+            case Present(sig) => sig.current.map(CssStyleRenderer.declarations)
+            case Absent       => Nil
+
+    /** The element's `style` attribute: its static declarations, then the channel's, which win where both name a
+      * property. A generated pseudo-state class already carries the static base props in its own rule (see
+      * registerPseudoClass), and rendering them inline too would shadow the pseudo-state override, so there only the
+      * channel's declarations are inline.
+      */
+    private def inlineCss(static: Style, pseudo: Boolean, channel: Seq[(String, String)]): String =
+        val base = if pseudo then "" else CssStyleRenderer.render(static)
+        if channel.isEmpty then base
+        else
+            val own = channel.map((n, v) => s"$n: $v;").mkString(" ")
+            if base.isEmpty then own else s"$base $own"
+        end if
+    end inlineCss
+
+    /** The reactive classes whose signal is currently true, for folding into the SSR class list; the client
+      * toggles them in place afterwards (HtmlOp.SetClassByPath). Empty (and cheap) when none are bound.
+      */
+    private def reactiveTrueClasses(attrs: Attrs)(using Frame): Seq[String] < Sync =
+        if attrs.reactiveClasses.isEmpty then Seq.empty
+        else
+            Kyo.foreach(attrs.reactiveClasses.toSeq.sortBy(_._1)) { case (name, sig) =>
+                sig.current.map(v => if v then name else "")
+            }.map(_.filter(_.nonEmpty))
+
     private def renderElementAttrs(sb: StringBuilder, elem: Element)(using Frame): Unit < Sync =
+        // WHERE A CHANNEL EXISTS, THE CHANNEL IS THE VALUE. Shadows the file-level `boolAttr` for the whole
+        // method, so a static value is dropped for any name a `Signal`-typed setter also bound. This is not a
+        // preference: it is what the client already does at runtime: the channel patches its attribute on
+        // every emission and REMOVES it on false, whatever the initial HTML said. Writing both here would
+        // paint an attribute the first patch then contradicts, and would leave `.disabled(true).disabled(sig)`
+        // meaning something different from `.disabled(sig).disabled(true)`.
+        def boolAttr(sb: StringBuilder, name: String, value: Maybe[Boolean]): Unit =
+            if !elem.attrs.reactiveBoolAttrs.contains(name) then HtmlRenderer.boolAttr(sb, name, value)
+        def owned(name: String): Boolean = ownsAttr(elem.attrs, name)
         elem match
             case ci: ConstrainedInput => renderInputConstraints(sb, ci)
             case _                    => ()
@@ -712,48 +807,48 @@ private[kyo] object HtmlRenderer:
                 renderValueAttr(sb, i.value, i.inputMask)
                     .andThen {
                         boolAttr(sb, "disabled", i.disabled); boolAttr(sb, "readonly", i.readOnly);
-                        i.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
+                        if !owned("placeholder") then i.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
                     }
             case p: PasswordInput =>
                 w(sb, " type=\"password\"");
                 renderValueAttr(sb, p.value, p.inputMask)
                     .andThen {
                         boolAttr(sb, "disabled", p.disabled); boolAttr(sb, "readonly", p.readOnly);
-                        p.placeholder.foreach(p2 => w(sb, s""" placeholder="${esc(p2)}""""))
+                        if !owned("placeholder") then p.placeholder.foreach(p2 => w(sb, s""" placeholder="${esc(p2)}""""))
                     }
             case e: EmailInput =>
                 w(sb, " type=\"email\"");
                 renderValueAttr(sb, e.value, e.inputMask)
                     .andThen {
                         boolAttr(sb, "disabled", e.disabled); boolAttr(sb, "readonly", e.readOnly);
-                        e.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
+                        if !owned("placeholder") then e.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
                     }
             case t: TelInput =>
                 w(sb, " type=\"tel\"");
                 renderValueAttr(sb, t.value, t.inputMask)
                     .andThen {
                         boolAttr(sb, "disabled", t.disabled); boolAttr(sb, "readonly", t.readOnly);
-                        t.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
+                        if !owned("placeholder") then t.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
                     }
             case u: UrlInput =>
                 w(sb, " type=\"url\"");
                 renderValueAttr(sb, u.value, u.inputMask)
                     .andThen {
                         boolAttr(sb, "disabled", u.disabled); boolAttr(sb, "readonly", u.readOnly);
-                        u.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
+                        if !owned("placeholder") then u.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
                     }
             case s: SearchInput =>
                 w(sb, " type=\"search\"");
                 renderValueAttr(sb, s.value, s.inputMask)
                     .andThen {
                         boolAttr(sb, "disabled", s.disabled); boolAttr(sb, "readonly", s.readOnly);
-                        s.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
+                        if !owned("placeholder") then s.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
                     }
             case n: NumberInput =>
                 w(sb, " type=\"number\"")
                 renderValueAttr(sb, n.value).andThen {
                     boolAttr(sb, "disabled", n.disabled); boolAttr(sb, "readonly", n.readOnly)
-                    n.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
+                    if !owned("placeholder") then n.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
                     n.min.foreach(v => w(sb, s""" min="${fmtD(v)}""""))
                     n.max.foreach(v => w(sb, s""" max="${fmtD(v)}""""))
                     n.step.foreach(v => w(sb, s""" step="${fmtD(v)}""""))
@@ -801,7 +896,7 @@ private[kyo] object HtmlRenderer:
             case ta: Textarea =>
                 boolAttr(sb, "disabled", ta.disabled)
                 boolAttr(sb, "readonly", ta.readOnly)
-                ta.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
+                if !owned("placeholder") then ta.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
             case sel: Select =>
                 boolAttr(sb, "disabled", sel.disabled)
                 // A select has no `value` attribute in HTML: the browser ignores it and shows the first option. The
@@ -827,14 +922,7 @@ private[kyo] object HtmlRenderer:
                 opt.value.foreach(v => w(sb, s""" value="${esc(v)}""""))
                 boolAttr(sb, "selected", opt.selected)
             case a: Anchor =>
-                a.href.foreach { href =>
-                    val value = href match
-                        case Href.Absolute(url)       => url.full
-                        case Href.Path(p)             => p
-                        case Href.Fragment(id)        => s"#$id"
-                        case Href.External(scheme, v) => s"$scheme:$v"
-                    w(sb, s""" href="${esc(value)}"""")
-                }
+                if !owned("href") then a.href.foreach(href => w(sb, s""" href="${esc(Href.attrValue(href))}""""))
                 a.download.foreach(name => w(sb, s""" download="${esc(name)}""""))
                 a.target.foreach { t =>
                     val tv = t match
@@ -845,17 +933,11 @@ private[kyo] object HtmlRenderer:
                     w(sb, s""" target="$tv"""")
                 }
             case img: Img =>
-                img.src.foreach { src =>
-                    val value = src match
-                        case ImgSrc.Absolute(url)       => url.full
-                        case ImgSrc.Path(p)             => p
-                        case ImgSrc.Data(mime, payload) => s"data:$mime;base64,$payload"
-                    w(sb, s""" src="${esc(value)}"""")
-                }
-                img.alt.foreach(a => w(sb, s""" alt="${esc(a)}""""))
+                if !owned("src") then img.src.foreach(src => w(sb, s""" src="${esc(ImgSrc.attrValue(src))}""""))
+                if !owned("alt") then img.alt.foreach(a => w(sb, s""" alt="${esc(a)}""""))
             case f: Iframe =>
-                f.src.foreach(s => w(sb, s""" src="${esc(s)}""""))
-                f.frameTitle.foreach(t => w(sb, s""" title="${esc(t)}""""))
+                if !owned("src") then f.src.foreach(s => w(sb, s""" src="${esc(s)}""""))
+                if !owned("title") then f.frameTitle.foreach(t => w(sb, s""" title="${esc(t)}""""))
             case td: Td =>
                 td.colspan.foreach(n => w(sb, s""" colspan="$n""""))
                 td.rowspan.foreach(n => w(sb, s""" rowspan="$n""""))
@@ -1308,6 +1390,10 @@ private[kyo] object HtmlRenderer:
            |  if(name==="value"&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&el.value!==value)el.value=value;
            |  else if(name==="value"&&el.tagName==="SELECT"&&el.value!==value)el.value=value;
            |}
+           |// Mark an attr name as owned by the imperative id-addressed channel: names live in a __kyoOwn expando dict
+           |// ON the element (reclaimed with the node), which __kyoMorphAttrs reads to shield each owned attr from
+           |// reconciliation. Mirrors markOwned in DomBackend.
+           |function __kyoMark(el,n){(el.__kyoOwn||(el.__kyoOwn={}))[n]=true;}
            |${DragClientJs.script(basePath)}
            |var ws=null,__wsRetries=0,__wsGone=false,__live=false,__liveWaiters=[];
            |// Read-only test hook on the current socket; it follows each reconnect.
@@ -1441,12 +1527,49 @@ private[kyo] object HtmlRenderer:
            |      var rmir=rmiel.getBoundingClientRect();
            |      post({MeasureById:{path:[],id:op.RequestMeasureById.id,rectX:rmir.left,rectY:rmir.top,rectW:rmir.width,rectH:rmir.height,viewportW:window.innerWidth,viewportH:window.innerHeight}});
            |    }else post({MeasureMissing:{path:[],id:op.RequestMeasureById.id}});
+           |  }else if(op.SetClassById){
+           |    var scel=document.getElementById(op.SetClassById.id);if(scel){__kyoMark(scel,"class");scel.classList.toggle(op.SetClassById.className,op.SetClassById.on);}
+           |  }else if(op.SetStyleById){
+           |    var ssel=document.getElementById(op.SetStyleById.id);
+           |    if(ssel){__kyoMark(ssel,"style");var ssd=op.SetStyleById.css.split(";");for(var ssi=0;ssi<ssd.length;ssi++){var ssc=ssd[ssi].trim();if(!ssc)continue;var sso=ssc.indexOf(":");if(sso>0)ssel.style.setProperty(ssc.substring(0,sso).trim(),ssc.substring(sso+1).trim());}}
+           |  }else if(op.SetAttrById){
+           |    // set an attribute in place (element stays put, so a CSS `>` anchored on it keeps matching).
+           |    var sael=document.getElementById(op.SetAttrById.id);if(sael){__kyoMark(sael,op.SetAttrById.name);sael.setAttribute(op.SetAttrById.name,op.SetAttrById.value);__kyoSyncField(sael,op.SetAttrById.name,op.SetAttrById.value);}
+           |  }else if(op.SetAttrByPath){
+           |    // Regions carry no element of their own (comment markers), so the path resolves uniquely to the content element.
+           |    var sapp=op.SetAttrByPath.path.join(".");var sapel=document.querySelector(__kyoPathSel(sapp));if(sapel){sapel.setAttribute(op.SetAttrByPath.name,op.SetAttrByPath.value);__kyoSyncField(sapel,op.SetAttrByPath.name,op.SetAttrByPath.value);}
+           |  }else if(op.SetBoolAttrByPath){
+           |    var sbpp=op.SetBoolAttrByPath.path.join(".");var sbpel=document.querySelector(__kyoPathSel(sbpp));if(sbpel){if(op.SetBoolAttrByPath.value){sbpel.setAttribute(op.SetBoolAttrByPath.name,'');}else{sbpel.removeAttribute(op.SetBoolAttrByPath.name);}}
+           |  }else if(op.SetClassByPath){
+           |    // Path-addressed reactive class: toggle in place so CSS transitions fire. Not owned: the render carries its value.
+           |    var scpp=op.SetClassByPath.path.join(".");var scpel=document.querySelector(__kyoPathSel(scpp));if(scpel){scpel.classList.toggle(op.SetClassByPath.name,op.SetClassByPath.on);}
+           |  }else if(op.SetStyleByPath){
+           |    // Path-addressed inline style: drop what the previous value had and this one lacks, set the rest. Not owned: the render carries it.
+           |    var sspp=op.SetStyleByPath.path.join(".");var sspel=document.querySelector(__kyoPathSel(sspp));if(sspel){var ssr=op.SetStyleByPath.removed||[];for(var ssri=0;ssri<ssr.length;ssri++)sspel.style.removeProperty(ssr[ssri]);var sss=op.SetStyleByPath.set||[];for(var sssi=0;sssi<sss.length;sssi++)sspel.style.setProperty(sss[sssi].name,sss[sssi].value);}
+           |  }else if(op.ObserveViewportById){
+           |    var vid=op.ObserveViewportById.id;
+           |    window.__kyoVpObs=window.__kyoVpObs||{};
+           |    if(!window.__kyoVpObs[vid]){
+           |      var vh=function(){var ve=document.getElementById(vid);if(ve){var vr=ve.getBoundingClientRect();post({MeasureById:{path:[],id:vid,rectX:vr.left,rectY:vr.top,rectW:vr.width,rectH:vr.height,viewportW:window.innerWidth,viewportH:window.innerHeight}});}};
+           |      window.__kyoVpObs[vid]=vh;
+           |      window.addEventListener("scroll",vh,true);
+           |      window.addEventListener("resize",vh);
+           |      vh();
+           |    }
+           |  }else if(op.UnobserveViewportById){
+           |    var uid=op.UnobserveViewportById.id;
+           |    if(window.__kyoVpObs&&window.__kyoVpObs[uid]){
+           |      var uh=window.__kyoVpObs[uid];
+           |      window.removeEventListener("scroll",uh,true);
+           |      window.removeEventListener("resize",uh);
+           |      delete window.__kyoVpObs[uid];
+           |    }
            |  }
            |};
            |// Verb whitelist for CommandById; unknown verbs ignored (forward-compat).
            |function kyoApplyVerb(el,verb){
            |  if(!el)return;
-           |  if(verb==="focus"){if(typeof el.focus==="function")el.focus();}
+           |  if(verb==="focus"){var fs='input,textarea,select,button,a[href],[tabindex],[contenteditable]';var ft=(el.matches&&el.matches(fs))?el:(el.querySelector?el.querySelector(fs):null);if(ft&&typeof ft.focus==="function")ft.focus();}
            |  else if(verb==="scrollIntoView"){if(typeof el.scrollIntoView==="function")el.scrollIntoView({block:"nearest"});}
            |}
            |// A reactive range's id encodes its own path (ReactiveRegion.htmlId: 8 hex digits of segment length,
