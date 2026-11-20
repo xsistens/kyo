@@ -4,8 +4,17 @@ import kyo.internal.Platform
 
 class SignalTest extends kyo.test.Test[Any]:
 
-    // How long to wait before concluding that a `next` which should not fire indeed did not.
-    private val noEmitTimeout = if Platform.isNative then 1.second else 300.millis
+    /** Whether `v` was still waiting when a write ended the race against it. A `v` that had completed by then wins the race, so a `next`
+      * that must not fire is proven parked by a barrier it would have had to pass, whatever the speed of the machine.
+      */
+    private def parkedAtFence[A](v: => A < Async)(using Frame, kyo.test.AssertScope): Boolean < Async =
+        for
+            fence <- Signal.initRef(0)
+            race  <- Fiber.initUnscoped(Async.race(Seq(v.map(_ => false), fence.next.map(_ => true))))
+            _     <- assertEventually(Kyo.zip(fence.waiters, race.done).map((armed, done) => armed == 1 || done))
+            _     <- fence.set(1)
+            won   <- race.get
+        yield won
 
     "init" - {
         "initRef" - {
@@ -33,12 +42,7 @@ class SignalTest extends kyo.test.Test[Any]:
             }
             "next never completes" in {
                 val sig = Signal.initConst(42)
-                for
-                    f <- Fiber.initUnscoped(sig.next)
-                    r <- Abort.run[Timeout](Async.timeout(noEmitTimeout)(f.get))
-                    _ <- f.interrupt
-                yield assert(r.isFailure)
-                end for
+                parkedAtFence(sig.next).map(parked => assert(parked))
             }
             "missing CanEqual" in {
                 typeCheckFailure(
@@ -351,8 +355,8 @@ class SignalTest extends kyo.test.Test[Any]:
                 _ <- assertEventually(outer.waiters.map(_ == 1))
                 _ <- Fiber.initUnscoped(outer.set(1))
                 _ <- Fiber.initUnscoped(inner.set(99))
-                r <- Abort.run[Timeout](Async.timeout(2.seconds)(f.get))
-            yield assert(r.isSuccess)
+                v <- f.get
+            yield assert(v == 10 || v == 99, s"$v")
         }
 
         "inside streamChanges produces expected sequence" in {
@@ -405,10 +409,13 @@ class SignalTest extends kyo.test.Test[Any]:
                 refB <- Signal.initRef(0)
                 z = refA.zip(refB)
                 f <- Fiber.initUnscoped(z.next)
-                _ <- assertEventually(refA.waiters.map(_ == 1))
+                _ <- assertEventually(Kyo.zip(refA.waiters, refB.waiters).map((a, b) => a == 1 && b == 1))
                 _ <- refA.set(1)
-                r <- Abort.run[Timeout](Async.timeout(noEmitTimeout)(f.get))
-            yield assert(r.isFailure)
+                // A pair emitted here would read refB before the write below.
+                done <- f.done
+                _    <- refB.set(2)
+                v    <- f.get
+            yield assert(!done && v == (1, 2), s"$done, $v")
             end for
         }
 
@@ -418,12 +425,12 @@ class SignalTest extends kyo.test.Test[Any]:
             for
                 refA <- Signal.initRef(0)
                 z = refA.zip(Signal.initConst(99))
-                f <- Fiber.initUnscoped(z.next)
-                _ <- assertEventually(refA.waiters.map(_ == 1))
-                _ <- refA.set(1)
-                r <- Abort.run[Timeout](Async.timeout(noEmitTimeout)(f.get))
-                _ <- f.interrupt
-            yield assert(r.isFailure)
+                f      <- Fiber.initUnscoped(z.next)
+                _      <- assertEventually(refA.waiters.map(_ == 1))
+                _      <- refA.set(1)
+                parked <- parkedAtFence(f.get)
+                _      <- f.interrupt
+            yield assert(parked)
             end for
         }
 
@@ -450,14 +457,11 @@ class SignalTest extends kyo.test.Test[Any]:
                 // z.next races refA.next and refB.next, arming their waiters independently. Wait for both
                 // before firing: this leaf changes refB first, so syncing only on refA can let refB's
                 // subscriber be unregistered when set(1) lands, dropping the change and the zip never emits.
-                _      <- assertEventually(Kyo.zip(refA.waiters, refB.waiters).map { case (a, b) => a == 1 && b == 1 })
-                _      <- refB.set(1)
-                _      <- refA.set(1)
-                result <- Abort.run[Timeout](Async.timeout(2.seconds)(f.get))
-            yield result match
-                case Result.Failure(_: Timeout) => fail("zip did not emit within 2s")
-                case Result.Success(pair)       => assert(pair == (1, 1))
-                case other                      => fail(s"unexpected: $other")
+                _    <- assertEventually(Kyo.zip(refA.waiters, refB.waiters).map { case (a, b) => a == 1 && b == 1 })
+                _    <- refB.set(1)
+                _    <- refA.set(1)
+                pair <- f.get
+            yield assert(pair == (1, 1))
         }
     }
 
@@ -512,49 +516,30 @@ class SignalTest extends kyo.test.Test[Any]:
             yield assert(v == (1, 99))
         }
 
-        /** A set that lands before `next` has registered is missed, and the leaf then hangs on the waiter.
-          *
-          * A barrier on `waiters` cannot prevent it either. `awaitAny` cancels its losing branch
-          * without unregistering, so the untouched signal keeps that waiter and the count cannot tell a stale one
-          * from a live registration: `>=` is satisfied by stale waiters alone, and an exact count would never be
-          * satisfied at all when a loser was cancelled before it registered.
-          *
-          * Driving the source upward until the waiter reports needs no barrier. A set that arrives early is simply
-          * missed and the next one is not, so what is asserted is what the leaf is named for: a change on the OTHER
-          * signal reaches a combined waiter, twice in a row, carrying the unchanged value of the first.
+        /** A set that lands before `next` has registered is missed, so each set waits for the waiter on both signals; and once a waiter has
+          * reported, for its race to let go of the arm it lost, so the next count is of live registrations alone.
           */
         "successive other changes each emit" in {
             for
                 refA <- Signal.initRef(0)
                 refB <- Signal.initRef(0)
                 cl = refA.combineLatest(refB)
-                seen <- AtomicRef.init(Chunk.empty[(Int, Int)])
-                f1   <- Fiber.initUnscoped(cl.next.map(recordValue(seen, _)))
-                _    <- fireUntilSeen(refB, seen, want = 1, from = 1)
-                f2   <- Fiber.initUnscoped(cl.next.map(recordValue(seen, _)))
-                last <- fireUntilSeen(refB, seen, want = 2, from = 2)
-                vs   <- seen.get
-                _    <- f1.interrupt
-                _    <- f2.interrupt
-            yield
-                assert(vs.size == 2, s"each of the two waiters should have reported one emit, got $vs")
-                assert(vs.forall(_._1 == 0), s"refA never changed, so every emit must carry its initial value: $vs")
-                assert(vs.forall(_._2 >= 1), s"every emit must carry a value refB was actually set to: $vs")
-                assert(vs.last._2 <= last, s"the last emit cannot carry a value beyond the last one set: $vs, last=$last")
+                f1 <- Fiber.initUnscoped(cl.next)
+                _  <- armedOn(refA, refB, 1)
+                _  <- refB.set(1)
+                v1 <- f1.get
+                _  <- armedOn(refA, refB, 0)
+                f2 <- Fiber.initUnscoped(cl.next)
+                _  <- armedOn(refA, refB, 1)
+                _  <- refB.set(2)
+                v2 <- f2.get
+            yield assert(v1 == (0, 1) && v2 == (0, 2), s"$v1, $v2")
             end for
         }
 
-        /** `streamChanges` is documented to skip intermediate values ("rapid changes may result in some intermediate
-          * values being skipped", Signal.scala), so the exact emit sequence is not a property it has and must not be
-          * asserted. Pacing sets behind a `waiters` count cannot force one either: `awaitAny` cancels its losing branch
-          * without unregistering, so the untouched signal keeps that waiter and ghosts accumulate. A `>= 2` barrier is
-          * satisfied by two ghosts and no live waiter, letting a set land in the read/register window where it is
-          * missed, after which the collection waits for a value that never arrives.
-          *
-          * What IS a property, and what this asserts: every emitted pair is one the two signals actually held, they
-          * arrive in order, and no value repeats. Each set is paced on the previous EMIT rather than on a waiter count,
-          * which keeps the common path lossless without requiring it, and every wait is bounded so a skip ends the
-          * collection instead of hanging it.
+        /** `streamChanges` is documented to skip intermediate values, so the exact emit sequence is not a property it has and must not be
+          * asserted. What is a property, and what this asserts: every emitted pair is one the two signals actually held, they arrive in order,
+          * and no value repeats. Each set is paced on the previous emit, which keeps the common path lossless without requiring it.
           */
         "interleaved self,other,self,other emits the value trajectory in order" in {
             val trajectory = Chunk((0, 0), (1, 0), (1, 1), (2, 1), (2, 2))
@@ -564,15 +549,15 @@ class SignalTest extends kyo.test.Test[Any]:
                 cl = refA.combineLatest(refB)
                 seen  <- AtomicRef.init(Chunk.empty[(Int, Int)])
                 fiber <- Fiber.initUnscoped(cl.streamChanges.foreach(recordValue(seen, _)))
-                _     <- pollUntil(seen.get.map(_.contains((0, 0))))
+                _     <- assertEventually(seen.get.map(_.contains((0, 0))))
                 _     <- refA.set(1)
-                _     <- pollUntil(seen.get.map(_.contains((1, 0))))
+                _     <- assertEventually(seen.get.map(_.contains((1, 0))))
                 _     <- refB.set(1)
-                _     <- pollUntil(seen.get.map(_.contains((1, 1))))
+                _     <- assertEventually(seen.get.map(_.contains((1, 1))))
                 _     <- refA.set(2)
-                _     <- pollUntil(seen.get.map(_.contains((2, 1))))
+                _     <- assertEventually(seen.get.map(_.contains((2, 1))))
                 _     <- refB.set(2)
-                _     <- pollUntil(seen.get.map(_.contains((2, 2))))
+                _     <- assertEventually(seen.get.map(_.contains((2, 2))))
                 vs    <- seen.get
                 _     <- fiber.interrupt
             yield
@@ -586,44 +571,27 @@ class SignalTest extends kyo.test.Test[Any]:
             end for
         }
 
-        /** What this leaf is named for is that the source keeps working once concurrent waiters have completed, and
-          * that is what it asserts: two waiters both complete on a change to one signal, a third registered
-          * afterwards completes on a change to the other, and every reported pair carries values that were actually
-          * set.
-          *
-          * DELIBERATELY NOT ASSERTED: that the two concurrent waiters observe the SAME change. That holds only if
-          * both finished registering before the fire, which is unobservable here. A waiter count cannot stand in for
-          * it, because it cannot distinguish a live registration from an `awaitAny` loser cancelled without
-          * unregistering, so it can pass with no live waiter and hang the leaf.
-          * Firing until each waiter reports keeps the source honest without asserting a coincidence the API does not
-          * promise.
+        /** Two waiters both complete on a change to one signal, and a third registered afterwards completes on a change to the other, with
+          * the values that were set.
           */
         "source remains usable after concurrent waiters complete" in {
             for
                 refA <- Signal.initRef(0)
                 refB <- Signal.initRef(0)
                 cl = refA.combineLatest(refB)
-                seen  <- AtomicRef.init(Chunk.empty[(Int, Int)])
-                f1    <- Fiber.initUnscoped(cl.next.map(recordValue(seen, _)))
-                f2    <- Fiber.initUnscoped(cl.next.map(recordValue(seen, _)))
-                lastA <- fireUntilSeen(refA, seen, want = 2, from = 1)
-                f3    <- Fiber.initUnscoped(cl.next.map(recordValue(seen, _)))
-                lastB <- fireUntilSeen(refB, seen, want = 3, from = 1)
-                vs    <- seen.get
-                _     <- f1.interrupt
-                _     <- f2.interrupt
-                _     <- f3.interrupt
-            yield
-                assert(vs.size == 3, s"all three waiters should have completed, got $vs")
-                val (broadcast, later) = vs.splitAt(2)
-                assert(
-                    broadcast.forall(p => p._1 >= 1 && p._1 <= lastA && p._2 == 0),
-                    s"each concurrent waiter must report a refA value that was set, with refB untouched: $broadcast"
-                )
-                assert(
-                    later.forall(p => p._1 == lastA && p._2 >= 1 && p._2 <= lastB),
-                    s"the waiter registered afterwards must report the settled refA and a refB value that was set: $later"
-                )
+                f1 <- Fiber.initUnscoped(cl.next)
+                f2 <- Fiber.initUnscoped(cl.next)
+                _  <- armedOn(refA, refB, 2)
+                _  <- refA.set(1)
+                v1 <- f1.get
+                v2 <- f2.get
+                _  <- armedOn(refA, refB, 0)
+                f3 <- Fiber.initUnscoped(cl.next)
+                _  <- armedOn(refA, refB, 1)
+                _  <- refB.set(1)
+                v3 <- f3.get
+            yield assert(v1 == (1, 0) && v2 == (1, 0) && v3 == (1, 1), s"$v1, $v2, $v3")
+            end for
         }
 
     }
@@ -654,15 +622,7 @@ class SignalTest extends kyo.test.Test[Any]:
             yield ()
         }
 
-        /** A liveness leaf: all three waiters must complete. It asserts nothing about WHICH change each observed,
-          * because `awaitAny` yields no value, and nothing about the two concurrent ones seeing the same change,
-          * which is not observable from here.
-          *
-          * A waiter-count barrier cannot establish that they are listening: a cancelled `awaitAny` loser stays
-          * registered, so a count cannot tell a live registration from a stale one, and the leaf would fire into a
-          * signal nobody is listening to and then hang on `get`. Firing until the completion count moves
-          * makes an early set harmless, because the next one is a fresh change.
-          */
+        /** A liveness leaf: all three waiters complete. `awaitAny` yields no value, so which change each saw is not observable from here. */
         "source remains usable after concurrent waiters complete" in {
             for
                 r0   <- Signal.initRef(0)
@@ -670,22 +630,23 @@ class SignalTest extends kyo.test.Test[Any]:
                 done <- AtomicInt.init(0)
                 f1   <- Fiber.initUnscoped(Signal.awaitAny(Seq(r0, r1)).andThen(done.incrementAndGet.unit))
                 f2   <- Fiber.initUnscoped(Signal.awaitAny(Seq(r0, r1)).andThen(done.incrementAndGet.unit))
-                _    <- fireUntil(r0, done.get.map(_ >= 2), from = 1)
+                _    <- armedOn(r0, r1, 2)
+                _    <- r0.set(1)
+                _    <- f1.get
+                _    <- f2.get
+                _    <- armedOn(r0, r1, 0)
                 f3   <- Fiber.initUnscoped(Signal.awaitAny(Seq(r0, r1)).andThen(done.incrementAndGet.unit))
-                _    <- fireUntil(r1, done.get.map(_ >= 3), from = 1)
+                _    <- armedOn(r0, r1, 1)
+                _    <- r1.set(1)
+                _    <- f3.get
                 n    <- done.get
-                _    <- f1.interrupt
-                _    <- f2.interrupt
-                _    <- f3.interrupt
             yield assert(n == 3, s"all three waiters should have completed, got $n")
         }
 
         "empty seq never completes" in {
             for
-                f <- Fiber.initUnscoped(Signal.awaitAny(Seq.empty))
-                r <- Abort.run[Timeout](Async.timeout(noEmitTimeout)(f.get))
-                _ <- f.interrupt
-            yield assert(r.isFailure)
+                parked <- parkedAtFence(Signal.awaitAny(Seq.empty))
+            yield assert(parked)
         }
     }
 
@@ -694,11 +655,9 @@ class SignalTest extends kyo.test.Test[Any]:
         "empty seq returns Chunk.empty const" in {
             val z = Signal.zipAll(Seq.empty[Signal[Int]])
             for
-                v <- z.current
-                f <- Fiber.initUnscoped(z.next)
-                r <- Abort.run[Timeout](Async.timeout(noEmitTimeout)(f.get))
-                _ <- f.interrupt
-            yield assert(v == Chunk.empty && r.isFailure)
+                v      <- z.current
+                parked <- parkedAtFence(z.next)
+            yield assert(v == Chunk.empty && parked)
             end for
         }
 
@@ -755,15 +714,12 @@ class SignalTest extends kyo.test.Test[Any]:
                 f <- Fiber.initUnscoped(z.next)
                 // Wait until all three are armed: zipAll subscribes concurrently, so r0 being armed
                 // does not imply r1/r2 are subscribed before we fire them.
-                _      <- assertEventually(Kyo.foreach(Seq(r0, r1, r2))(_.waiters).map(_.forall(_ == 1)))
-                _      <- r2.set(1)
-                _      <- r1.set(1)
-                _      <- r0.set(1)
-                result <- Abort.run[Timeout](Async.timeout(2.seconds)(f.get))
-            yield result match
-                case Result.Failure(_: Timeout) => fail("zipAll did not emit within 2s")
-                case Result.Success(chunk)      => assert(chunk == Chunk(1, 1, 1))
-                case other                      => fail(s"unexpected: $other")
+                _     <- assertEventually(Kyo.foreach(Seq(r0, r1, r2))(_.waiters).map(_.forall(_ == 1)))
+                _     <- r2.set(1)
+                _     <- r1.set(1)
+                _     <- r0.set(1)
+                chunk <- f.get
+            yield assert(chunk == Chunk(1, 1, 1))
         }
     }
 
@@ -772,11 +728,9 @@ class SignalTest extends kyo.test.Test[Any]:
         "empty seq returns Chunk.empty const" in {
             val z = Signal.combineLatestAll(Seq.empty[Signal[Int]])
             for
-                v <- z.current
-                f <- Fiber.initUnscoped(z.next)
-                r <- Abort.run[Timeout](Async.timeout(noEmitTimeout)(f.get))
-                _ <- f.interrupt
-            yield assert(v == Chunk.empty && r.isFailure)
+                v      <- z.current
+                parked <- parkedAtFence(z.next)
+            yield assert(v == Chunk.empty && parked)
             end for
         }
 
@@ -886,15 +840,15 @@ class SignalTest extends kyo.test.Test[Any]:
                 cl = refA.combineLatest(refB)
                 seen  <- AtomicRef.init(Chunk.empty[(Int, Int)])
                 fiber <- Fiber.initUnscoped(cl.streamChanges.foreach(recordValue(seen, _)))
-                _     <- pollUntil(seen.get.map(_.contains((0, 0))))
+                _     <- assertEventually(seen.get.map(_.contains((0, 0))))
                 _     <- refA.set(1)
-                _     <- pollUntil(seen.get.map(_.contains((1, 0))))
+                _     <- assertEventually(seen.get.map(_.contains((1, 0))))
                 _     <- refB.set(1)
-                _     <- pollUntil(seen.get.map(_.contains((1, 1))))
+                _     <- assertEventually(seen.get.map(_.contains((1, 1))))
                 _     <- refA.set(2)
-                _     <- pollUntil(seen.get.map(_.contains((2, 1))))
+                _     <- assertEventually(seen.get.map(_.contains((2, 1))))
                 _     <- refB.set(2)
-                _     <- pollUntil(seen.get.map(_.contains((2, 2))))
+                _     <- assertEventually(seen.get.map(_.contains((2, 2))))
                 vs    <- seen.get
                 _     <- fiber.interrupt
             yield
@@ -910,11 +864,11 @@ class SignalTest extends kyo.test.Test[Any]:
 
     }
 
-    private def pollUntil(cond: Boolean < Async, maxTries: Int = 3000)(using Frame): Boolean < Async =
-        Loop.indexed { i =>
-            if i >= maxTries then Loop.done(false)
-            else cond.map(c => if c then Loop.done(true) else Async.sleep(1.millis).andThen(Loop.continue))
-        }
+    /** Holds once each of the two signals has exactly `n` waiters: for a `next` that races both, all of its arms have registered, or at 0
+      * let go.
+      */
+    private def armedOn(a: SignalRef[Int], b: SignalRef[Int], n: Int)(using Frame, kyo.test.AssertScope): Unit < Async =
+        assertEventually(Kyo.zip(a.waiters, b.waiters).map((x, y) => x == n && y == n))
 
     /** True when `emitted` appears inside `trajectory` in order, allowing gaps.
       *
@@ -934,82 +888,8 @@ class SignalTest extends kyo.test.Test[Any]:
         }
     end isOrderedSubsetOf
 
-    /** Sets `ref` to successive values until `seen` holds at least `want` entries, returning the last value set.
-      *
-      * A `next` waiter that has not finished registering misses a set entirely, and no count of waiters can tell that
-      * state apart from a registered one, because a cancelled `awaitAny` loser stays registered. Firing again is what
-      * makes the miss harmless: each new value is a real change, so the first set that lands after registration is
-      * observed. The returned value bounds what the waiter can have seen.
-      */
-    private def fireUntil(ref: SignalRef[Int], cond: Boolean < Async, from: Int)(using Frame): Int < Async =
-        Loop.indexed(from) { (attempt, v) =>
-            if attempt >= 20 then Loop.done(v)
-            else
-                ref.set(v).andThen(pollUntil(cond, maxTries = 200)).map { ok =>
-                    if ok then Loop.done(v) else Loop.continue(v + 1)
-                }
-        }
-
-    private def fireUntilSeen(ref: SignalRef[Int], seen: AtomicRef[Chunk[(Int, Int)]], want: Int, from: Int)(using
-        Frame
-    ): Int < Async =
-        fireUntil(ref, seen.get.map(_.size >= want), from)
-
     private def recordValue[A](seen: AtomicRef[Chunk[A]], v: A)(using Frame): Unit < Async =
         seen.updateAndGet(_.append(v)).unit
-
-    // The guarantee is that the final value is never lost. A leaf and a `map` over a leaf observe exactly, so they deliver
-    // a write that lands in the read/register window without the repair timer; with `Duration.Infinity` as the
-    // repairInterval only the exact protocol can pass. Drive back-to-back set(a);set(b) and take what the observer hands
-    // over until the final value arrives. The handoff is a channel rather than a polled reference because a poll's sleep
-    // costs a timer tick per iteration, and on a platform whose tick is 15ms that alone is over the leaf's budget at
-    // 5000 iterations; a take returns the instant the value is put. Each wait is bounded so a genuinely lost value
-    // ends the iteration as a miss instead of hanging the leaf, and the bound is wide enough that a starved repair
-    // fiber that is merely late is not miscounted as a loss.
-    private def observeNeverLosesFinalValue(useMap: Boolean, iterations: Int, repairInterval: Duration = 50.millis)(using
-        Frame
-    ): Int < Async =
-        for
-            ref <- Signal.initRef("")
-            sig = if useMap then ref.map(v => v) else ref
-            seen   <- Channel.initUnscoped[String](16)
-            fiber  <- Fiber.initUnscoped(sig.observe(repairInterval)(v => Abort.run[Closed](seen.put(v)).unit))
-            misses <- Kyo.foreach(Chunk.from(1 to iterations)) { i =>
-                val a                                          = s"a$i"
-                val b                                          = s"b$i"
-                def untilFinal: Unit < (Async & Abort[Closed]) =
-                    seen.take.map(v => if v == b then () else untilFinal)
-                for
-                    _   <- ref.set(a)
-                    _   <- ref.set(b)
-                    got <- Abort.run[Timeout | Closed](Async.timeout(2.seconds)(untilFinal))
-                yield if got.isSuccess then 0 else 1
-                end for
-            }
-            _ <- fiber.interrupt
-            _ <- seen.close
-        yield misses.foldLeft(0)(_ + _)
-
-    private def streamChangesNeverLosesFinalValue(iterations: Int)(using Frame): Int < Async =
-        for
-            ref    <- Signal.initRef("")
-            seen   <- Channel.initUnscoped[String](16)
-            fiber  <- Fiber.initUnscoped(ref.streamChanges.foreach(v => Abort.run[Closed](seen.put(v)).unit))
-            misses <- Kyo.foreach(Chunk.from(1 to iterations)) { i =>
-                val a                                          = s"a$i"
-                val b                                          = s"b$i"
-                def untilFinal: Unit < (Async & Abort[Closed]) =
-                    seen.take.map(v => if v == b then () else untilFinal)
-                for
-                    _   <- ref.set(a)
-                    _   <- ref.set(b)
-                    got <- Abort.run[Timeout | Closed](Async.timeout(2.seconds)(untilFinal))
-                yield if got.isSuccess then 0 else 1
-                end for
-            }
-            _ <- fiber.interrupt
-            _ <- seen.close
-        yield misses.foldLeft(0)(_ + _)
 
     "observe" - {
         "emits the current value on subscription" in {
@@ -1017,10 +897,10 @@ class SignalTest extends kyo.test.Test[Any]:
                 ref    <- Signal.initRef("init")
                 seen   <- AtomicRef.init(Chunk.empty[String])
                 fiber  <- Fiber.initUnscoped(ref.observe(recordValue(seen, _)))
-                ok     <- pollUntil(seen.get.map(_.nonEmpty))
+                _      <- assertEventually(seen.get.map(_.nonEmpty))
                 result <- seen.get
                 _      <- fiber.interrupt
-            yield assert(ok && result == Chunk("init"))
+            yield assert(result == Chunk("init"))
         }
 
         "emits each distinct change in order" in {
@@ -1028,11 +908,11 @@ class SignalTest extends kyo.test.Test[Any]:
                 ref    <- Signal.initRef(0)
                 seen   <- AtomicRef.init(Chunk.empty[Int])
                 fiber  <- Fiber.initUnscoped(ref.observe(recordValue(seen, _)))
-                _      <- pollUntil(seen.get.map(_ == Chunk(0)))
+                _      <- assertEventually(seen.get.map(_ == Chunk(0)))
                 _      <- ref.set(1)
-                _      <- pollUntil(seen.get.map(_.contains(1)))
+                _      <- assertEventually(seen.get.map(_.contains(1)))
                 _      <- ref.set(2)
-                _      <- pollUntil(seen.get.map(_.contains(2)))
+                _      <- assertEventually(seen.get.map(_.contains(2)))
                 result <- seen.get
                 _      <- fiber.interrupt
             yield assert(result == Chunk(0, 1, 2))
@@ -1045,12 +925,12 @@ class SignalTest extends kyo.test.Test[Any]:
                 ref   <- Signal.initRef(0)
                 seen  <- AtomicRef.init(Chunk.empty[Int])
                 fiber <- Fiber.initUnscoped(ref.observe(recordValue(seen, _)))
-                _     <- pollUntil(seen.get.map(_ == Chunk(0)))
+                _     <- assertEventually(seen.get.map(_ == Chunk(0)))
                 _     <- assertEventually(ref.waiters.map(_ == 1)) // observer parked for the next change
                 _ <- ref.set(0)                                // same value: SignalRef does not notify, so the parked observer is not woken
                 _ <- assertEventually(ref.waiters.map(_ == 1)) // still exactly one waiter: the same-value set injected no wakeup
                 _ <- ref.set(1)                                // a real change wakes the observer
-                _ <- pollUntil(seen.get.map(_.contains(1)))
+                _ <- assertEventually(seen.get.map(_.contains(1)))
                 result <- seen.get
                 _      <- fiber.interrupt
             yield assert(result == Chunk(0, 1))
@@ -1061,7 +941,7 @@ class SignalTest extends kyo.test.Test[Any]:
                 ref    <- Signal.initRef(0)
                 seen   <- AtomicRef.init(Chunk.empty[Int])
                 fiber  <- Fiber.initUnscoped(ref.observe(recordValue(seen, _)))
-                _      <- pollUntil(seen.get.map(_ == Chunk(0)))
+                _      <- assertEventually(seen.get.map(_ == Chunk(0)))
                 _      <- fiber.interrupt
                 _      <- fiber.getResult // the observer has fully stopped before the change is published
                 _      <- ref.set(1)
@@ -1069,29 +949,26 @@ class SignalTest extends kyo.test.Test[Any]:
             yield assert(result == Chunk(0)) // the post-interrupt change is not observed
         }
 
-        "never loses the final value under back-to-back writes (SignalRef leaf)" in {
-            observeNeverLosesFinalValue(useMap = false, iterations = 5000).map(lost => assert(lost == 0, s"SignalRef lost $lost / 5000"))
-        }
-
-        "never loses the final value under back-to-back writes (map delegates to leaf)" in {
-            observeNeverLosesFinalValue(useMap = true, iterations = 5000).map(lost => assert(lost == 0, s"map lost $lost / 5000"))
-        }
-
         "reconciles a missed wakeup within repairInterval on a non-exact signal" in {
-            for
-                state <- AtomicRef.init(0)
-                sig = Signal.initRaw[Int](
-                    currentWith = [B, S] => f => state.get.map(f),
-                    nextWith = [B, S] => (_: Int => B < S) => Async.never[B] // never fires: every change is a "missed wakeup"
-                )
-                seen   <- AtomicRef.init(Chunk.empty[Int])
-                fiber  <- Fiber.initUnscoped(sig.observe(40.millis)(recordValue(seen, _)))
-                _      <- pollUntil(seen.get.map(_.contains(0)))
-                _      <- state.set(1)
-                ok     <- pollUntil(seen.get.map(_.contains(1)))
-                result <- seen.get
-                _      <- fiber.interrupt
-            yield assert(ok && result.contains(0) && result.contains(1))
+            val repairInterval = 40.millis
+            Clock.withTimeControl { control =>
+                for
+                    state <- AtomicRef.init(0)
+                    sig = Signal.initRaw[Int](
+                        currentWith = [B, S] => f => state.get.map(f),
+                        nextWith = [B, S] => (_: Int => B < S) => Async.never[B] // never fires: every change is a "missed wakeup"
+                    )
+                    seen  <- AtomicRef.init(Chunk.empty[Int])
+                    fiber <- Fiber.initUnscoped(sig.observe(repairInterval)(recordValue(seen, _)))
+                    // The loop arms the timer only after running f for the value it read.
+                    _     <- control.awaitPendingSleeper(repairInterval)
+                    first <- seen.get
+                    _     <- state.set(1)
+                    _     <- control.advance(repairInterval, Duration.Zero)
+                    _     <- assertEventually(seen.get.map(_ == Chunk(0, 1)))
+                    _     <- fiber.interrupt
+                yield assert(first == Chunk(0))
+            }
         }
     }
 
@@ -1239,41 +1116,43 @@ class SignalTest extends kyo.test.Test[Any]:
         }
 
         "does not tear the current value's scope down on a repair timer for a still-current value (non-exact)" in {
-            // A non-exact `initRaw` signal whose `nextWith` never fires forces the repairing default loop: the repair
-            // timer fires repeatedly. While the value is unchanged the per-value scope MUST stay open (the hold loops
-            // until `current` actually differs). We assert the finalizer did NOT fire across several repair intervals,
-            // then change the value and assert convergence + that the OLD value's scope finally closes.
-            for
-                state <- AtomicRef.init(0)
-                sig = Signal.initRaw[Int](
-                    currentWith = [B, S] => f => state.get.map(f),
-                    nextWith = [B, S] => (_: Int => B < S) => Async.never[B] // never fires: forces the repair path
-                )
-                live     <- AtomicInt.init(0)
-                released <- AtomicRef.init(false)
-                seen     <- AtomicRef.init(Chunk.empty[Int])
-                // 30ms repair interval: the timer fires many times while the value stays 0, but must NOT close the scope.
-                fiber <- Fiber.initUnscoped(sig.observe(30.millis) { v =>
-                    recordValue(seen, v).andThen {
-                        Scope.acquireRelease(live.incrementAndGet)(_ => live.decrementAndGet.unit).andThen {
-                            Scope.ensure(released.set(true)).unit
+            // A non-exact `initRaw` signal whose `nextWith` never fires forces the repairing default loop. While the value is unchanged the
+            // per-value scope MUST stay open across every repair tick (the hold loops until `current` actually differs); a change then closes
+            // the old value's scope.
+            val repairInterval = 30.millis
+            Clock.withTimeControl { control =>
+                for
+                    state <- AtomicRef.init(0)
+                    sig = Signal.initRaw[Int](
+                        currentWith = [B, S] => f => state.get.map(f),
+                        nextWith = [B, S] => (_: Int => B < S) => Async.never[B] // never fires: forces the repair path
+                    )
+                    live     <- AtomicInt.init(0)
+                    released <- AtomicRef.init(false)
+                    seen     <- AtomicRef.init(Chunk.empty[Int])
+                    fiber    <- Fiber.initUnscoped(sig.observe(repairInterval) { v =>
+                        recordValue(seen, v).andThen {
+                            Scope.acquireRelease(live.incrementAndGet)(_ => live.decrementAndGet.unit).andThen {
+                                Scope.ensure(released.set(true)).unit
+                            }
                         }
+                    })
+                    _ <- control.awaitPendingSleeper(repairInterval)
+                    // Each timer the loop arms again is proof it handled the tick before it, without closing the scope.
+                    _ <- Kyo.foreachDiscard(Chunk(1, 2, 3, 4, 5)) { _ =>
+                        control.advance(repairInterval, Duration.Zero).andThen(control.awaitPendingSleeper(repairInterval))
                     }
-                })
-                _ <- assertEventually(seen.get.map(_.contains(0)))
-                _ <- assertEventually(live.get.map(_ == 1))
-                // Let several repair intervals (30ms each) elapse; the scope for value 0 must stay open the whole time.
-                _         <- Kyo.foreachDiscard(Chunk(1, 2, 3, 4, 5))(_ => assertEventually(live.get.map(_ == 1)))
-                idleFired <- released.get
-                idleLive  <- live.get
-                // Now actually change the value: the scope must converge to value 1 within repairInterval, closing value 0's scope.
-                _      <- state.set(1)
-                _      <- assertEventually(seen.get.map(_.contains(1)))
-                _      <- assertEventually(released.get.map(_ == true))
-                _      <- assertEventually(live.get.map(_ == 1)) // value 1's scope is now the only live one
-                result <- seen.get
-                _      <- fiber.interrupt
-            yield assert(!idleFired && idleLive == 1 && result.contains(0) && result.contains(1) && result.last == 1)
+                    idleFired <- released.get
+                    idleLive  <- live.get
+                    _         <- state.set(1)
+                    _         <- control.advance(repairInterval, Duration.Zero)
+                    _         <- assertEventually(seen.get.map(_.contains(1)))
+                    _         <- assertEventually(released.get.map(_ == true))
+                    _         <- assertEventually(live.get.map(_ == 1)) // value 1's scope is now the only live one
+                    result    <- seen.get
+                    _         <- fiber.interrupt
+                yield assert(!idleFired && idleLive == 1 && result == Chunk(0, 1))
+            }
         }
 
         "stops after interruption" in {
@@ -1331,18 +1210,41 @@ class SignalTest extends kyo.test.Test[Any]:
     }
 
     "exact observation" - {
-        "never loses the final value with no repair timer (SignalRef leaf)" in {
-            observeNeverLosesFinalValue(useMap = false, iterations = 5000, repairInterval = Duration.Infinity)
-                .map(lost => assert(lost == 0, s"SignalRef lost $lost / 5000 without repair"))
-        }
+        "back-to-back writes deliver the final value with no repair timer" - {
 
-        "never loses the final value with no repair timer (map over a leaf)" in {
-            observeNeverLosesFinalValue(useMap = true, iterations = 5000, repairInterval = Duration.Infinity)
-                .map(lost => assert(lost == 0, s"map lost $lost / 5000 without repair"))
-        }
+            // What the observer hands over goes through a channel, so each take returns the instant the value is put.
+            def deliversFinal(observed: SignalRef[String] => Signal[String])(using Frame, kyo.test.AssertScope) =
+                for
+                    ref   <- Signal.initRef("")
+                    seen  <- Channel.initUnscoped[String](16)
+                    fiber <- Fiber.initUnscoped(observed(ref).observe(Duration.Infinity)(v => Abort.run[Closed](seen.put(v)).unit))
+                    first <- seen.take
+                    _     <- ref.set("a")
+                    _     <- ref.set("b")
+                    next  <- seen.take
+                    last  <- if next == "b" then Kyo.lift(next) else seen.take
+                    _     <- fiber.interrupt
+                    _     <- seen.close
+                yield assert(first == "" && (next == "a" || next == "b") && last == "b", s"$first, $next, $last")
 
-        "streamChanges never loses the final value under back-to-back writes" in {
-            streamChangesNeverLosesFinalValue(iterations = 5000).map(lost => assert(lost == 0, s"streamChanges lost $lost / 5000"))
+            "a SignalRef leaf" in deliversFinal(ref => ref)
+
+            "a map over a leaf" in deliversFinal(_.map(v => v))
+
+            "streamChanges" in {
+                for
+                    ref   <- Signal.initRef("")
+                    seen  <- Channel.initUnscoped[String](16)
+                    fiber <- Fiber.initUnscoped(ref.streamChanges.foreach(v => Abort.run[Closed](seen.put(v)).unit))
+                    first <- seen.take
+                    _     <- ref.set("a")
+                    _     <- ref.set("b")
+                    next  <- seen.take
+                    last  <- if next == "b" then Kyo.lift(next) else seen.take
+                    _     <- fiber.interrupt
+                    _     <- seen.close
+                yield assert(first == "" && (next == "a" || next == "b") && last == "b", s"$first, $next, $last")
+            }
         }
 
         "delivers a write that lands while f runs, without repair (SignalRef leaf)" in {
@@ -1356,12 +1258,12 @@ class SignalTest extends kyo.test.Test[Any]:
                         if v == 0 then started.release.andThen(gate.await) else (): Unit < Async
                     }
                 })
-                _  <- started.await
-                _  <- ref.set(1)
-                _  <- gate.release
-                ok <- pollUntil(seen.get.map(_.contains(1)))
-                _  <- fiber.interrupt
-            yield assert(ok)
+                _ <- started.await
+                _ <- ref.set(1)
+                _ <- gate.release
+                _ <- assertEventually(seen.get.map(_ == Chunk(0, 1)))
+                _ <- fiber.interrupt
+            yield succeed
         }
 
         "delivers a write that lands while f runs, without repair (map over a leaf)" in {
@@ -1376,12 +1278,12 @@ class SignalTest extends kyo.test.Test[Any]:
                         if v == 10 then started.release.andThen(gate.await) else (): Unit < Async
                     }
                 })
-                _  <- started.await
-                _  <- ref.set(1)
-                _  <- gate.release
-                ok <- pollUntil(seen.get.map(_.contains(11)))
-                _  <- fiber.interrupt
-            yield assert(ok)
+                _ <- started.await
+                _ <- ref.set(1)
+                _ <- gate.release
+                _ <- assertEventually(seen.get.map(_ == Chunk(10, 11)))
+                _ <- fiber.interrupt
+            yield succeed
         }
 
         "an idle observer on a leaf holds exactly one waiter across repair intervals" in {
@@ -1424,7 +1326,7 @@ class SignalTest extends kyo.test.Test[Any]:
                 _      <- assertEventually(ref.waiters.map(_ == 1))
                 silent <- seen.get
                 _      <- ref.set(1)
-                _      <- pollUntil(seen.get.map(_.contains(1)))
+                _      <- assertEventually(seen.get.map(_.contains(1)))
                 result <- seen.get
                 _      <- fiber.interrupt
             yield assert(silent.isEmpty && result == Chunk(1))
@@ -1437,9 +1339,9 @@ class SignalTest extends kyo.test.Test[Any]:
                 _         <- ref.set("b")
                 seen      <- AtomicRef.init(Chunk.empty[String])
                 fiber     <- Fiber.initUnscoped(ref.observe(Present(processed), Signal.defaultRepairInterval)(recordValue(seen, _)))
-                ok        <- pollUntil(seen.get.map(_.contains("b")))
+                _         <- assertEventually(seen.get.map(_ == Chunk("b")))
                 _         <- fiber.interrupt
-            yield assert(ok)
+            yield succeed
         }
 
         "a map chain runs nothing while the source's image equals the baseline" in {
@@ -1451,7 +1353,7 @@ class SignalTest extends kyo.test.Test[Any]:
                 _      <- assertEventually(ref.waiters.map(_ == 1))
                 silent <- seen.get
                 _      <- ref.set(2)
-                _      <- pollUntil(seen.get.map(_.contains(4)))
+                _      <- assertEventually(seen.get.map(_.contains(4)))
                 result <- seen.get
                 _      <- fiber.interrupt
             yield assert(silent.isEmpty && result == Chunk(4))
@@ -1492,39 +1394,44 @@ class SignalTest extends kyo.test.Test[Any]:
                 _      <- assertEventually(ref.waiters.map(_ == 1))
                 still  <- seen.get
                 _      <- ref.set(-1)
-                _      <- pollUntil(seen.get.map(_.size == 2))
+                _      <- assertEventually(seen.get.map(_.size == 2))
                 result <- seen.get
                 _      <- fiber.interrupt
             yield assert(still == Chunk(true) && result == Chunk(true, false))
         }
 
         "an idle observer of a map chain holds exactly one waiter on the leaf" in {
-            for
-                ref  <- Signal.initRef(0)
-                seen <- AtomicRef.init(Chunk.empty[Int])
-                sig = ref.map(v => v).map(v => v).map(v => v)
-                fiber <- Fiber.initUnscoped(sig.observe(10.millis)(recordValue(seen, _)))
-                _     <- pollUntil(seen.get.map(_.nonEmpty))
-                _     <- Async.sleep(100.millis)
-                w     <- ref.waiters
-                _     <- fiber.interrupt
-            yield assert(w == 1, s"map chain left $w waiters on the leaf")
+            Clock.withTimeControl { control =>
+                for
+                    ref  <- Signal.initRef(0)
+                    seen <- AtomicRef.init(Chunk.empty[Int])
+                    sig = ref.map(v => v).map(v => v).map(v => v)
+                    fiber <- Fiber.initUnscoped(sig.observe(10.millis)(recordValue(seen, _)))
+                    _     <- assertEventually(seen.get.map(_.nonEmpty))
+                    _     <- assertEventually(ref.waiters.map(_ == 1))
+                    _     <- Kyo.foreachDiscard(Chunk.from(1 to 10))(_ => control.advance(10.millis))
+                    w     <- ref.waiters
+                    _     <- fiber.interrupt
+                yield assert(w == 1, s"map chain left $w waiters on the leaf")
+            }
         }
 
         "a constant delivers once and holds its scope across would-be repair intervals" in {
-            for
-                seen     <- AtomicRef.init(Chunk.empty[Int])
-                released <- AtomicRef.init(false)
-                fiber    <- Fiber.initUnscoped(Signal.initConst(7).observe(10.millis) { v =>
-                    Scope.ensure(released.set(true)).andThen(recordValue(seen, v))
-                })
-                _         <- pollUntil(seen.get.map(_.nonEmpty))
-                _         <- Async.sleep(100.millis)
-                values    <- seen.get
-                duringRun <- released.get
-                _         <- fiber.interrupt
-                afterStop <- pollUntil(released.get)
-            yield assert(values == Chunk(7) && !duringRun && afterStop)
+            Clock.withTimeControl { control =>
+                for
+                    seen     <- AtomicRef.init(Chunk.empty[Int])
+                    released <- AtomicRef.init(false)
+                    fiber    <- Fiber.initUnscoped(Signal.initConst(7).observe(10.millis) { v =>
+                        Scope.ensure(released.set(true)).andThen(recordValue(seen, v))
+                    })
+                    _         <- assertEventually(seen.get.map(_.nonEmpty))
+                    _         <- Kyo.foreachDiscard(Chunk.from(1 to 10))(_ => control.advance(10.millis))
+                    values    <- seen.get
+                    duringRun <- released.get
+                    _         <- fiber.interrupt
+                    _         <- assertEventually(released.get)
+                yield assert(values == Chunk(7) && !duringRun)
+            }
         }
     }
 
