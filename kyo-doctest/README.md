@@ -58,6 +58,8 @@ lazy val myLib = project
 
 The default first looks for `README.md` in the project base directory, then falls back one directory up (so a cross-project JVM sub-directory such as `kyo-data/jvm/` resolves to `kyo-data/README.md`). If neither exists and `doctestSources` is left unset, the run fails with `Doctest.Error.NoSourcesConfigured`. A configured-but-missing source path, by contrast, fails with `Doctest.Error.SourceNotFound`.
 
+Only the JVM row of a cross project runs the task. `doctest` and `doctestFresh` fork a JVM, so on a `js/`, `wasm/`, or `native/` row the fork would be handed a classpath a JVM cannot load and would die inside the runner rather than report a result. Those rows refuse instead, naming the JVM row that validates the same Markdown. The aggregate `doctest` command skips them, so this only surfaces if you name such a row directly. Restricting an individual block to a compile target is a separate axis, the block-level `doctest:platform=` described below, and it runs from the JVM like everything else.
+
 `doctestScalacOptions` (`Seq[String]`, default: `Seq("-release", "17")`). Scalac options forwarded to the doctest compiler for every block. **This is NOT `scalacOptions.value`.** Warning flags, source-level upgrades (`-source:future`), custom compiler plugins, none of these are inherited from the project's main scalac options. If you want them in doctest, set them on this key too:
 
 ```text
