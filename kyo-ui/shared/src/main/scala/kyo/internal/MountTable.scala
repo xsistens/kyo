@@ -144,6 +144,7 @@ end RegionKeys
 final private[kyo] class MountInstance(
     val cell: SignalRef[MountState],
     val children: MountTableRef,
+    val supervision: MountSupervision,
     runner: Fiber[Unit, Any],
     scope: Scope.Finalizer
 ):
@@ -164,22 +165,25 @@ final private[kyo] class MountInstance(
             .andThen(children.evictAll)
             .andThen(scope.close(Absent))
             .andThen(scope.await)
+            .andThen(supervision.afterShown.drop)
 end MountInstance
 
 private[kyo] object MountInstance:
     def start(spec: MountedSpec, seed: Maybe[UI])(using Frame): MountInstance < Sync =
         for
-            cell   <- Signal.initRef[MountState](MountState.Pending(seed))
+            cell <- Signal.initRef[MountState](MountState.Pending(seed))
+            supervision = MountSupervision(spec, cell)
             scope  <- Scope.Finalizer.init(1)
-            runner <- Fiber.initUnscoped(runEffect(spec, cell, scope))
-        yield new MountInstance(cell, MountTableRef.init(), runner, scope)
+            runner <- Fiber.initUnscoped(runEffect(spec, supervision, scope))
+        yield new MountInstance(cell, MountTableRef.init(), supervision, runner, scope)
 
     /** Runs the effect with `scope` as its `Scope`, so what it acquires outlives this fiber, and publishes the outcome. */
-    private def runEffect(spec: MountedSpec, cell: SignalRef[MountState], scope: Scope.Finalizer)(using Frame): Unit < Async =
-        val supervision = MountSupervision(spec, cell)
-        val effect      = MountSupervision.local.let(Present(supervision))(spec.node.effect)
-        Abort.run[Throwable](ContextEffect.handleInheritable(Tag[Scope], scope)(effect)).map {
-            case Result.Success(ui) => cell.getAndUpdate(MountSupervision.publish(ui)).unit
+    private def runEffect(spec: MountedSpec, supervision: MountSupervision, scope: Scope.Finalizer)(using Frame): Unit < Async =
+        val effect = MountSupervision.local.let(Present(supervision))(spec.node.effect)
+        Abort.run[Throwable](ContextEffect.handleInheritable(Tag[Scope], scope)(effect)).map { result =>
+            supervision.afterShown.built.andThen(result)
+        }.map {
+            case Result.Success(ui) => supervision.publish(ui)
             case Result.Failure(t)  =>
                 Log.error(s"Mounted effect failed (frame=${spec.node.frame.position.show})", t)
                     .andThen(supervision.fail(t, UI.MountErrorSource.Effect))
@@ -200,6 +204,12 @@ final private[kyo] case class MountFiberFailure(value: Any)(using Frame)
   * failure does not overwrite it.
   */
 final private[kyo] class MountSupervision(spec: MountedSpec, cell: SignalRef[MountState]):
+
+    /** The commands the instance sent that wait for its content to be on the page. */
+    val afterShown = new AfterShown
+
+    /** The effect's content, unless a failure came first. */
+    def publish(ui: UI)(using Frame): Unit < Sync = cell.getAndUpdate(MountSupervision.publish(ui)).unit
 
     /** Completion callback of a [[kyo.UI.fork]] fiber: a terminal failure that is not an interrupt fails the node. */
     def report[E, A](result: Result[E, A])(using Frame): Unit < Sync =
@@ -601,6 +611,12 @@ private[kyo] object MountRegions:
                                 _ <- instance.children.beginWalk(kids, keys)
                                 _ <- subscribeWalked(kids, keys, instance.children, exchange, signalChangeTime, dispatch)
                             yield ()
+                    // The instance's own content is on the page now, and the regions inside it are subscribed against what it shows, so
+                    // the commands it sent about it follow this paint. Sent before the walk, a reply could land between the paint and the
+                    // walk's snapshot, and the region over it would skip a value the page never showed.
+                    _ <- state match
+                        case MountState.Ready(_) | MountState.Failed(_) => instance.supervision.afterShown.shown
+                        case MountState.Pending(_)                      => Kyo.unit
                 yield ()
                 end for
             _ <- startOwnedFiber(

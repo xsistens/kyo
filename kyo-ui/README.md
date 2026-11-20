@@ -360,6 +360,47 @@ def liveTicker(quotes: Stream[String, Async]): UI < (Abort[Throwable] & Async & 
 
 A plain `Fiber.init` still runs on the node's `Scope`, but its failure does not reach the node, which is what a feed whose failure the component handles itself wants.
 
+#### The page and a mount's effect
+
+A mount effect runs before what it returns is on the page: the content shows once the effect has published it. Two things follow from that, and kyo-ui takes care of both.
+
+A command a mount sends about an element (`focusId`, `scrollIntoViewId`, `requestMeasureById`), from its effect or a fiber the effect forked, goes out once the mount's own content is on the page, behind the paints that put it there. A mount can therefore focus the field it just built. If that content never shows, because the region switched away first, the command is dropped, and a measure waiting for it answers `Absent`. A measure the effect itself waits for before it yields goes out at once, since it can only be about something already on the page, and so does a command from an event handler.
+
+```scala
+import UI.*
+import kyo.*
+
+val search: UI =
+    UI.mounted(
+        for
+            cmds <- UI.commands
+            id   <- cmds.freshId
+            _    <- cmds.focusId(id)
+        yield input.id(id).placeholder("Search")
+    ).placeholder(span("loading..."))
+```
+
+Code that needs the element itself, to hand it to a chart, an editor or a map library, uses `onAttached` (Scala.js only, under `UI.runMount`). The hook runs once the element is in the document, wherever it sits, and its `Scope` closes when the element leaves, which tears the widget down. Work the widget needs can start earlier: begin it in the mount and wait for it in the hook, so neither waits for the other.
+
+```scala doctest:platform=js expect=skipped
+import UI.*
+import kyo.*
+import org.scalajs.dom
+
+def draw(el: dom.Element, rows: Chunk[Double]): AutoCloseable = ??? // the chart library's call
+def loadRows: Chunk[Double] < Async                           = ???
+
+val chart: UI =
+    UI.mounted(
+        for rows <- Fiber.init(loadRows)
+        yield div.cssClass("chart").onAttached { el =>
+            rows.get.map(r => Scope.acquireRelease(Sync.defer(draw(el, r)))(c => Sync.defer(c.close())))
+        }
+    ).placeholder(span("loading..."))
+```
+
+The hook belongs to the element value: a re-render that builds the element again starts the hook again for it, and one that shows the same value again leaves the hook and what it put inside the element alone. An element whose widget should survive the re-renders around it is built once, outside them.
+
 ### Signal-typed setters return `UI`, not `Self`
 
 Several attribute setters have a signal overload:
