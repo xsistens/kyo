@@ -43,6 +43,62 @@ private[kyo] object DomBackend:
       */
     private var focusReturnStack: Chunk[FocusSeed] = Chunk.empty
 
+    /** [[MorphScript]] over this client's hooks, built once for the page. Reconciling a re-rendered region against its live nodes instead of
+      * replacing them is what keeps node identity across a paint: focus, caret, scroll position, an imperatively bound attribute, anything a
+      * DOM-local expando holds. Replacing the range is always correct and always loses all of it, so it stays the fallback.
+      *
+      * A host whose `Content-Security-Policy` lacks `unsafe-eval` fails here, at mount, loudly (see `mountInto`).
+      */
+    private[kyo] lazy val morphScript: js.Dynamic =
+        val hooks = js.Dynamic.literal(
+            syncField = js.Any.fromFunction3((el: dom.Element, name: String, value: String) => syncFieldProperty(el, name, value)),
+            beginAnimations = js.Any.fromFunction1((node: dom.Node) =>
+                node match
+                    case element: dom.Element => beginAnimationsSync(element)
+                    case _                    => ()
+            )
+        )
+        js.Dynamic.newInstance(js.Dynamic.global.Function)("h", MorphScript.js).asInstanceOf[js.Function1[js.Any, js.Dynamic]](hooks)
+    end morphScript
+
+    /** Mirror a patched `value` onto the field's DOM PROPERTY, which is what an input or textarea actually renders.
+      * The property stops tracking the attribute the first time the user types, so `setAttribute("value", ...)` alone
+      * is invisible on any field that has been touched: a clear button writes the bound ref, the attribute changes,
+      * and the field still shows what was typed. Assigning only on a real difference leaves a focused field's caret
+      * alone, since the echo of the user's own keystroke compares equal. Mirrors `__kyoSyncField` in
+      * HtmlRenderer.clientJs.
+      */
+    private def syncFieldProperty(el: dom.Element, name: String, value: String): Unit =
+        if name == "value" && (el.tagName == "INPUT" || el.tagName == "TEXTAREA") then
+            val dyn = el.asInstanceOf[js.Dynamic]
+            if dyn.value.asInstanceOf[String] != value then dyn.value = value
+        else if name == "value" && el.tagName == "SELECT" then
+            val dyn = el.asInstanceOf[js.Dynamic]
+            if dyn.value.asInstanceOf[String] != value then dyn.value = value
+        end if
+    end syncFieldProperty
+
+    /** The reconciler of a live run, for the table that holds the two clients to one answer (`DomBackendMorphParityTest`). */
+    private[kyo] def morphRun(parent: dom.Element, fromStart: dom.Node, fromEnd: dom.Node, toStart: dom.Node, toEnd: dom.Node): Unit =
+        discard(morphScript.run(parent, fromStart, fromEnd, toStart, toEnd))
+
+    /** Reconcile a region's live nodes toward the incoming payload instead of replacing them: the `tryMorph` the browser mount hands
+      * [[DomReactiveRegions.replaceWith]].
+      *
+      * Nested ranges are reconciled as logical children, so a region containing another region morphs like any
+      * other; `replaceWith` re-reads the live markers afterwards and hands the registry what is actually there.
+      */
+    private[kyo] def tryMorphRange(target: DomReactiveRegions.MorphTarget)(using Frame): Boolean =
+        morphRun(
+            target.parent.asInstanceOf[dom.Element],
+            target.start.nextSibling,
+            target.end,
+            target.fragment.firstChild,
+            null
+        )
+        true
+    end tryMorphRange
+
     /** Mount a UI into the page body. */
     def mount(ui: UI)(using Frame): Unit < (Async & Scope) =
         mountInto(ui, document.body, NoMountDiagnostics)
@@ -77,6 +133,7 @@ private[kyo] object DomBackend:
 
     private def mountInto(ui: UI, container: dom.Element, diagnostics: MountDiagnostics)(using Frame): Unit < (Async & Scope) =
         for
+            _       <- Sync.defer(discard(morphScript))
             _       <- DomStyleSheet.injectBase()
             root    <- ReactiveUI.normalize(ui, Seq.empty)
             html    <- HtmlRenderer.render(ui, Seq.empty)
@@ -168,7 +225,7 @@ private[kyo] object DomBackend:
         selectionStart: Maybe[Int],
         selectionEnd: Maybe[Int],
         oldEnter: Set[String],
-        ghosts: Seq[(dom.Element, String)],
+        ghosts: Seq[(dom.Element, dom.Element, String)],
         oldFocusAuto: Set[String]
     )
 
@@ -205,9 +262,25 @@ private[kyo] object DomBackend:
                             else
                                 val applied = region match
                                     case ReactiveRegion.HtmlRange(regionId) =>
-                                        regions.replaceWith(regionId, html, keepCurrent = previous.isEmpty)(tryMorphRange)(
-                                            prepareRangePatch
-                                        )(finishRangePatch)
+                                        // A region that is not painted right now has nothing to patch. It is the
+                                        // sibling of the `open` guard above, and it is reachable for the same kind
+                                        // of reason: a patch somewhere above discarded this subtree, and whatever
+                                        // owns it has not repainted yet. The emission that lands in that window is
+                                        // either obsolete (the next paint renders the signal's CURRENT value, so
+                                        // nothing is lost) or early (same). Neither is worth the registry's
+                                        // strict diagnostic, which panics, and a panic here does not just skip a
+                                        // frame, it ends the subscription fiber, so the region never paints again.
+                                        // The registry keeps that diagnostic for callers who really are addressing
+                                        // a range that ought to exist; the engine simply does not ask when it knows
+                                        // there is none. Same reading `withRegionFragment` already applies to a
+                                        // range that was never painted.
+                                        regions.contains(regionId).flatMap { painted =>
+                                            if !painted then Kyo.unit
+                                            else
+                                                regions.replaceWith(regionId, html, keepCurrent = previous.isEmpty)(tryMorphRange)(
+                                                    prepareRangePatch
+                                                )(finishRangePatch)
+                                        }
                                     case svgRegion: ReactiveRegion.SvgElement =>
                                         replaceSvg(svgRegion, html)
                                 applied.andThen(Sync.defer(diagnostics.regionApplied()))
@@ -215,47 +288,6 @@ private[kyo] object DomBackend:
                     }
             }
         end onChange
-
-        private def tryMorphRange(
-            oldElements: Seq[dom.Element],
-            newElements: Seq[dom.Element],
-            incomingRangesEmpty: Boolean
-        ): Boolean =
-            val active = document.activeElement
-            if active == null ||
-                (active eq document.body) ||
-                oldElements.size != 1 ||
-                newElements.size != 1 ||
-                (active ne oldElements.head) ||
-                !incomingRangesEmpty
-            then false
-            else
-                val fresh = newElements.head
-                if (active.tagName != "INPUT" && active.tagName != "TEXTAREA") || active.tagName != fresh.tagName then false
-                else
-                    var i = 0
-                    while i < fresh.attributes.length do
-                        val attribute = fresh.attributes(i)
-                        if active.getAttribute(attribute.name) != attribute.value then
-                            active.setAttribute(attribute.name, attribute.value)
-                        i += 1
-                    end while
-                    i = active.attributes.length - 1
-                    while i >= 0 do
-                        val name = active.attributes(i).name
-                        if !fresh.hasAttribute(name) then active.removeAttribute(name)
-                        i -= 1
-                    end while
-                    val value =
-                        if active.tagName == "TEXTAREA" then fresh.textContent
-                        else Maybe(fresh.getAttribute("value")).getOrElse("")
-                    val dynamic = active.asInstanceOf[scalajs.js.Dynamic]
-                    if dynamic.value.asInstanceOf[String] != value then dynamic.value = value
-                    applyJsPropsSync(active)
-                    true
-                end if
-            end if
-        end tryMorphRange
 
         private def prepareRangePatch(oldElements: Seq[dom.Element], newElements: Seq[dom.Element]): RangePatchState =
             val active = Maybe(document.activeElement).filter(el => (el ne document.body) && containsAny(oldElements, el))
@@ -270,10 +302,12 @@ private[kyo] object DomBackend:
             )
         end prepareRangePatch
 
-        private def finishRangePatch(state: RangePatchState, newElements: Seq[dom.Element]): Unit =
+        private def finishRangePatch(state: RangePatchState, newElements: Seq[dom.Element], morphed: Boolean): Unit =
             newElements.foreach { element =>
                 applyJsPropsSync(element)
-                beginAnimationsSync(element)
+                // A replacement inserted every one of these roots, so every animation under them is new. A morph
+                // reused what it could and started the animations of the nodes it did insert as it inserted them.
+                if !morphed then beginAnimationsSync(element)
             }
             state.active.flatMap(resolveFocus(newElements, _)).foreach { target =>
                 focusNoScroll(target)
@@ -527,9 +561,12 @@ private[kyo] object DomBackend:
                     val propName = attrName.stripPrefix(JsPropPrefix)
                     val value    = el.getAttribute(attrName)
                     val d        = el.asInstanceOf[scalajs.js.Dynamic]
-                    // Each assignment is kept on the element, for reassertEnclosingSelect to assign again.
+                    // Each assignment is kept on the element, for reassertEnclosingSelect to assign again, with the
+                    // value the element had before the first one, for restoreJsProps to give back.
                     if js.isUndefined(d.__kyoProps) then d.__kyoProps = js.Dictionary.empty[js.Dynamic].asInstanceOf[js.Any]
-                    d.__kyoProps.asInstanceOf[js.Dictionary[js.Dynamic]](propName) = js.Dynamic.literal(value = value)
+                    val props = d.__kyoProps.asInstanceOf[js.Dictionary[js.Dynamic]]
+                    val base  = props.get(propName).fold(d.selectDynamic(propName).asInstanceOf[js.Any])(_.base.asInstanceOf[js.Any])
+                    props(propName) = js.Dynamic.literal(base = base, value = value)
                     d.updateDynamic(propName)(value)
                     el.removeAttribute(attrName)
                 end if
@@ -921,12 +958,15 @@ private[kyo] object DomBackend:
     end stripKyo
 
     /** Prepare leave ghosts for the OUTERMOST `data-kyo-leave` elements under `root` being removed (path not in `surv`).
-      * Captures rect + clone WHILE the node is still in the DOM; returns (ghostNode, leaveClasses) descriptors.
+      * Captures rect + clone WHILE the node is still in the DOM; returns (sourceNode, ghostNode, leaveClasses)
+      * descriptors. The survivor set is a PREDICTION: a preserved subtree survives the patch despite not matching, which
+      * is exactly what the opaque mount boundary does when it keeps a live mount's content under differently-shaped
+      * incoming html. [[spawnGhosts]] therefore re-checks the SOURCE at spawn time and drops nodes still in the document.
       */
-    private def prepareLeaveGhosts(root: dom.Element, surv: Set[String]): Seq[(dom.Element, String)] =
+    private def prepareLeaveGhosts(root: dom.Element, surv: Set[String]): Seq[(dom.Element, dom.Element, String)] =
         prepareLeaveGhosts(Seq(root), surv)
 
-    private def prepareLeaveGhosts(roots: Seq[dom.Element], surv: Set[String]): Seq[(dom.Element, String)] =
+    private def prepareLeaveGhosts(roots: Seq[dom.Element], surv: Set[String]): Seq[(dom.Element, dom.Element, String)] =
         val cand = roots.flatMap { root =>
             val els = root.querySelectorAll("[data-kyo-leave]")
             (if root.getAttribute("data-kyo-leave") != null then Seq(root) else Seq.empty) ++
@@ -951,29 +991,37 @@ private[kyo] object DomBackend:
             st.margin = "0"
             st.pointerEvents = "none"
             g.setAttribute("data-kyo-ghost", "1")
-            (g, if leave == null then "" else leave)
+            (node, g, if leave == null then "" else leave)
         }
     end prepareLeaveGhosts
 
-    /** Append prepared ghosts to `<body>`, add their leave classes next frame, remove on transitionend/animationend or a 1s safety. */
-    private def spawnGhosts(ghosts: Seq[(dom.Element, String)]): Unit =
-        ghosts.foreach { case (g, leave) =>
-            discard(document.body.appendChild(g))
-            val cls     = leave.split("\\s+").filter(_.nonEmpty)
-            val clsList = g.asInstanceOf[scalajs.js.Dynamic].classList
-            discard(dom.window.requestAnimationFrame((_: Double) => cls.foreach(c => clsList.add(c))))
-            var done            = false
-            def cleanup(): Unit =
-                if !done then
-                    done = true
-                    if g.parentNode != null then discard(g.parentNode.removeChild(g))
-            val listener: scalajs.js.Function1[dom.Event, Unit] = (_: dom.Event) => cleanup()
-            g.addEventListener("transitionend", listener)
-            g.addEventListener("animationend", listener)
-            val to: scalajs.js.Function0[Unit] = () => cleanup()
-            discard(dom.window.setTimeout(to, 1000.0))
+    /** Append prepared ghosts to `<body>`, add their leave classes next frame, remove on transitionend/animationend or a
+      * 1s safety. A ghost whose SOURCE node is still in the document is dropped: the patch preserved it, so playing a
+      * leave animation over the live element would be a false departure. Removal-based rather than predictive, so every
+      * preservation mechanism the morph grows is covered without a matching change here.
+      */
+    private def spawnGhosts(ghosts: Seq[(dom.Element, dom.Element, String)]): Unit =
+        ghosts.foreach { case (src, g, leave) =>
+            if !document.contains(src) then spawnGhost(g, leave)
         }
     end spawnGhosts
+
+    private def spawnGhost(g: dom.Element, leave: String): Unit =
+        discard(document.body.appendChild(g))
+        val cls     = leave.split("\\s+").filter(_.nonEmpty)
+        val clsList = g.asInstanceOf[scalajs.js.Dynamic].classList
+        discard(dom.window.requestAnimationFrame((_: Double) => cls.foreach(c => clsList.add(c))))
+        var done            = false
+        def cleanup(): Unit =
+            if !done then
+                done = true
+                if g.parentNode != null then discard(g.parentNode.removeChild(g))
+        val listener: scalajs.js.Function1[dom.Event, Unit] = (_: dom.Event) => cleanup()
+        g.addEventListener("transitionend", listener)
+        g.addEventListener("animationend", listener)
+        val to: scalajs.js.Function0[Unit] = () => cleanup()
+        discard(dom.window.setTimeout(to, 1000.0))
+    end spawnGhost
 
     // ---- input filter/mask (SPA transport) ----
     // The character-level decisions live in the shared InputMasking so they are testable without a DOM;

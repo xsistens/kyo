@@ -19,11 +19,12 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
           |function applyJsProps(root){var all=[root],desc=root.querySelectorAll("*");for(var i=0;i<desc.length;i++)all.push(desc[i]);
           |  for(var i=0;i<all.length;i++){var names=all[i].getAttributeNames();for(var j=0;j<names.length;j++){var name=names[j];
           |    if(name.indexOf("data-kyo-prop-")===0){var el=all[i],p=name.slice(14),v=el.getAttribute(name),ps=el.__kyoProps||(el.__kyoProps={});
-          |      ps[p]={value:v};el[p]=v;el.removeAttribute(name);}}}
+          |      ps[p]={base:ps[p]?ps[p].base:el[p],value:v};el[p]=v;el.removeAttribute(name);}}}
           |  if(typeof __kyoReassertSelect==="function")__kyoReassertSelect(root);}
           |function ba(root){__kyoLifecycle.push("animate:"+root.id);}
           |function kyoSpawnGhosts(){}
           |function sweepFocusAuto(){}
+          |function __kyoSyncField(el,name,value){if(name==="value"&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&el.value!==value)el.value=value;}
           |function kyoSetCaret(target,start,end){target.setSelectionRange(start,end);}""".stripMargin
 
     private def install(html: String): Unit =
@@ -66,24 +67,48 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
         }
     }
 
-    "embedded same markup still repairs edited form properties" in {
+    // Content equal to what the range shows is left as it is, so no morph walks it and stamps its mount slots as
+    // adopted. The unchanged path adopts them itself; without that, a keyless slot stays `s`, and the next repaint
+    // of the region around it morphs the mount's content back to the placeholder the region rendered.
+    "embedded mount in content left unchanged keeps its content through the next repaint of the region around it" in {
+        Sync.defer {
+            install(
+                "<!--kyo-rs:r--><section id='frame'><!--kyo-rs:r000000010031 s-->placeholder<!--kyo-re:r000000010031--></section><!--kyo-re:r-->"
+            )
+            val result = evalString("""(() => {
+                const markup = '<section id="frame"><!--kyo-rs:r000000010031 s-->placeholder<!--kyo-re:r000000010031--></section>';
+                kyoRangeReplace('r', markup);
+                kyoRangeReplace('r000000010031', 'mounted');
+                kyoRangeReplace('r', markup.replace('id="frame"', 'id="frame" class="next"'));
+                const frame = document.getElementById('frame');
+                return [frame.className, frame.textContent].join('|');
+            })()""")
+            assert(result == "next|mounted", s"class and text of the region after its repaint: $result")
+        }
+    }
+
+    // The same markup over fields the reader edited is not left as it is: the state differs, so the range takes the
+    // morph, which reconciles each control by the morph rule (DomBackendMorphParityTest) on the live nodes. A field
+    // with a value attribute takes the render's state; a textarea whose content did not move, a free box and a select
+    // whose options did not move keep the reader's.
+    "embedded same markup over edited form properties reconciles them on the live nodes" in {
         Sync.defer {
             install("<!--kyo-rs:r--><section><input id='text' value='server'><textarea id='area'>server</textarea>" +
-                "<input id='check' type='checkbox' checked><select id='choice'><option value='a' selected>A</option>" +
-                "<option value='b'>B</option></select></section><!--kyo-re:r-->")
+                "<input id='check' type='checkbox' checked>" +
+                "<select id='choice'><option value='a' selected>A</option><option value='b'>B</option></select></section><!--kyo-re:r-->")
             val result = evalString("""(() => {
-                const markup = document.querySelector('section').outerHTML;
+                const section = document.querySelector('section'), markup = section.outerHTML;
                 document.getElementById('text').value = 'typed';
                 document.getElementById('area').value = 'typed';
                 document.getElementById('check').checked = false;
                 document.getElementById('check').indeterminate = true;
                 document.getElementById('choice').selectedIndex = 1;
                 kyoRangeReplace('r', markup);
-                return [document.getElementById('text').value, document.getElementById('area').value,
-                    document.getElementById('check').checked, document.getElementById('check').indeterminate,
+                return [section === document.querySelector('section'), document.getElementById('text').value,
+                    document.getElementById('area').value, document.getElementById('check').checked, document.getElementById('check').indeterminate,
                     document.getElementById('choice').value].join('|');
             })()""")
-            assert(result == "server|server|true|false|a")
+            assert(result == "true|server|typed|false|true|b", result)
         }
     }
 
@@ -199,6 +224,78 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
         assert(dom.document.activeElement.asInstanceOf[scalajs.Dynamic].selectionStart.asInstanceOf[Int] == 1)
     }
 
+    private def replace(id: String, html: String): Unit =
+        discard(scalajs.Dynamic.global.eval(s"kyoRangeReplace('$id',\"$html\")"))
+
+    private def live(id: String): scalajs.Dynamic = dom.document.getElementById(id).asInstanceOf[scalajs.Dynamic]
+
+    "embedded morph unchecks a checkbox the reader ticked when the render takes the tick back" in {
+        val id = "r"
+        install(s"<!--kyo-rs:$id--><input id='tick' type='checkbox'><!--kyo-re:$id-->")
+        val box = live("tick")
+        discard(box.click())
+        replace(id, "<input id='tick' type='checkbox' checked>")
+        replace(id, "<input id='tick' type='checkbox'>")
+        assert(live("tick") eq box)
+        assert(!box.checked.asInstanceOf[Boolean], "the checkbox still shows the tick the render took back")
+    }
+
+    "embedded morph leaves the reader's tick on an unbound checkbox" in {
+        val id = "r"
+        install(s"<!--kyo-rs:$id--><input id='free' type='checkbox'><span>0</span><!--kyo-re:$id-->")
+        val box = live("free")
+        discard(box.click())
+        replace(id, "<input id='free' type='checkbox'><span>1</span>")
+        assert(live("free") eq box)
+        assert(box.checked.asInstanceOf[Boolean], "a repaint took the reader's tick from an unbound checkbox")
+    }
+
+    "embedded morph selects the option the render selects after the reader moved away" in {
+        val id                       = "r"
+        def select(selected: String) =
+            Seq("a", "b", "c").map(v => s"<option value='$v'${if v == selected then " selected" else ""}>$v</option>").mkString
+        install(s"<!--kyo-rs:$id--><select id='opts'>${select("a")}</select><!--kyo-re:$id-->")
+        val opts = live("opts")
+        opts.value = "b"
+        opts.value = "a"
+        replace(id, s"<select id='opts'>${select("b")}</select>")
+        assert(live("opts") eq opts)
+        assert(opts.value.asInstanceOf[String] == "b", s"the select shows ${opts.value} after the render selected b")
+    }
+
+    "embedded morph gives back a JS property the render no longer sets" in {
+        val id = "r"
+        install(s"<!--kyo-rs:$id--><!--kyo-re:$id-->")
+        replace(id, "<input id='mixed' type='checkbox' data-kyo-prop-indeterminate='true'>")
+        val box = live("mixed")
+        assert(box.indeterminate.asInstanceOf[Boolean])
+        replace(id, "<input id='mixed' type='checkbox'>")
+        assert(live("mixed") eq box)
+        assert(!box.indeterminate.asInstanceOf[Boolean], "the checkbox kept the mixed dash the render dropped")
+        replace(id, "<input id='mixed' type='checkbox' data-kyo-prop-indeterminate='true'>")
+        assert(box.indeterminate.asInstanceOf[Boolean])
+    }
+
+    "embedded morph leaves a focused unbound field as the reader typed it" in {
+        val id = "r"
+        install(s"<!--kyo-rs:$id--><input id='free-field'><span>0</span><!--kyo-re:$id-->")
+        val field = live("free-field")
+        discard(field.focus())
+        field.value = "kept"
+        replace(id, "<input id='free-field'><span>1</span>")
+        assert(live("free-field") eq field)
+        assert(field.value.asInstanceOf[String] == "kept", s"the focused unbound field shows '${field.value}'")
+    }
+
+    "embedded morph still clears a focused bound field the render empties" in {
+        val id = "r"
+        install(s"<!--kyo-rs:$id--><input id='bound-field' value='typed'><!--kyo-re:$id-->")
+        val field = live("bound-field")
+        discard(field.focus())
+        replace(id, "<input id='bound-field' value=''>")
+        assert(field.value.asInstanceOf[String] == "", s"the focused bound field shows '${field.value}'")
+    }
+
     "embedded paint of options inside a bound select selects its value" in {
         val id = "r"
         install(s"<select id='late' data-kyo-prop-value='b'><!--kyo-rs:$id--><!--kyo-re:$id--></select>")
@@ -281,7 +378,7 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
         ))
         assert(evalString("__kyoLifecycle.indexOf('leave:semantic-host')>=0?'yes':'no'") == "yes")
         assert(evalString("String(document.getElementById('returned-row').rangeprobe)") == "returned")
-        assert(evalString("__kyoLifecycle.indexOf('enter:returned-row')>=0?'yes':'no'") == "yes")
+        assert(evalString("__kyoLifecycle.indexOf('enter:returned-row')>=0?'yes':'no'") == "yes", evalString("__kyoLifecycle.join(',')"))
         assert(evalString("__kyoLifecycle.indexOf('animate:returned-row')>=0?'yes':'no'") == "yes")
     }
 
