@@ -29,21 +29,7 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
     private def dragText(representations: (String, String)*): Drag.Item.Text =
         Drag.Item.Text(representations.iterator.map((media, value) => mediaType(media) -> value).toMap)
 
-    /** Minimal UIExchange stub that discards onChange notifications. */
-    private class NoopExchange extends UIExchange:
-        def onChange(
-            region: ReactiveRegion,
-            path: Seq[String],
-            context: ReactiveRegion.RegionIdentity,
-            parentContext: ReactiveRegion.ParentContext,
-            previous: Maybe[UI],
-            ui: UI
-        )(using
-            Frame
-        ): Unit < Async = ()
-    end NoopExchange
-
-    /** Normalize a UI, subscribe it with a NoopExchange, and return the dispatch handle. The dispatch handle re-reads
+    /** Normalize a UI, subscribe it with `UIExchange.noop`, and return the dispatch handle. The dispatch handle re-reads
       * the current signal state on each event, so it stays valid after the subscription's Scope closes; these tests
       * exercise event routing only, so the subscription runs under a local Scope.run that discharges its Scope row.
       */
@@ -51,7 +37,7 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
         Scope.run {
             for
                 root         <- ReactiveUI.normalize(ui, Seq.empty)
-                subscription <- ReactiveUI.subscribe(root, new NoopExchange)
+                subscription <- ReactiveUI.subscribe(root, UIExchange.noop)
             yield subscription.handle
         }
 
@@ -71,7 +57,7 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
         Scope.run {
             for
                 root         <- ReactiveUI.normalize(ui, Seq.empty)
-                subscription <- ReactiveUI.subscribe(root, new NoopExchange, limits)
+                subscription <- ReactiveUI.subscribe(root, UIExchange.noop, limits)
                 result       <- f(subscription)
             yield result
         }
@@ -942,7 +928,7 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
             subscription <- Scope.run {
                 for
                     root         <- ReactiveUI.normalize(UI.div, Seq.empty)
-                    subscription <- ReactiveUI.subscribe(root, new NoopExchange, limits)
+                    subscription <- ReactiveUI.subscribe(root, UIExchange.noop, limits)
                     _            <- Kyo.foreach(0 until 1000) { _ =>
                         subscription.handle(Seq.empty, start).andThen(subscription.handle(Seq.empty, end))
                     }

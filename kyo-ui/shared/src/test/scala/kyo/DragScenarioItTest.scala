@@ -10,7 +10,6 @@ import demo.KanbanDemo.Card
 import kyo.UI.foreachKeyed
 import kyo.internal.DragCommands
 import kyo.internal.DragProtocol
-import kyo.internal.ReactiveRegion
 import kyo.internal.ReactiveUI
 import kyo.internal.UIEvent
 import kyo.internal.UIExchange
@@ -25,20 +24,6 @@ import kyo.internal.UIExchange
 class DragScenarioItTest extends UITest:
 
     override def config = super.config.sequential
-
-    /** Minimal UIExchange stub that discards onChange notifications. */
-    private class NoopExchange extends UIExchange:
-        def onChange(
-            region: ReactiveRegion,
-            path: Seq[String],
-            context: ReactiveRegion.RegionIdentity,
-            parentContext: ReactiveRegion.ParentContext,
-            previous: Maybe[UI],
-            ui: UI
-        )(using
-            Frame
-        ): Unit < Async = ()
-    end NoopExchange
 
     private def startEvent(sessionId: String, sourceKey: String, title: String): UIEvent.DragStart =
         UIEvent.DragStart(
@@ -88,7 +73,7 @@ class DragScenarioItTest extends UITest:
                 result    <- DragCommands.resolveSink.let(
                     Present((_, decision) => decisions.getAndUpdate(_.append(decision)).unit)
                 ) {
-                    ReactiveUI.subscribe(root, new NoopExchange).map(sub => f(state, sub.handle, decisions))
+                    ReactiveUI.subscribe(root, UIExchange.noop).map(sub => f(state, sub.handle, decisions))
                 }
             yield result
         }
@@ -251,7 +236,7 @@ class DragScenarioItTest extends UITest:
                 result    <- DragCommands.resolveSink.let(
                     Present((_, decision) => decisions.getAndUpdate(_.append(decision)).unit)
                 ) {
-                    ReactiveUI.subscribe(root, new NoopExchange).map(sub => f(state, sub.handle, decisions))
+                    ReactiveUI.subscribe(root, UIExchange.noop).map(sub => f(state, sub.handle, decisions))
                 }
             yield result
         }

@@ -44,23 +44,28 @@ private[kyo] object MorphScript:
           |function __kyoMorphAttrs(from,to){
           |  var tag=from.tagName;
           |  var activeInput=(from===document.activeElement)&&(tag==="INPUT"||tag==="TEXTAREA");
+          |  // An attribute the imperative id-addressed channel owns is never reconciled: rendered HTML never carries
+          |  // the client-set value, so reconciling would clobber it.
+          |  var own=from.__kyoOwn||{};
           |  // Read before the walk moves the attribute: whether the previous render had the toggle on.
           |  var tg=tag==="INPUT"?"checked":(tag==="OPTION"?"selected":null);
+          |  if(tg&&own[tg])tg=null;
           |  var wasOn=!!tg&&from.hasAttribute(tg);
           |  // A field renders its value PROPERTY, and the property stops tracking the attribute the first time the
           |  // user types, so writing the attribute alone is invisible on any field that has been typed into. The
           |  // attribute may even be unchanged (both empty) when a ref write clears it, so the property is written on
           |  // every pass. The focused field is the exception below: its own echo must not move the caret.
           |  for(var i=0;i<to.attributes.length;i++){var a=to.attributes[i];
-          |    if(from.getAttribute(a.name)!==a.value)from.setAttribute(a.name,a.value);
-          |    if(!activeInput)h.syncField(from,a.name,a.value);}
+          |    if(!own[a.name]){
+          |      if(from.getAttribute(a.name)!==a.value)from.setAttribute(a.name,a.value);
+          |      if(!activeInput)h.syncField(from,a.name,a.value);}}
           |  // A textarea carries its value as content, never as a value attribute, so the walk above cannot reach its
           |  // property: mirror the content instead, under the same focus rule. Only a content that moved is a value
           |  // write; an unbound textarea renders the same content on every pass and keeps what the user typed. The
           |  // children are not morphed yet, so `from` still holds the previous content.
           |  if(!activeInput&&tag==="TEXTAREA"&&from.textContent!==to.textContent)h.syncField(from,"value",to.textContent);
           |  for(var j=from.attributes.length-1;j>=0;j--){var n=from.attributes[j].name;
-          |    if(!to.hasAttribute(n))from.removeAttribute(n);}
+          |    if(!own[n]&&!to.hasAttribute(n))from.removeAttribute(n);}
           |  // A checkbox, a radio and an option show their PROPERTY once toggled by the reader, so a render that
           |  // turns the control on or off writes it. Only a change is written: a bound control that is off renders no
           |  // attribute, like an unbound one, whose tick a repaint must keep.

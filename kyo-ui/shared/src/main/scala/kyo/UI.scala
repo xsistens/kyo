@@ -164,8 +164,10 @@ object UI:
       */
     def dropdown(options: (String, String)*)(using Frame): Dropdown = Dropdown(options = Chunk.from(options))
 
-    /** An image element. `src` selects the source kind (URL, path, or inline data) and `alt` is the accessibility text. */
-    def img(src: ImgSrc, alt: String)(using Frame): Img = Img(src = Present(src), alt = Present(alt))
+    /** An image element. `src` selects the source kind (URL, path, or inline data) and `alt` is the accessibility text. Each takes
+      * a constant or a signal, and a signal is the attribute's channel, patched in place.
+      */
+    def img(src: ImgSrc | Signal[ImgSrc], alt: String | Signal[String])(using Frame): Img = Img().src(src).alt(alt)
 
     /** An inline frame embedding the document at `src` (a URL or `data:` URI). Give it a size with `.style` and a `.title` for accessibility. */
     def iframe(src: String)(using Frame): Iframe = Iframe(src = Present(src))
@@ -507,6 +509,11 @@ object UI:
         // Pending one-shot measure round-trips, keyed by id. `requestMeasureById` suspends on the Promise; the transport
         // completes it with the reply: the kyo-native request/reply shape where the effect RETURNS the value.
         private[kyo] val pendingById: AtomicRef[Map[String, Promise[Maybe[Rect], Any]]],
+        // PERSISTENT viewport-observer signals, keyed by id. Unlike `pendingById` (one-shot: the Promise is consumed on
+        // the first MeasureById reply), an entry here is KEPT across replies: each reply pushes the new Rect into the
+        // SignalRef so a scroll/resize stream keeps updating it. Removed only by observeViewportById's scope finalizer.
+        // An id can sit in both maps at once (an observed element measured on demand); deliverMeasureById serves both.
+        private[kyo] val observers: AtomicRef[Map[String, Signal.SignalRef[Maybe[Rect]]]],
         private[kyo] val idCounter: AtomicInt
     ):
         // ---- Self-addressing: id minting + id-addressed command/measure ----
@@ -561,12 +568,27 @@ object UI:
             }
         end requestMeasureByIds
 
-        /** Transport hook: resolve the pending [[requestMeasureById]] for `id` with `rect` (complete + drop its Promise). */
+        /** Transport hook: deliver `rect` for `id`. Serves BOTH maps: a PERSISTENT [[observers]] SignalRef (viewport
+          * observation) is updated and KEPT (the stream continues), and a one-shot [[pendingById]] Promise is completed
+          * and dropped.
+          *
+          * Both, not whichever comes first: an id can legitimately sit in both maps, since observing an element does not
+          * stop a caller from asking what it measures right now, and the two are registered by different call sites that
+          * cannot see each other. Serving only the observer left such a request unanswered, and an unanswered request
+          * never returns.
+          */
         private[kyo] def deliverMeasureById(id: String, rect: Rect)(using Frame): Unit < Async =
-            pendingById.getAndUpdate(_.removed(id)).map { m =>
-                m.get(id) match
-                    case Some(p) => p.completeDiscard(Result.succeed(Present(rect)))
-                    case None    => ()
+            observers.get.map { obs =>
+                val observed: Unit < Sync = obs.get(id) match
+                    case Some(ref) => ref.set(Present(rect))
+                    case None      => ()
+                observed.andThen(
+                    pendingById.getAndUpdate(_.removed(id)).map { m =>
+                        m.get(id) match
+                            case Some(p) => p.completeDiscard(Result.succeed(Present(rect)))
+                            case None    => ()
+                    }
+                )
             }
 
         /** Transport hook: no element carries `id`, so a pending [[requestMeasureById]] for it answers `Absent`. */
@@ -576,6 +598,67 @@ object UI:
                     case Some(p) => p.completeDiscard(Result.succeed(Absent))
                     case None    => ()
             }
+
+        // ---- in-place reactive attribute patching + viewport observation ----
+
+        /** Bind a class on the element with DOM id `id` to `on`: fork a mount-lifetime fiber that observes the signal and
+          * emits [[internal.HtmlOp.SetClassById]]`(id, className, value)` on every emission (including the current value
+          * at subscribe). The client toggles the class WITHOUT replacing the element, so CSS transitions on that class
+          * fire, the whole point of this channel over a `Reactive` re-render. The fiber (and thus the subscription) is
+          * bound to the current [[kyo.Scope]] and cancelled on scope close. Idempotent with any baked-in initial class.
+          */
+        def bindClassById(id: String, className: String, on: Signal[Boolean])(using Frame): Unit < (Async & Scope) =
+            Fiber.init(on.observe(v => sendAbout(internal.HtmlOp.SetClassById(id, className, v)))).unit
+
+        /** Bind the inline style of the element with DOM id `id` to `style`: fork a mount-lifetime fiber that observes the
+          * signal and emits [[internal.HtmlOp.SetStyleById]] with the serialized declaration string on every emission
+          * (including the current value at subscribe). The client MERGES the declarations over the element's existing
+          * inline props (no full `style=""` clobber), so transitions fire. Cancelled on scope close.
+          */
+        def bindStyleById(id: String, style: Signal[Style])(using Frame): Unit < (Async & Scope) =
+            Fiber.init(style.observe(v => sendAbout(internal.HtmlOp.SetStyleById(id, internal.CssStyleRenderer.render(v))))).unit
+
+        /** Bind attribute `name` on the element with DOM id `id` to `value`, emitting [[internal.HtmlOp.SetAttrById]]
+          * on every emission (current value included). The client sets the attribute WITHOUT replacing the element, so
+          * it keeps its DOM position, needed for a reactive attribute (e.g. `aria-expanded`) on an element that must
+          * stay a direct child for a CSS `>` child-combinator, which a `Reactive` re-render's wrapper would break.
+          * Cancelled on scope close.
+          */
+        def bindAttrById(id: String, name: String, value: Signal[String])(using Frame): Unit < (Async & Scope) =
+            Fiber.init(value.observe(v => sendAbout(internal.HtmlOp.SetAttrById(id, name, v)))).unit
+
+        /** Continuously observe the viewport geometry of the element with DOM id `id`, RETURNING a [[kyo.Signal]] that holds
+          * the latest [[kyo.UI.Rect]] (`Absent` until the first measurement lands). Registers a backing SignalRef in the
+          * persistent [[observers]] map, emits [[internal.HtmlOp.ObserveViewportById]] (the client measures now and attaches
+          * scroll+resize listeners that each reply with a `MeasureById(id)`), and registers a [[kyo.Scope]] finalizer that
+          * emits [[internal.HtmlOp.UnobserveViewportById]] AND drops the ref. Each reply is pushed into the signal by
+          * [[deliverMeasureById]] for as long as the scope is open: the kyo-native shape for a continuous stream is a
+          * `Signal` the caller maps or renders, not a callback (e.g. `observeViewportById(id).map(sig => bindStyleById(id,
+          * sig.map(toStyle)))`).
+          */
+        def observeViewportById(id: String)(using Frame): Signal[Maybe[Rect]] < (Async & Scope) =
+            // The start may wait for its element (see sendAbout) and runs on a fiber of its own, so the stop must never overtake it:
+            // a start still waiting never goes out, one that is out is stopped, and one caught while sending stops itself once sent.
+            val unobserve = emit(internal.HtmlOp.UnobserveViewportById(id))
+            for
+                ref   <- Signal.initRef[Maybe[Rect]](Absent)
+                phase <- AtomicInt.init(0) // 0 waiting, 1 sending, 2 out, 3 stopped
+                start = phase.compareAndSet(0, 1).map { sending =>
+                    if !sending then Kyo.unit
+                    else
+                        emit(internal.HtmlOp.ObserveViewportById(id))
+                            .andThen(phase.compareAndSet(1, 2))
+                            .map(out => if out then Kyo.unit else unobserve)
+                }
+                _ <- observers.getAndUpdate(_.updated(id, ref))
+                _ <- sendWhenShown(internal.HeldCommand(start, Kyo.unit))
+                _ <- Scope.ensure(
+                    phase.getAndSet(3).map(was => if was == 2 then unobserve else Kyo.unit)
+                        .andThen(observers.getAndUpdate(_.removed(id)))
+                )
+            yield ref
+            end for
+        end observeViewportById
 
         /** Sends `op`, which addresses an element by id. From a `UI.mounted` effect, or a fiber it forked, it goes out once the content
           * that mount shows is on the page, behind the paints that bring it there, and is dropped with that content if it never shows.
@@ -604,8 +687,9 @@ object UI:
         def init(emit: internal.HtmlOp => Unit < Async)(using Frame): Commands < Sync =
             for
                 pendingById <- AtomicRef.init(Map.empty[String, Promise[Maybe[Rect], Any]])
+                observers   <- AtomicRef.init(Map.empty[String, Signal.SignalRef[Maybe[Rect]]])
                 idCounter   <- AtomicInt.init(0)
-            yield new Commands(emit, pendingById, idCounter)
+            yield new Commands(emit, pendingById, observers, idCounter)
     end Commands
 
     /** The session's [[kyo.UI.Commands]] channel (imperative commands + measure requests). Available inside any event handler
@@ -639,6 +723,17 @@ object UI:
                                 changedUI: UI
                             )(using Frame): Unit < Async =
                                 // runPartial drops only a Closed (the consumer stopped draining); a Panic propagates.
+                                Abort.runPartial[Closed](channel.put(())).unit
+                            override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
+                                // Plain-HTML transport has no in-place patch; re-emit full HTML like onChange.
+                                Abort.runPartial[Closed](channel.put(())).unit
+                            override def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async =
+                                Abort.runPartial[Closed](channel.put(())).unit
+                            override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
+                                Abort.runPartial[Closed](channel.put(())).unit
+                            override def onStylePatch(path: Seq[String], set: Seq[(String, String)], removed: Seq[String])(using
+                                Frame
+                            ): Unit < Async =
                                 Abort.runPartial[Closed](channel.put(())).unit
                     // Scope.run owns the root region Fiber.init: when the stream consumer stops draining,
                     // the consume loop ends, the Scope closes, and the subscription tree cascade-tears-down.
@@ -837,6 +932,17 @@ object UI:
         case External(scheme: String, value: String)
     end Href
 
+    object Href:
+        /** The `href` string this destination renders to. The ONE definition: both the renderer and the
+          * reactive `href` channel go through it, so a signal-driven href cannot drift from a static one.
+          */
+        private[kyo] def attrValue(h: Href): String = h match
+            case Href.Absolute(url)       => url.full
+            case Href.Path(p)             => p
+            case Href.Fragment(id)        => s"#$id"
+            case Href.External(scheme, v) => s"$scheme:$v"
+    end Href
+
     /** A typed image source for an `img` `src` attribute.
       *
       * `Absolute` carries a parsed [[kyo.HttpUrl]], `Path` a same-origin path, and `Data` an inline `data:` URI (MIME type plus payload).
@@ -845,6 +951,14 @@ object UI:
         case Absolute(url: HttpUrl)
         case Path(value: String)
         case Data(mime: String, payload: String)
+    end ImgSrc
+
+    object ImgSrc:
+        /** The `src` string this source renders to; single owner, as [[Href.attrValue]]. */
+        private[kyo] def attrValue(s: ImgSrc): String = s match
+            case ImgSrc.Absolute(url)       => url.full
+            case ImgSrc.Path(p)             => p
+            case ImgSrc.Data(mime, payload) => s"data:$mime;base64,$payload"
     end ImgSrc
 
     /** A supported raster/vector image format, used by [[kyo.UI.FileAccept.Image]] to build an image-extension accept filter. */
@@ -1005,23 +1119,73 @@ object UI:
             def children: Chunk[UI]
             private[kyo] def withAttrs(a: Attrs): Self
 
+            /** Shared bodies of the declarative reactive-channel setters (aria/title/placeholder/href/src →
+              * reactiveAttrs; disabled/readOnly/hidden → reactiveBoolAttrs; cssClass → reactiveClasses).
+              * `inline` so each compiles to the bare `withAttrs(attrs.copy(...))`, adding no dispatch of its own.
+              *
+              * WHICH SETTER GETS A CHANNEL. A `Signal`-typed setter is a channel (patching in place, returning
+              * `Self`, chainable) exactly when its value maps to ONE plain HTML attribute whose written value
+              * IS the live state. Everything else wraps the element in a `Reactive` and re-renders it, because
+              * a channel could not express it:
+              *
+              *   - `style`: a [[kyo.Style]] may carry pseudo-state rules, which become a generated class plus an
+              *     injected stylesheet rule rather than an inline value, and `uiStyle ++ v` merges rather than
+              *     replaces. Not one attribute. Its INLINE part is a channel of its own, `inlineStyle`, which
+              *     patches the declarations of the element's `style` attribute (see there).
+              *   - `checked` / `selected`: the ATTRIBUTE is the control's default, the live state is the DOM
+              *     property. Patching the attribute would leave a live control where it stood.
+              *   - `indeterminate`: a DOM property with no attribute at all (see `applyJsProps`).
+              *
+              * Keep new setters on this rule.
+              *
+              * PRECEDENCE: where a channel exists it IS the value, in either setter order: the static field is
+              * consulted by neither the renderer nor event dispatch. Not a preference: it is the only rule
+              * consistent with the client, whose channel patch sets and removes the attribute on every emission
+              * regardless of what the initial HTML carried.
+              */
+            private[kyo] inline def withReactiveAttr(name: String, sig: Signal[String]): Self =
+                withAttrs(attrs.copy(reactiveAttrs = attrs.reactiveAttrs.updated(name, sig)))
+            private[kyo] inline def withReactiveBoolAttr(name: String, sig: Signal[Boolean]): Self =
+                withAttrs(attrs.copy(reactiveBoolAttrs = attrs.reactiveBoolAttrs.updated(name, sig)))
+            private[kyo] inline def withReactiveClass(name: String, on: Signal[Boolean]): Self =
+                withAttrs(attrs.copy(reactiveClasses = attrs.reactiveClasses.updated(name, on)))
+            private[kyo] inline def withReactiveStyle(sig: Signal[Style]): Self =
+                withAttrs(attrs.copy(reactiveStyle = Present(sig)))
+
             // Identity & visibility
             def id(v: String): Self      = withAttrs(attrs.copy(identifier = Present(v)))
             def hidden(v: Boolean): Self = withAttrs(attrs.copy(hidden = Present(v)))
 
-            /** Reactive `hidden`: re-renders when the signal emits. */
-            def hidden(v: Signal[Boolean]): Reactive[Self] =
-                given Frame = frame
-                Reactive[Self](v.map(b => this.hidden(b): UI))
+            /** Reactive `hidden`: toggles the attribute IN PLACE on emission, so showing and hiding keeps the
+              * subtree (its focus, caret, scroll position and running transitions) instead of repainting it.
+              */
+            def hidden(v: Signal[Boolean]): Self = withReactiveBoolAttr("hidden", v)
 
             // Visual
             def style(v: Style): Self               = withAttrs(attrs.copy(uiStyle = attrs.uiStyle ++ v))
             def style(f: Style.type => Style): Self = style(f(Style))
 
-            /** Reactive `style`: re-renders when the signal emits. */
+            /** Reactive `style`: re-renders when the signal emits. A pseudo-state rule (`hover`, `focus`, ...) can only follow
+              * a signal this way, since it lives in a generated class that a re-render picks; for a style made of inline
+              * declarations alone, [[inlineStyle]] patches them in place instead.
+              */
             def style(v: Signal[Style]): Reactive[Self] =
                 given Frame = frame
                 Reactive[Self](v.map(s => this.style(s): UI))
+
+            /** The element's INLINE style as a channel: the declarations of each value are patched onto the element's
+              * `style` attribute in place, setting the ones the value has and removing the ones the previous value had and
+              * this one lacks, so the element and everything inside it (a typed field, a mount, a running transition) stay
+              * as they are. The render writes the current value inline, so an element drawn again carries it.
+              *
+              * Why a setter of its own rather than `style(Signal[Style])`: whether a value carries pseudo-state rules is
+              * only known per emission, and those need a generated class, which only a re-render applies. This setter
+              * says the style is inline declarations, which is what a measured size or offset is; pseudo-state rules in
+              * its values are not applied (bind them with `style(Signal)`, or statically). A property this channel sets
+              * belongs to it: the static `style` of the same property is overridden while the channel holds it, and gone
+              * once the channel drops it.
+              */
+            def inlineStyle(v: Signal[Style]): Self = withReactiveStyle(v)
 
             // ARIA attributes
             /** Sets a single `aria-*` attribute (the `name` is the suffix after `aria-`). */
@@ -1031,6 +1195,19 @@ object UI:
             /** Sets several `aria-*` attributes at once from name/value pairs. */
             def aria(pairs: (String, String)*): Self =
                 withAttrs(attrs.copy(ariaAttrs = attrs.ariaAttrs ++ pairs))
+
+            /** REACTIVE `aria-*`: the `aria-$name` attribute tracks `sig`, patched IN PLACE on emission, NOT a
+              * re-render (unlike the `Reactive[Self]`-returning value overloads like `disabled(Signal[Boolean])`).
+              * For a locale-driven accessible name/description that must re-translate without re-mounting.
+              */
+            def aria(name: String, sig: Signal[String]): Self =
+                withReactiveAttr(s"aria-$name", sig)
+
+            /** REACTIVE native `title` (tooltip): the `title` attribute tracks `sig`, patched in place on
+              * emission, with no re-render.
+              */
+            def title(sig: Signal[String]): Self =
+                withReactiveAttr("title", sig)
 
             /** Sets the WAI-ARIA `role` attribute (emitted as the bare `role="..."` HTML attribute). */
             def role(v: String): Self =
@@ -1095,6 +1272,14 @@ object UI:
               */
             def leaveTransition(classes: String): Self = withAttrs(attrs.copy(leaveTransition = Present(classes)))
 
+            /** Constant OR reactive class through one union setter. A `Boolean` is static (byte-identical to
+              * `cssClass(name)` resp. omitting it). A `Signal[Boolean]` toggles `name` IN PLACE on emission
+              * (`classList.toggle`, so CSS transitions fire) with no re-render, still chainable (`Self`). Declarative twin of `UI.Commands.bindClassById`.
+              */
+            def cssClass(name: String, on: Boolean | Signal[Boolean]): Self = on match
+                case b: Boolean                    => if b then cssClass(name) else withAttrs(attrs)
+                case s: Signal[Boolean] @unchecked => withReactiveClass(name, s)
+
             // Internal JS property setter (used by Checkbox.indeterminate, etc.)
             private[kyo] def jsProp(name: String, value: String): Self =
                 withAttrs(attrs.copy(jsProps = attrs.jsProps.updated(name, value)))
@@ -1104,8 +1289,13 @@ object UI:
 
         /** Capability trait for elements that accept event handlers (`onClick`, `onKeyDown`, ...) and `tabIndex`/focus-group settings. */
         sealed trait Interactive extends Element:
-            def tabIndex(v: Int): Self       = withAttrs(attrs.copy(tabIndex = Present(v)))
-            def focusTrap(v: Boolean): Self  = withAttrs(attrs.copy(focusTrap = Present(v)))
+            def tabIndex(v: Int): Self = withAttrs(attrs.copy(tabIndex = Present(v)))
+
+            /** Tab pressed inside this element wraps focus within its focusable children (`data-kyo-focus-trap="1"`), as a modal
+              * needs; `false` leaves it unset.
+              */
+            def focusTrap(v: Boolean): Self = withAttrs(attrs.copy(focusTrap = Maybe.when(v)(true)))
+
             def focusGroup(id: String): Self = withAttrs(attrs.copy(focusGroup = Present(id)))
 
             /** Declarative focus seeding: when a re-render inserts this element newly into the DOM (its `data-kyo-path` was
@@ -1114,14 +1304,16 @@ object UI:
               * restore-to-trigger; on initial load any focus-auto element is seeded (like native autofocus). Does not make
               * the element focusable, pair with `tabIndex(-1)` for non-natively-focusable elements. The previously focused
               * element is recorded for [[focusRestore]].
+              * `false` leaves it unset, so a later `focusAuto(false)` takes an earlier `true` back.
               */
-            def focusAuto(v: Boolean): Self = withAttrs(attrs.copy(focusAuto = Present(v)))
+            def focusAuto(v: Boolean): Self = withAttrs(attrs.copy(focusAuto = Maybe.when(v)(true)))
 
             /** Declarative focus return: when this focus-seeded element (see [[focusAuto]]) leaves the document, the client
               * focuses whatever was focused just before seeding (located by `data-kyo-path`, skipped silently if gone). Only
               * meaningful with `focusAuto(true)`; typical use is a modal that returns focus to its trigger on close.
+              * `false` leaves it unset.
               */
-            def focusRestore(v: Boolean): Self = withAttrs(attrs.copy(focusRestore = Present(v)))
+            def focusRestore(v: Boolean): Self = withAttrs(attrs.copy(focusRestore = Maybe.when(v)(true)))
 
             /** Opt-in per-level event consumption: when the dispatch walk (innermost target first, then ancestors) reaches
               * this element AND it declared a handler for the event's type, the event stops here so handlers on elements
@@ -1129,7 +1321,7 @@ object UI:
               * default (unset/`false`) keeps bubble-through. Applies to bubbling events (click, keydown, keyup, hover,
               * unhover, scroll). Typical use: nested overlays where Escape closes only the innermost layer.
               */
-            def stopPropagation(v: Boolean): Self = withAttrs(attrs.copy(stopPropagation = Present(v)))
+            def stopPropagation(v: Boolean): Self = withAttrs(attrs.copy(stopPropagation = Maybe.when(v)(true)))
 
             /** Runs `action` on click, ignoring the event payload. */
             def onClick(action: => Any < Async): Self = withAttrs(attrs.copy(onClick = Present(Sync.defer(action)(using frame))))
@@ -1416,10 +1608,13 @@ object UI:
             def disabled: Maybe[Boolean]
             def disabled(v: Boolean): Self
 
-            /** Reactive `disabled`: re-renders when the signal emits. */
-            def disabled(v: Signal[Boolean]): Reactive[Self] =
-                given Frame = frame
-                Reactive[Self](v.map(b => this.disabled(b): UI))
+            /** Constant OR reactive disabled through one union setter. A `Boolean` sets it statically; a
+              * `Signal[Boolean]` toggles `disabled` IN PLACE on emission (setAttribute("")/removeAttribute)
+              * via the boolean-attribute channel with no re-render, still chainable.
+              */
+            def disabled(v: Boolean | Signal[Boolean]): Self = v match
+                case b: Boolean                    => disabled(b)
+                case s: Signal[Boolean] @unchecked => withReactiveBoolAttr("disabled", s)
         end HasDisabled
 
         /** Capability trait for free-text form inputs: a `String` `value` (constant or `SignalRef`), placeholder, read-only, and `onInput`/`onChange`. */
@@ -1427,12 +1622,28 @@ object UI:
             def value: Maybe[Bound[String]]
             def placeholder: Maybe[String]
             def readOnly: Maybe[Boolean]
+            def readOnly(v: Boolean): Self
             def onInput: Maybe[String => Any < Async]
             def onChange: Maybe[String => Any < Async]
             def value(v: String): Self
 
             /** Binds the input to a `SignalRef` two-way: edits write the new text back into the ref, and ref changes update the input. */
             def value(v: SignalRef[String]): Self
+
+            /** REACTIVE placeholder: the `placeholder` attribute tracks `sig`, patched IN PLACE on emission, with
+              * no re-render of the field. Owns the `placeholder` attribute, so do not also set the constant
+              * `placeholder(String)` on the same input.
+              */
+            def placeholder(sig: Signal[String]): Self =
+                withReactiveAttr("placeholder", sig)
+
+            /** Constant OR reactive readonly through one union setter: a `Boolean` sets it statically; a
+              * `Signal[Boolean]` toggles the `readonly` attribute IN PLACE on emission via the boolean-attribute
+              * channel: no re-render, so caret/focus survive.
+              */
+            def readOnly(v: Boolean | Signal[Boolean]): Self = v match
+                case b: Boolean                    => readOnly(b)
+                case s: Signal[Boolean] @unchecked => withReactiveBoolAttr("readonly", s)
         end TextInput
 
         /** Capability trait for text inputs that accept declarative client-local typing constraints.
@@ -1568,7 +1779,17 @@ object UI:
             dataAttrs: Map[String, String] = Map.empty,
             jsProps: Map[String, String] = Map.empty,
             cssClasses: Chunk[String] = Chunk.empty,
-            role: Maybe[String] = Absent
+            role: Maybe[String] = Absent,
+            // Declarative reactive channels: the element renders each signal's current value at SSR, then an
+            // observer (started in ReactiveUI.subscribeScoped) patches it IN PLACE on emission (no re-render).
+            // reactiveAttrs: fully-qualified name -> value (aria/placeholder/title(sig)); reactiveBoolAttrs:
+            // present while true (disabled/readOnly(sig)); reactiveClasses: classList.toggle (cssClass(name, sig)).
+            reactiveAttrs: Map[String, Signal[String]] = Map.empty,
+            reactiveBoolAttrs: Map[String, Signal[Boolean]] = Map.empty,
+            reactiveClasses: Map[String, Signal[Boolean]] = Map.empty,
+            // The inline-style channel (inlineStyle(sig)): its declarations are written inline at render and patched with
+            // HtmlOp.SetStyleByPath on emission.
+            reactiveStyle: Maybe[Signal[Style]] = Absent
         )
 
         // ---- Non-element AST cases ----
@@ -2369,10 +2590,12 @@ object UI:
               * A clicked download anchor keeps the browser's default: neither a kyo click handler nor client-side routing turns it
               * into an in-page action.
               */
-            def download(filename: String): Anchor    = copy(download = Present(filename))
-            def href(v: Signal[Href]): Reactive[Self] =
+            def download(filename: String): Anchor = copy(download = Present(filename))
+
+            /** Reactive `href`: patched in place, so the link keeps its node (and any focus on it). */
+            def href(v: Signal[Href]): Self =
                 given Frame = frame
-                Reactive[Self](v.map(h => this.href(h): UI))
+                withReactiveAttr("href", v.map(Href.attrValue))
             def href(v: Href, target: Target): Anchor = copy(href = Present(v), target = Present(target))
             def target(v: Target): Anchor             = copy(target = Present(v))
         end Anchor
@@ -2383,12 +2606,25 @@ object UI:
             alt: Maybe[String] = Absent
         )(using val frame: Frame) extends Inline with Void:
             type Self = Img
-            def withAttrs(a: Attrs): Img               = copy(attrs = a)
-            def src(v: ImgSrc): Img                    = copy(src = Present(v))
-            def src(v: Signal[ImgSrc]): Reactive[Self] =
-                given Frame = frame
-                Reactive[Self](v.map(s => this.src(s): UI))
-            def alt(v: String): Img = copy(alt = Present(v))
+            def withAttrs(a: Attrs): Img = copy(attrs = a)
+
+            /** The image, constant or reactive through one setter: a `Signal[ImgSrc]` is patched in place, so swapping the image
+              * does not replace the element.
+              */
+            def src(v: ImgSrc | Signal[ImgSrc]): Img = v match
+                case s: Signal[ImgSrc] @unchecked =>
+                    given Frame = frame
+                    withReactiveAttr("src", s.map(ImgSrc.attrValue))
+                case i: ImgSrc => copy(src = Present(i))
+
+            /** The accessibility text, constant or reactive through one setter: a `Signal[String]` is the `alt` channel, patched in
+              * place.
+              */
+            def alt(v: String | Signal[String]): Img = v match
+                case s: Signal[String] @unchecked =>
+                    given Frame = frame
+                    withReactiveAttr("alt", s)
+                case t: String => copy(alt = Present(t))
         end Img
 
         /** An inline frame embedding another document at `src`. `title` names the frame for assistive technology. Size it with `.style`. */
@@ -2398,12 +2634,12 @@ object UI:
             frameTitle: Maybe[String] = Absent
         )(using val frame: Frame) extends Block with Void:
             type Self = Iframe
-            def withAttrs(a: Attrs): Iframe            = copy(attrs = a)
-            def src(v: String): Iframe                 = copy(src = Present(v))
-            def src(v: Signal[String]): Reactive[Self] =
-                given Frame = frame
-                Reactive[Self](v.map(s => this.src(s): UI))
-            def title(v: String): Iframe = copy(frameTitle = Present(v))
+            def withAttrs(a: Attrs): Iframe = copy(attrs = a)
+            def src(v: String): Iframe      = copy(src = Present(v))
+
+            /** Reactive `src`: patched in place, since re-rendering an iframe would reload the framed document. */
+            def src(v: Signal[String]): Self = withReactiveAttr("src", v)
+            def title(v: String): Iframe     = copy(frameTitle = Present(v))
         end Iframe
 
         // ---- Custom dropdown (div-based overlay, NOT native <select>) ----

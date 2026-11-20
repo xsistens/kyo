@@ -106,11 +106,12 @@ end RegionKey
   * below it ever makes.
   */
 final private[kyo] class RegionKeys(kids: Seq[ReactiveUI]):
+    import RegionKeys.passMembers
     private lazy val keys: java.util.IdentityHashMap[ReactiveUI, RegionKey] =
         val result = new java.util.IdentityHashMap[ReactiveUI, RegionKey]()
         // Keyed by the rank-0 key, whose hash is the cheap one.
         val ranks = new java.util.HashMap[RegionKey, Integer]()
-        kids.foreach { kid =>
+        passMembers(kids).foreach { kid =>
             if kid.mounted.isEmpty && !kid.isConst then
                 val first = RegionKey(rowKeys(kid.path, kid.rows, kid.deepRows), kid.origin.fold[AnyRef](kid.path)(f => f), 0)
                 val rank  = Maybe(ranks.get(first)).fold(0)(_.intValue + 1)
@@ -133,6 +134,12 @@ final private[kyo] class RegionKeys(kids: Seq[ReactiveUI]):
 end RegionKeys
 
 private[kyo] object RegionKeys:
+
+    /** The nodes one render pass of a region owns: its reactive children, and through a constant child (an element that only
+      * carries reactive attributes) that child's own, which the constant node subscribes in the same pass and the same table.
+      */
+    private[internal] def passMembers(kids: Seq[ReactiveUI]): Iterator[ReactiveUI] =
+        kids.iterator.flatMap(kid => if kid.isConst && kid.mounted.isEmpty then passMembers(kid.children) else Iterator.single(kid))
     val empty: RegionKeys = new RegionKeys(Seq.empty)
 
     def apply(kids: Seq[ReactiveUI]): RegionKeys = new RegionKeys(kids)
@@ -444,7 +451,7 @@ final private[kyo] class MountTable:
         Sync.Unsafe.defer {
             // The pass's keyed nodes by identity, each group in walk order.
             val groups = new java.util.HashMap[MountIdentity, java.util.ArrayList[ReactiveUI]]()
-            kids.foreach { kid =>
+            RegionKeys.passMembers(kids).foreach { kid =>
                 kid.mounted.flatMap(_.identity).foreach { identity =>
                     discard(groups.computeIfAbsent(identity, _ => new java.util.ArrayList[ReactiveUI](1)).add(kid))
                 }
@@ -609,6 +616,7 @@ private[kyo] object MountRegions:
                                 )
                                 keys = RegionKeys(kids)
                                 _ <- instance.children.beginWalk(kids, keys)
+                                _ <- forkRootChannels(rui.path, content, exchange)
                                 _ <- subscribeWalked(kids, keys, instance.children, exchange, signalChangeTime, dispatch)
                             yield ()
                     // The instance's own content is on the page now, and the regions inside it are subscribed against what it shows, so

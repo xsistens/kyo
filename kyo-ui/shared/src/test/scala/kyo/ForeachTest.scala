@@ -683,4 +683,53 @@ class ForeachTest extends UITest:
         }
     }
 
+    "a row whose value changes takes the reactive class its new value draws" in {
+        // Each row's class reads a signal through a value the row was rendered with. Shrinking the list changes the
+        // value of the rows that stay, so their class must follow the new value, not the one they were first drawn with.
+        val app: UI < Async =
+            for
+                items <- Signal.initRef(Chunk(("a", 3), ("b", 3), ("c", 3)))
+                page  <- Signal.initRef(0)
+            yield UI.div(
+                items.foreachIndexed((i, row) => UI.span(row._1).id(s"row$i").cssClass("on", page.map(p => p == 0 || row._2 == 2))),
+                UI.button("Next").id("next").onClick(page.set(1)),
+                UI.button("Shrink").id("shrink").onClick(items.set(Chunk(("a", 2), ("b", 2))))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertCount(Selector.css("span.on"), 3)
+                // The signal the class reads moves first, as a carousel's page does before its items shrink.
+                _ <- Browser.click(Selector.id("next"))
+                _ <- Browser.assertCount(Selector.css("span.on"), 0)
+                _ <- Browser.click(Selector.id("shrink"))
+                _ <- Browser.assertCount(Selector.css("span.on"), 2)
+            yield ()
+        }
+    }
+
+    "a row whose value changes takes the inline style its new value draws" in {
+        // The style twin of the class case above: the channel patched each row once already, and the rows that stay
+        // are drawn again with a new value, whose style the element must take.
+        val app: UI < Async =
+            for
+                items <- Signal.initRef(Chunk(("a", 3), ("b", 3), ("c", 3)))
+                page  <- Signal.initRef(0)
+            yield UI.div(
+                items.foreachIndexed((i, row) =>
+                    UI.span(row._1).id(s"srow$i").inlineStyle(page.map(p => Style.width((p * 100 + row._2).px)))
+                ),
+                UI.button("Next").id("snext").onClick(page.set(1)),
+                UI.button("Shrink").id("sshrink").onClick(items.set(Chunk(("a", 2), ("b", 2))))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertAttributeSatisfies(Selector.id("srow0"), "style", "drawn at 3px")(_.contains("width: 3px"))
+                _ <- Browser.click(Selector.id("snext"))
+                _ <- Browser.assertAttributeSatisfies(Selector.id("srow0"), "style", "patched to 103px")(_.contains("width: 103px"))
+                _ <- Browser.click(Selector.id("sshrink"))
+                _ <- Browser.assertAttributeSatisfies(Selector.id("srow0"), "style", "the new value's 102px")(_.contains("width: 102px"))
+            yield ()
+        }
+    }
+
 end ForeachTest

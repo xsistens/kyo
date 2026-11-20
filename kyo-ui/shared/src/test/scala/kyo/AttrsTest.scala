@@ -95,6 +95,25 @@ class AttrsTest extends UITest:
         }
     }
 
+    "img takes its source and its alt as a constant or a signal, and a signal is the attribute's channel" in {
+        def html(ui: UI)(using Frame) = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
+        for
+            src      <- Signal.initRef(ImgSrc.Path("a.png"): ImgSrc)
+            alt      <- Signal.initRef("photo")
+            constant <- html(UI.img(ImgSrc.Path("a.png"), "photo"))
+            signaled <- html(UI.img(src, alt))
+            over     <- html(UI.img(ImgSrc.Path("a.png"), "old").alt(alt))
+        yield
+            val fixed = UI.img(ImgSrc.Path("a.png"), "photo")
+            assert(constant.contains("""src="a.png" alt="photo""""), s"constant $constant")
+            assert(fixed.attrs.reactiveAttrs.isEmpty, "a constant binds no channel")
+            assert(UI.img(src, alt).attrs.reactiveAttrs.keySet == Set("src", "alt"), "each signal is its attribute's channel")
+            assert(signaled.contains("""src="a.png"""") && signaled.contains("""alt="photo""""), s"signals written: $signaled")
+            // The channel is the value: a constant alt set before it is not written beside it.
+            assert(over.contains("""alt="photo"""") && !over.contains("""alt="old""""), s"channel over a constant: $over")
+        end for
+    }
+
     "style row" in {
         withUI(UI.div(UI.div.style(Style.row).id("d"))) {
             Browser.assertAttributeSatisfies(Selector.id("d"), "style", "ignore")(_.contains("flex-direction: row")).unit

@@ -152,34 +152,75 @@ private[kyo] object EventDispatch:
 
     private def formatDouble(v: Double): String = NumberFormat.double(v)
 
+    /** Is the boolean attribute `name` set on `elem` RIGHT NOW, statically or through the reactive channel a
+      * `Signal`-typed setter installs.
+      *
+      * `.disabled(Signal)` and `.readOnly(Signal)` do not wrap their element and do not fill the static field:
+      * they register a boolean-attribute channel (`Attrs.reactiveBoolAttrs`) that patches the live attribute
+      * in place. A guard reading only the static field therefore counts every signal-disabled element as
+      * enabled, and silently, because a browser suppresses the click on a rendered `disabled` button, so it shows
+      * only where dispatch decides for itself: the server transport, and any forged event.
+      *
+      * WHERE A CHANNEL EXISTS, THE CHANNEL IS THE VALUE: the static field is not consulted at all. Same rule
+      * the renderer follows (`renderElementAttrs`), and the only one consistent with the client, whose channel
+      * patch sets and REMOVES the attribute on every emission whatever the initial HTML said.
+      */
+    private def boolAttrNow(elem: Element, name: String, static: => Boolean)(using Frame): Boolean < Sync =
+        elem.attrs.reactiveBoolAttrs.get(name) match
+            case Some(sig) => sig.current
+            case None      => static
+
     /** Check if element is disabled. */
-    private def isDisabled(elem: Element): Boolean =
-        elem match
-            case hd: HasDisabled => hd.disabled.getOrElse(false)
-            case _               => false
+    private def isDisabled(elem: Element)(using Frame): Boolean < Sync =
+        boolAttrNow(
+            elem,
+            "disabled",
+            elem match
+                case hd: HasDisabled => hd.disabled.getOrElse(false)
+                case _               => false
+        )
 
-    /** Check if element is readOnly. */
-    private def isReadOnly(elem: Element): Boolean =
-        elem match
-            case ti: TextInput => ti.readOnly.getOrElse(false)
-            case _             => false
+    /** Check if element is readOnly. The channel name is the ATTRIBUTE spelling (`readonly`), not the setter's. */
+    private def isReadOnly(elem: Element)(using Frame): Boolean < Sync =
+        boolAttrNow(
+            elem,
+            "readonly",
+            elem match
+                case ti: TextInput => ti.readOnly.getOrElse(false)
+                case _             => false
+        )
 
-    /** Check if element is hidden. */
-    private def isHidden(elem: Element): Boolean =
-        elem.attrs.hidden.getOrElse(false)
+    /** A TARGET that is inert (disabled, hidden, read-only) ignores its own handler but still lets the event
+      * bubble, so this yields `true` (keep bubbling) without running `body`. Only the target is guarded: an
+      * ancestor on the bubble path is not inert just because the target was.
+      */
+    private def unlessInert(isTarget: Boolean, inert: => Boolean < Sync)(body: => Boolean < Async)(using
+        Frame
+    ): Boolean < Async =
+        if !isTarget then body
+        else inert.map(i => if i then true else body)
+
+    /** Check if element is hidden. Reads the channel too: `.hidden(Signal)` installs a boolean-attribute
+      * channel exactly like `.disabled(Signal)`, so the static field is empty whenever the signal form was used.
+      */
+    private def isHidden(elem: Element)(using Frame): Boolean < Sync =
+        boolAttrNow(elem, "hidden", elem.attrs.hidden.getOrElse(false))
 
     /** Resolve the (possibly reactive) node at `targetPath` and test `predicate` against the concrete element there.
       *
       * Mirrors the renderer's path scheme: element children are index-addressed, a `Reactive`'s rendered content occupies the same path as
       * the boundary, `Foreach` items live at `path :+ key` (or `:+ index`), and `Fragment` children at `path :+ index`. Resolving through
-      * these boundaries is what lets an element wrapped by a signal-typed setter (e.g. `.disabled(Signal)`, which wraps it in a `Reactive`)
+      * these boundaries is what lets an element wrapped by a signal-typed setter (e.g. `.hidden(Signal)`, which wraps it in a `Reactive`)
       * still be recognized by its concrete type, so button-click form submit and disabled detection keep working through such wrappers.
+      *
+      * The predicate is effectful because "is it disabled" is a question about the CURRENT value behind a
+      * channel, not about a field (see [[boolAttrNow]]).
       */
     private def targetSatisfies(
         node: UI,
         nodePath: Seq[String],
         targetPath: Seq[String],
-        predicate: Element => Boolean,
+        predicate: Element => Boolean < Sync,
         mounts: MountDispatch
     )(using
         Frame
@@ -253,12 +294,12 @@ private[kyo] object EventDispatch:
     private def isTargetButton(elem: Element, myPath: Seq[String], targetPath: Seq[String], mounts: MountDispatch)(using
         Frame
     ): Boolean < Sync =
-        targetSatisfies(elem, myPath, targetPath, _.isInstanceOf[Button], mounts)
+        targetSatisfies(elem, myPath, targetPath, e => Kyo.lift(e.isInstanceOf[Button]), mounts)
 
     private def isTargetSelect(elem: Element, myPath: Seq[String], targetPath: Seq[String], mounts: MountDispatch)(using
         Frame
     ): Boolean < Sync =
-        targetSatisfies(elem, myPath, targetPath, _.isInstanceOf[Select], mounts)
+        targetSatisfies(elem, myPath, targetPath, e => Kyo.lift(e.isInstanceOf[Select]), mounts)
 
     /** Bubble-continue value after an element handled `event`: `false` (consume) only when the element set
       * `stopPropagation(true)` AND actually declared a handler for this event's type (`declared`). The result flows up the
@@ -284,8 +325,7 @@ private[kyo] object EventDispatch:
         event match
             case ev: UIEvent.Click =>
                 // Disabled or hidden elements ignore their own click handler, but allow bubbling
-                if isTarget && (isDisabled(elem) || isHidden(elem)) then true
-                else
+                unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isHidden(elem))) {
                     val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
                     val self  = if isTarget then
                         invoke(attrs.onClickSelf).andThen(invokeWith(attrs.onClickSelfEvt, mouse))
@@ -310,6 +350,7 @@ private[kyo] object EventDispatch:
                         .andThen(activateToggle)
                         .andThen(formSubmit)
                         .andThen(keepBubbling(elem, declared))
+                }
             case _: UIEvent.Attach =>
                 if isTarget && attrs.onAttached.nonEmpty then AttachSite.start(attrs.onAttached.get).andThen(true)
                 else true
@@ -327,8 +368,7 @@ private[kyo] object EventDispatch:
                     invoke(attrs.onBlur).andThen(invokeWith(attrs.onBlurEvt, mouse)).andThen(true)
                 else true
             case e: UIEvent.KeyDown =>
-                if isTarget && isDisabled(elem) then true
-                else
+                unlessInert(isTarget, isDisabled(elem)) {
                     val kbEvent = UI.KeyboardEvent(
                         key = Keyboard.fromString(e.keyboard.key),
                         modifiers = e.keyboard.modifiers,
@@ -373,6 +413,7 @@ private[kyo] object EventDispatch:
                     else Kyo.lift(())
                     keyHandler.andThen(activateClick).andThen(activateToggle).andThen(selectCycle).andThen(formSubmit)
                         .andThen(keepBubbling(elem, attrs.onKeyDown.nonEmpty))
+                }
             case e: UIEvent.KeyUp =>
                 val kbEvent = UI.KeyboardEvent(
                     key = Keyboard.fromString(e.keyboard.key),
@@ -381,8 +422,7 @@ private[kyo] object EventDispatch:
                 )
                 invokeWith(attrs.onKeyUp, kbEvent).andThen(keepBubbling(elem, attrs.onKeyUp.nonEmpty))
             case e: UIEvent.Input =>
-                if isTarget && (isDisabled(elem) || isReadOnly(elem)) then true
-                else
+                unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isReadOnly(elem))) {
                     elem match
                         case ti: TextInput =>
                             val autoSet = ti.value match
@@ -390,9 +430,9 @@ private[kyo] object EventDispatch:
                                 case _                       => Kyo.lift(())
                             autoSet.andThen(invokeWith(ti.onInput, e.value)).andThen(true)
                         case _ => true
+                }
             case e: UIEvent.Change =>
-                if isTarget && (isDisabled(elem) || isReadOnly(elem)) then true
-                else
+                unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isReadOnly(elem))) {
                     elem match
                         case ti: TextInput =>
                             val autoSet = ti.value match
@@ -411,9 +451,9 @@ private[kyo] object EventDispatch:
                             autoSet.andThen(invokeWith(pi.onChange, e.value)).andThen(true)
                         case fi: FileInput => invokeWith(fi.onChange, e.value).andThen(true)
                         case _             => true
+                }
             case e: UIEvent.ChangeChecked =>
-                if isTarget && isDisabled(elem) then true
-                else
+                unlessInert(isTarget, isDisabled(elem)) {
                     elem match
                         case bi: BooleanInput =>
                             val autoSet = bi.checked match
@@ -421,9 +461,9 @@ private[kyo] object EventDispatch:
                                 case _                       => Kyo.lift(())
                             autoSet.andThen(invokeWith(bi.onChange, e.checked)).andThen(true)
                         case _ => true
+                }
             case e: UIEvent.ChangeNumeric =>
-                if isTarget && isDisabled(elem) then true
-                else
+                unlessInert(isTarget, isDisabled(elem)) {
                     elem match
                         case ni: NumberInput =>
                             val autoSet = ni.value match
@@ -436,6 +476,7 @@ private[kyo] object EventDispatch:
                                 case _                       => Kyo.lift(())
                             autoSet.andThen(invokeWith(ri.onChange, e.value)).andThen(true)
                         case _ => true
+                }
             case ev: UIEvent.Submit =>
                 elem match
                     case f: Form =>

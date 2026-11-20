@@ -344,6 +344,79 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
             assert(live)
     }
 
+    // Regression: a textarea carries its value as content, not as a `value` attribute, so the morph's
+    // attribute walk never mirrored a ref write onto the PROPERTY the field renders. A comment box cleared
+    // after a click on its submit button (focus on the button, not the field) kept showing the typed text.
+    "a ref write clears a textarea the user typed into while another element has focus" in {
+        for
+            text <- Signal.initRef("")
+            ui    = UI.div(UI.textarea.id("note").value(text), UI.button("Send").id("send"))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("note") != null))
+            field <- Sync.defer(dom.document.getElementById("note").asInstanceOf[scalajs.Dynamic])
+            _     <- Sync.defer {
+                discard(field.focus())
+                field.value = "typed"
+                discard(field.setSelectionRange(2, 2))
+                val input = scalajs.Dynamic.newInstance(dom.window.asInstanceOf[scalajs.Dynamic].Event)(
+                    "input",
+                    scalajs.Dynamic.literal(bubbles = true)
+                )
+                discard(field.dispatchEvent(input))
+            }
+            // The echo of the keystroke has rendered: the field's content now holds what was typed, and the
+            // focused field kept its caret through it.
+            _    <- assertEventually(Sync.defer(field.textContent.asInstanceOf[String] == "typed"))
+            echo <-
+                Sync.defer((field.value.asInstanceOf[String], field.selectionStart.asInstanceOf[Int], dom.document.activeElement eq field))
+            _ <- Sync.defer(discard(dom.document.getElementById("send").asInstanceOf[scalajs.Dynamic].focus()))
+            _ <- text.set("")
+            // The clear has rendered too. The content moving is not the claim; the FIELD showing it is.
+            _       <- assertEventually(Sync.defer(field.textContent.asInstanceOf[String] == ""))
+            cleared <- Sync.defer(field.value.asInstanceOf[String])
+            // A value a renderer could escape or trim wrongly arrives exactly as written.
+            _      <- text.set(TextareaTricky)
+            _      <- assertEventually(Sync.defer(field.textContent.asInstanceOf[String] == TextareaTricky))
+            tricky <- Sync.defer(field.value.asInstanceOf[String])
+            same   <- Sync.defer(dom.document.getElementById("note").asInstanceOf[scalajs.Dynamic] eq field)
+            _      <- fiber.interrupt
+            _      <- fiber.getResult
+        yield
+            assert(echo == ("typed", 2, true))
+            assert(same)
+            assert(cleared == "", s"the textarea shows '$cleared' after its ref was cleared")
+            assert(tricky == TextareaTricky, s"the textarea shows '$tricky'")
+    }
+
+    // Guard for the fix above: an unbound textarea renders the same empty content on every pass, so a repaint of
+    // the region around it must leave what the user typed alone, as it does for an unbound input.
+    "a repaint around an unbound textarea keeps what the user typed" in {
+        for
+            outer <- Signal.initRef(0)
+            ui = UI.div(
+                outer.map(o => UI.div(UI.textarea.id("free"), UI.span(s"o=$o").id("free-status"))),
+                UI.button("bump").id("free-bump")
+            )
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("free") != null))
+            field <- Sync.defer(dom.document.getElementById("free").asInstanceOf[scalajs.Dynamic])
+            _     <- Sync.defer {
+                field.value = "kept"
+                discard(dom.document.getElementById("free-bump").asInstanceOf[scalajs.Dynamic].focus())
+            }
+            _     <- outer.set(1)
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("free-status").textContent == "o=1"))
+            same  <- Sync.defer(dom.document.getElementById("free").asInstanceOf[scalajs.Dynamic] eq field)
+            shown <- Sync.defer(field.value.asInstanceOf[String])
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield
+            assert(same)
+            assert(shown == "kept", s"the unbound textarea shows '$shown' after a repaint around it")
+    }
+
     // Regression: the focused-field branch treated every focused input as two-way bound and wrote the incoming
     // `value` attribute into it; an unbound field renders none, so a repaint around it while the reader typed
     // emptied it.

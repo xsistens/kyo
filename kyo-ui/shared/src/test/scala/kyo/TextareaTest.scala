@@ -148,8 +148,51 @@ class TextareaTest extends UITest:
         withUI(app) {
             for
                 _ <- Browser.click(Selector.id("b"))
-                _ <- Browser.assertVisible(Selector.id("t"))
+                v <- Browser.value(Selector.id("t"))
+            yield assert(v == "after", s"textarea shows '$v', not the value written to the ref")
+        }
+    }
+
+    // Regression: a textarea carries its value as content, not as a `value` attribute, so a ref write
+    // reached the field only while it was focused. A click on another button moves the focus away, and a
+    // clear from there left the typed text on screen while every other consumer of the ref had moved on.
+    "a ref write clears a textarea the user has typed into" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef("")
+            yield UI.div(
+                UI.textarea.id("t").value(ref),
+                UI.button("Clear").id("clear").onClick(ref.set("")),
+                ref.map(v => UI.span(s"[$v]").id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.fill(Selector.id("t"), "typed")
+                _ <- Browser.assertText(Selector.id("v"), "[typed]")
+                _ <- Browser.click(Selector.id("clear"))
+                _ <- Browser.assertText(Selector.id("v"), "[]")
+                // The ref moving is not the claim; the FIELD showing it is.
+                _ <- Browser.assertValueEmpty(Selector.id("t"))
             yield ()
+        }
+    }
+
+    "a ref write replaces the text of a textarea the user has typed into" in {
+        // Edge whitespace, a line break and every character HTML escapes arrive exactly as written.
+        val tricky          = "  a\n<b> & \"c\" 'd'  "
+        val app: UI < Async =
+            for ref <- Signal.initRef("")
+            yield UI.div(
+                UI.textarea.id("t").value(ref),
+                UI.button("Preset").id("preset").onClick(ref.set(tricky)),
+                ref.map(v => UI.span(if v == tricky then "preset" else "other").id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.fill(Selector.id("t"), "typed")
+                _ <- Browser.click(Selector.id("preset"))
+                _ <- Browser.assertText(Selector.id("v"), "preset")
+                v <- Browser.value(Selector.id("t"))
+            yield assert(v == tricky, s"textarea shows '$v', not the value written to the ref")
         }
     }
 

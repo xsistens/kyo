@@ -31,6 +31,35 @@ private[kyo] object HtmlOp:
     case class CommandById(id: String, verb: String) extends HtmlOp derives Schema
     case class RequestMeasureById(id: String)        extends HtmlOp derives Schema
 
+    // classList.toggle(className, on) on getElementById(id) without replacing the element (so CSS transitions fire).
+    // The boolean-force form makes it idempotent with any baked-in initial class.
+    case class SetClassById(id: String, className: String, on: Boolean) extends HtmlOp derives Schema
+    // setProperty each declaration of the serialized `css` onto getElementById(id), so it merges over other inline
+    // props rather than clobbering them (unlike a full style="" replace).
+    case class SetStyleById(id: String, css: String) extends HtmlOp derives Schema
+    // set an attribute on getElementById(id) WITHOUT replacing the element, so a reactive attribute (e.g.
+    // aria-expanded) tracks a signal in place; a Reactive wrapper would insert a data-kyo-reactive node and
+    // break a CSS `>` child-combinator anchored on that element. Emitted by UI.Commands.bindAttrById.
+    case class SetAttrById(id: String, name: String, value: String) extends HtmlOp derives Schema
+    // Declarative, path-addressed (data-kyo-path) twin of SetAttrById/SetClassById: patch the attribute/class in
+    // place (no re-render, no re-mount). Unlike the id-addressed ops they mark no ownership: the render writes their
+    // value, so a morph that repaints the element carries it. Emitted by the observers started in ReactiveUI.subscribeScoped
+    // from Attrs.reactiveAttrs / reactiveBoolAttrs / reactiveClasses; SetClassByPath uses classList.toggle so CSS
+    // transitions fire.
+    case class SetAttrByPath(path: Seq[String], name: String, value: String)      extends HtmlOp derives Schema
+    case class SetBoolAttrByPath(path: Seq[String], name: String, value: Boolean) extends HtmlOp derives Schema
+    case class SetClassByPath(path: Seq[String], name: String, on: Boolean)       extends HtmlOp derives Schema
+    // The inline-style channel (inlineStyle(sig)): setProperty each declaration in `set` and removeProperty each name in
+    // `removed`, the properties the previous value had and this one lacks. The server's observer knows the previous value,
+    // the client does not, so the op carries what to remove. Not owned, like the other path channels: the render writes the
+    // channel's value inline, so a morph that repaints the element carries it.
+    case class SetStyleByPath(path: Seq[String], set: Seq[StyleDecl], removed: Seq[String]) extends HtmlOp derives Schema
+    // Attach capturing scroll+resize listeners to getElementById(id); each reply routes to a PERSISTENT sink in
+    // UI.Commands.observers (kept, not consumed like RequestMeasureById).
+    case class ObserveViewportById(id: String) extends HtmlOp derives Schema
+    // Detach the scroll/resize listeners started by ObserveViewportById(id).
+    case class UnobserveViewportById(id: String) extends HtmlOp derives Schema
+
     // --- Drag operations ---
 
     /** Requests a bounded byte range from a dropped browser file. */
@@ -46,4 +75,7 @@ private[kyo] object HtmlOp:
 
     /** Resolves a browser drag session with the server's acceptance decision. */
     final case class ResolveDrag(sessionId: String, decision: Drag.Decision) extends HtmlOp derives Schema
+
+    /** One inline declaration of a [[SetStyleByPath]]: a CSS property name and its value. */
+    final case class StyleDecl(name: String, value: String) derives CanEqual, Schema
 end HtmlOp

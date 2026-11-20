@@ -25,7 +25,21 @@ private[kyo] case class ReactiveUI(
     // what places a region's mount table, independently of the region's position among its siblings.
     origin: Maybe[Frame] = Absent,
     rows: Long = 0L,
-    deepRows: Chunk[Int] = Chunk.empty
+    deepRows: Chunk[Int] = Chunk.empty,
+    // Reactive channels carried from the element's Attrs; subscribeScoped forks the in-place-patch observers
+    // (empty for non-element / attribute-less nodes).
+    reactiveAttrs: Map[String, Signal[String]] = Map.empty,
+    reactiveBoolAttrs: Map[String, Signal[Boolean]] = Map.empty,
+    reactiveClasses: Map[String, Signal[Boolean]] = Map.empty,
+    reactiveStyle: Maybe[Signal[Style]] = Absent,
+    // Render-time snapshots: the values the enclosing paint already put into the DOM. Subscribe skips an observer's first
+    // emission while it still equals its snapshot, so a fresh paint is not patched again.
+    renderedValue: Maybe[UI] = Absent,
+    renderedAttrValues: Map[String, String] = Map.empty,
+    renderedBoolAttrValues: Map[String, Boolean] = Map.empty,
+    renderedClassValues: Map[String, Boolean] = Map.empty,
+    // The inline-style channel's declarations at render (see UI.Element.inlineStyle): what the first patch diffs against.
+    renderedStyleValue: Maybe[Seq[(String, String)]] = Absent
 )
 
 private[kyo] object ReactiveUI:
@@ -88,6 +102,23 @@ private[kyo] object ReactiveUI:
         yield root.copy(mountDispatch = Present(dispatch))
         end for
     end normalize
+
+    /** The same tree without its render-time snapshots, for a normalize that painted nothing.
+      *
+      * The snapshots let subscribe skip a first emission the page already shows, which holds only where this normalize
+      * is the one the page was rendered from. A server session is not: the page came from an earlier HTTP render, and a
+      * reconnecting client still shows whatever the previous session last sent. Without snapshots every observer's first
+      * emission goes out, so a session starts by bringing the page to the current state.
+      */
+    def unpainted(rui: ReactiveUI): ReactiveUI =
+        rui.copy(
+            children = rui.children.map(unpainted),
+            renderedValue = Absent,
+            renderedAttrValues = Map.empty,
+            renderedBoolAttrValues = Map.empty,
+            renderedClassValues = Map.empty,
+            renderedStyleValue = Absent
+        )
 
     /* Normalization and the tree walk carry, for the mounted nodes and regions they meet, the session's dispatch table and which
      * depths of the path, since the enclosing reactive region, hold the key of a keyed list row: a bit per depth below 63 in `rows`,
@@ -153,7 +184,7 @@ private[kyo] object ReactiveUI:
                                 )
                             result <- freshHdl(targetPath, event)
                         yield result
-                }
+                }.copy(renderedValue = Present(current))
                 end for
 
             case ui: Foreach[?, ?] @unchecked =>
@@ -201,7 +232,7 @@ private[kyo] object ReactiveUI:
                                 )
                             result <- freshHdl(targetPath, event)
                         yield result
-                }
+                }.copy(renderedValue = Present(current))
                 end for
 
             case ui: Element =>
@@ -230,6 +261,10 @@ private[kyo] object ReactiveUI:
                         contentDeepRows,
                         discoverRootBound = false
                     )
+                    attrSnap  <- Kyo.foreach(ui.attrs.reactiveAttrs.toSeq)((n, s) => s.current.map(v => n -> v))
+                    boolSnap  <- Kyo.foreach(ui.attrs.reactiveBoolAttrs.toSeq)((n, s) => s.current.map(v => n -> v))
+                    classSnap <- Kyo.foreach(ui.attrs.reactiveClasses.toSeq)((n, s) => s.current.map(v => n -> v))
+                    styleSnap <- Kyo.foreach(ui.attrs.reactiveStyle.toList)(s => s.current.map(CssStyleRenderer.declarations))
                 yield ReactiveUI(
                     path,
                     elementSignal,
@@ -242,8 +277,17 @@ private[kyo] object ReactiveUI:
                     discoverContentRootBound = false,
                     origin = Present(ui.frame),
                     rows = rows,
-                    deepRows = deepRows
+                    deepRows = deepRows,
+                    reactiveAttrs = ui.attrs.reactiveAttrs,
+                    reactiveBoolAttrs = ui.attrs.reactiveBoolAttrs,
+                    reactiveClasses = ui.attrs.reactiveClasses,
+                    reactiveStyle = ui.attrs.reactiveStyle,
+                    renderedAttrValues = attrSnap.toMap,
+                    renderedBoolAttrValues = boolSnap.toMap,
+                    renderedClassValues = classSnap.toMap,
+                    renderedStyleValue = Maybe.fromOption(styleSnap.headOption)
                 )
+                end for
 
             case ui: Mounted =>
                 val spec           = MountedSpec(ui, path, rowKeys(path, rows, deepRows))
@@ -328,6 +372,18 @@ private[kyo] object ReactiveUI:
             case (ReactiveRegion.ParentContext.HtmlTable, ReactiveRegion.TableContent.Rows) => ReactiveRegion.ParentContext.Other
             case _                                                                          => parentContext
 
+    /** True when a child UI needs its own ReactiveUI node during a static walk: reactive nodes always, and an
+      * element whose ROOT carries a binding (a bound input ref or any reactive attr/bool-attr/class channel).
+      * Shared by the element-children and the fragment-children walk so the promotion rule cannot diverge
+      * between them.
+      */
+    private def needsOwnNode(ui: UI): Boolean = ui match
+        case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted => true
+        case el: Element                                    =>
+            collectSignalRef(el).nonEmpty || el.attrs.reactiveAttrs.nonEmpty
+            || el.attrs.reactiveBoolAttrs.nonEmpty || el.attrs.reactiveClasses.nonEmpty || el.attrs.reactiveStyle.nonEmpty
+        case _ => false
+
     /** Walk a static UI tree. Collect reactive children, build handle. */
     private[internal] def walkStatic(
         ui: UI,
@@ -358,22 +414,18 @@ private[kyo] object ReactiveUI:
                 for childWalks <- Kyo.foreach(elem.children.toSeq.zipWithIndex) { (child, i) =>
                         val childPath    = basePath :+ i.toString
                         val childContext = context.child(i.toString)
-                        child match
-                            case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted =>
-                                for rui <- normalizeAt(child, childPath, childSvg, childContext, childParentContext, cells, rows, deepRows)
-                                yield (Seq(rui), Seq.empty[(Int, Handler)])
-                            case childElem: Element if collectSignalRef(childElem).nonEmpty =>
-                                // Element with SignalRef-bound attributes is reactive over those signals;
-                                // normalize it so subscribeNode wires updates.
-                                for rui <-
-                                        normalizeAt(childElem, childPath, childSvg, childContext, childParentContext, cells, rows, deepRows)
-                                yield (Seq(rui), Seq.empty[(Int, Handler)])
-                            case _ =>
-                                for
-                                    (innerKids, innerHandle) <-
-                                        walkStatic(child, childPath, childSvg, childContext, childParentContext, cells, rows, deepRows)
-                                yield (innerKids, Seq((i, innerHandle)))
-                        end match
+                        if needsOwnNode(child) then
+                            // Normalize into a ReactiveUI node so subscribeScoped wires the updates. Required
+                            // even for a const element carrying ONLY reactive attrs: otherwise it is not walked
+                            // into a node and its in-place-patch observers would never start.
+                            for rui <- normalizeAt(child, childPath, childSvg, childContext, childParentContext, cells, rows, deepRows)
+                            yield (Seq(rui), Seq.empty[(Int, Handler)])
+                        else
+                            for
+                                (innerKids, innerHandle) <-
+                                    walkStatic(child, childPath, childSvg, childContext, childParentContext, cells, rows, deepRows)
+                            yield (innerKids, Seq((i, innerHandle)))
+                        end if
                     }
                 yield
                     val reactiveChildren = childWalks.flatMap(_._1)
@@ -391,15 +443,21 @@ private[kyo] object ReactiveUI:
                         val childContext = child match
                             case kc: KeyedChild[?] => context.child(kc.key)
                             case _                 => context.child(i.toString)
-                        child match
-                            case kc: KeyedChild[?] =>
-                                val depth = basePath.size
-                                if depth < 63 then
-                                    walkStatic(kc.child, childPath, svg, childContext, parentContext, cells, rows | (1L << depth), deepRows)
-                                else walkStatic(kc.child, childPath, svg, childContext, parentContext, cells, rows, deepRows.append(depth))
-                                end if
-                            case _ => walkStatic(child, childPath, svg, childContext, parentContext, cells, rows, deepRows)
-                        end match
+                        // Three plain values rather than a tuple: this runs per row on every walk, dispatch included.
+                        val keyed = child.isInstanceOf[KeyedChild[?]]
+                        val depth = if keyed then basePath.size else 0
+                        val inner = child match
+                            case kc: KeyedChild[?] => kc.child
+                            case _                 => child
+                        val innerRows     = if keyed && depth < 63 then rows | (1L << depth) else rows
+                        val innerDeepRows = if keyed && depth >= 63 then deepRows.append(depth) else deepRows
+                        if needsOwnNode(inner) then
+                            // Same contract as an element's reactive child: a row whose root carries a binding channel (a keyed row
+                            // with a reactive class, say) gets its own node, or its in-place-patch observers would never start.
+                            for rui <- normalizeAt(inner, childPath, svg, childContext, parentContext, cells, innerRows, innerDeepRows)
+                            yield (Seq(rui), rui.handle)
+                        else walkStatic(inner, childPath, svg, childContext, parentContext, cells, innerRows, innerDeepRows)
+                        end if
                     }
                 yield
                     val allKids    = childWalks.flatMap(_._1)
@@ -575,62 +633,163 @@ private[kyo] object ReactiveUI:
         dispatch: MountDispatch,
         pass: RegionKeys
     )(using Frame): Unit < (Async & Scope) =
-        if rui.mounted.nonEmpty then
-            subscribeMounted(rui, rui.mounted.get, exchange, signalChangeTime, mounts, dispatch)
-        else if rui.isConst then
-            val children = RegionKeys(rui.children)
-            Kyo.foreachDiscard(rui.children)(subscribeScoped(_, exchange, signalChangeTime, mounts, dispatch, children))
-        else
-            // The tree this region last rendered, so the exchange can send only what moved instead of the
-            // whole region.
-            // Unsafe: region-scoped, single-writer state created before the observe loop is forked, where no
-            // effect context exists to supply AllowUnsafe; only this region's own loop reads or writes it.
-            val rendered = AtomicRef.Unsafe.init(Maybe.empty[UI])(using AllowUnsafe.embrace.danger)
-            // Unsafe: as for `rendered`, the region's reference is made before its loop is forked, where no proof is at hand.
-            val regionMounts = mounts.child(pass, rui)(using AllowUnsafe.embrace.danger)
-            // Per-value setup, run inside each value's fresh Scope: render the region and fork its children into
-            // that scope, so the next value (or an interrupt) tears them down by cascade.
-            def renderValue(current: UI): Unit < (Async & Scope) =
-                for
-                    now      <- Clock.now
-                    _        <- signalChangeTime.set(now)
-                    previous <- Sync.Unsafe.defer(rendered.getAndSet(Present(current)))
-                    _        <- exchange.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, current)
-                    svgContext = rui.region match
-                        case _: ReactiveRegion.HtmlRange  => false
-                        case _: ReactiveRegion.SvgElement => true
-                    contentParentContext = nestedParentContext(rui.parentContext, current)
-                    (newKids, _) <- walkStatic(
-                        current,
-                        rui.path,
-                        svgContext,
-                        rui.contentContext,
-                        contentParentContext,
-                        dispatch,
-                        rows = 0L,
-                        deepRows = Chunk.empty,
-                        discoverRootBound = rui.discoverContentRootBound
-                    )
-                    keys = RegionKeys(newKids)
-                    _ <- regionMounts.beginWalk(newKids, keys)
-                    _ <- subscribeWalked(newKids, keys, regionMounts, exchange, signalChangeTime, dispatch)
-                yield ()
+        // Start the scoped in-place-patch observers for this node's reactive channels. Runs unconditionally: a
+        // no-op for attribute-less nodes, but an element carrying ONLY reactive attrs is `isConst = true` and
+        // would otherwise fork no observer of its own.
+        forkChannelObservers(
+            rui.path,
+            rui.reactiveAttrs,
+            rui.reactiveBoolAttrs,
+            rui.reactiveClasses,
+            exchange,
+            rui.renderedAttrValues,
+            rui.renderedBoolAttrValues,
+            rui.renderedClassValues,
+            rui.reactiveStyle,
+            rui.renderedStyleValue
+        ).andThen {
+            if rui.mounted.nonEmpty then
+                subscribeMounted(rui, rui.mounted.get, exchange, signalChangeTime, mounts, dispatch)
+            else if rui.isConst then
+                // A constant node belongs to the enclosing region's pass, which already counts its children.
+                Kyo.foreachDiscard(rui.children)(subscribeScoped(_, exchange, signalChangeTime, mounts, dispatch, pass))
+            else
+                // The tree this region last rendered, so the exchange can send only what moved instead of the
+                // whole region.
+                // Unsafe: region-scoped, single-writer state created before the observe loop is forked, where no
+                // effect context exists to supply AllowUnsafe; only this region's own loop reads or writes it.
+                val rendered = AtomicRef.Unsafe.init(Maybe.empty[UI])(using AllowUnsafe.embrace.danger)
+                // Unsafe: as for `rendered`, the region's reference is made before its loop is forked, where no proof is at hand.
+                val regionMounts                                                 = mounts.child(pass, rui)(using AllowUnsafe.embrace.danger)
+                def subscribeKids(kids: Seq[ReactiveUI]): Unit < (Async & Scope) =
+                    val keys = RegionKeys(kids)
+                    regionMounts.beginWalk(kids, keys)
+                        .andThen(subscribeWalked(kids, keys, regionMounts, exchange, signalChangeTime, dispatch))
+                end subscribeKids
+                // Per-value setup, run inside each value's fresh Scope: render the region and fork its children into
+                // that scope, so the next value (or an interrupt) tears them down by cascade.
+                def renderValue(current: UI): Unit < (Async & Scope) =
+                    for
+                        now      <- Clock.now
+                        _        <- signalChangeTime.set(now)
+                        previous <- Sync.Unsafe.defer(rendered.getAndSet(Present(current)))
+                        _        <- exchange.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, current)
+                        svgContext = rui.region match
+                            case _: ReactiveRegion.HtmlRange  => false
+                            case _: ReactiveRegion.SvgElement => true
+                        contentParentContext = nestedParentContext(rui.parentContext, current)
+                        (newKids, _) <- walkStatic(
+                            current,
+                            rui.path,
+                            svgContext,
+                            rui.contentContext,
+                            contentParentContext,
+                            dispatch,
+                            rows = 0L,
+                            deepRows = Chunk.empty,
+                            discoverRootBound = rui.discoverContentRootBound
+                        )
+                        _ <- forkRootChannels(rui.path, current, exchange)
+                        _ <- subscribeKids(newKids)
+                    yield ()
 
-            startOwnedFiber {
-                Abort.run[Throwable] {
-                    rui.signal.observe(renderValue)
-                }.map { result =>
-                    result.fold(
-                        _ => (),
-                        err => Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", err),
-                        panic =>
-                            if panic.isInstanceOf[Interrupted] then ()
-                            else Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", panic)
-                    )
+                startOwnedFiber {
+                    Abort.run[Throwable] {
+                        var first = true
+                        rui.signal.observe { current =>
+                            val isFirst = first
+                            first = false
+                            if isFirst && rui.renderedValue.exists(_.equals(current)) then
+                                // The enclosing render already painted exactly this value: skip the repaint and the
+                                // re-walk, but still subscribe the already-walked children, exactly as renderValue
+                                // would have. The value is recorded as this region's last render, so the NEXT emission
+                                // diffs against it rather than re-sending the whole region.
+                                Sync.Unsafe.defer(rendered.set(Present(current)))
+                                    .andThen(forkRootChannels(rui.path, current, exchange))
+                                    .andThen(subscribeKids(rui.children))
+                            else renderValue(current)
+                            end if
+                        }
+                    }.map { result =>
+                        result.fold(
+                            _ => (),
+                            err => Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", err),
+                            panic =>
+                                if panic.isInstanceOf[Interrupted] then ()
+                                else Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", panic)
+                        )
+                    }
                 }
-            }
-        end if
+            end if
+        }
     end subscribeScoped
+
+    /** Starts the channel observers of the element a region paints as its root. A walk only gives the root's children nodes of their
+      * own, so the root's channels at `path` are started here, in the current scope like the children's subscriptions.
+      */
+    private[internal] def forkRootChannels(path: Seq[String], content: UI, exchange: UIExchange)(using Frame): Unit < (Async & Scope) =
+        content match
+            case el: Element
+                if el.attrs.reactiveAttrs.nonEmpty || el.attrs.reactiveBoolAttrs.nonEmpty || el.attrs.reactiveClasses.nonEmpty
+                    || el.attrs.reactiveStyle.nonEmpty =>
+                forkChannelObservers(
+                    path,
+                    el.attrs.reactiveAttrs,
+                    el.attrs.reactiveBoolAttrs,
+                    el.attrs.reactiveClasses,
+                    exchange,
+                    style = el.attrs.reactiveStyle
+                )
+            case _ => Kyo.unit
+
+    private def forkChannelObservers(
+        path: Seq[String],
+        attrs: Map[String, Signal[String]],
+        boolAttrs: Map[String, Signal[Boolean]],
+        classes: Map[String, Signal[Boolean]],
+        exchange: UIExchange,
+        renderedAttrs: Map[String, String] = Map.empty,
+        renderedBools: Map[String, Boolean] = Map.empty,
+        renderedClasses: Map[String, Boolean] = Map.empty,
+        style: Maybe[Signal[Style]] = Absent,
+        renderedStyle: Maybe[Seq[(String, String)]] = Absent
+    )(using Frame): Unit < (Async & Scope) =
+        // Each channel is seeded with the render-time value: normalize happens-before the HTML render on every
+        // paint path, so the DOM already shows it, while a change landing between render and subscribe differs
+        // from it and still fires.
+        Kyo.foreachDiscard(attrs.toSeq) { case (name, sig) =>
+            Fiber.init(sig.observe(Maybe.fromOption(renderedAttrs.get(name)), Signal.defaultRepairInterval)(v =>
+                exchange.onAttrPatch(path, name, v)
+            )).unit
+        }.andThen(Kyo.foreachDiscard(boolAttrs.toSeq) { case (name, sig) =>
+            Fiber.init(sig.observe(Maybe.fromOption(renderedBools.get(name)), Signal.defaultRepairInterval)(v =>
+                exchange.onBoolAttrPatch(path, name, v)
+            )).unit
+        }).andThen(Kyo.foreachDiscard(classes.toSeq) { case (name, sig) =>
+            Fiber.init(sig.observe(Maybe.fromOption(renderedClasses.get(name)), Signal.defaultRepairInterval)(v =>
+                exchange.onClassPatch(path, name, v)
+            )).unit
+        }).andThen(style.fold(Kyo.unit: Unit < (Async & Scope))(bindStyle(path, _, renderedStyle, exchange)))
+    end forkChannelObservers
+
+    /** The inline-style channel. A value is its declarations, and a patch sets them and removes the properties the previous value had
+      * and this one lacks: the previous value is what this observer last wrote, seeded with what the render wrote, which only the
+      * observer knows (the client never saw a value as a value).
+      */
+    private def bindStyle(path: Seq[String], sig: Signal[Style], renderedStyle: Maybe[Seq[(String, String)]], exchange: UIExchange)(using
+        Frame
+    ): Unit < (Async & Scope) =
+        given CanEqual[Seq[(String, String)], Seq[(String, String)]] = CanEqual.derived
+        val decls                                                    = sig.map(CssStyleRenderer.declarations)
+        // Unsafe: one channel's own last write, read and replaced in one step by its observer fiber; it never leaves this observer.
+        val last = AtomicRef.Unsafe.init[Seq[(String, String)]](renderedStyle.getOrElse(Nil))(using AllowUnsafe.embrace.danger)
+        def write(next: Seq[(String, String)]): Unit < Async =
+            Sync.Unsafe.defer {
+                val names = next.iterator.map(_._1).toSet
+                last.getAndSet(next).map(_._1).filterNot(names.contains)
+            }.map(removed => exchange.onStylePatch(path, next, removed))
+        Fiber.init(decls.observe(renderedStyle, Signal.defaultRepairInterval)(write)).unit
+    end bindStyle
 
     // ---- Shared UI tree utilities (used by both backends) ----
 
@@ -789,29 +948,6 @@ private[kyo] object ReactiveUI:
             case _                  => Absent
         end match
     end findPathById
-
-    /** Find all focusable element IDs in document order from a resolved UI tree. Skips disabled and hidden elements.
-      */
-    def findAllFocusableIds(ui: UI): Seq[String] =
-        val builder              = Seq.newBuilder[String]
-        def walk(node: UI): Unit = node match
-            case elem: Element =>
-                val disabled = elem match
-                    case hd: HasDisabled => hd.disabled.getOrElse(false)
-                    case _               => false
-                val hidden = elem.attrs.hidden.getOrElse(false)
-                if !disabled && !hidden then
-                    val focusable = elem.isInstanceOf[Focusable] || elem.attrs.tabIndex.nonEmpty
-                    if focusable then
-                        elem.attrs.identifier.foreach(id => builder += id)
-                end if
-                elem.children.foreach(walk)
-            case Fragment(children)   => children.foreach(walk)
-            case KeyedChild(_, child) => walk(child)
-            case _                    => ()
-        walk(ui)
-        builder.result()
-    end findAllFocusableIds
 
     /** Find element by ID in a resolved UI tree. */
     def findElementById(ui: UI, id: String): Maybe[Element] =
