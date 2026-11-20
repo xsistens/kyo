@@ -304,6 +304,9 @@ private[kyo] object EventDispatch:
                         .andThen(activateToggle)
                         .andThen(formSubmit)
                         .andThen(keepBubbling(elem, declared))
+            case _: UIEvent.Attach =>
+                if isTarget && attrs.onAttached.nonEmpty then AttachSite.start(attrs.onAttached.get).andThen(true)
+                else true
             case ev: UIEvent.Focus =>
                 val isFocusable = elem.isInstanceOf[Focusable] || elem.attrs.tabIndex.nonEmpty
                 if isTarget && isFocusable then
@@ -482,6 +485,13 @@ private[kyo] object EventDispatch:
                             .andThen(keepBubbling(elem, attrs.onSortMove.nonEmpty || attrs.onSortMoveEvt.nonEmpty))
                     case _ => true
                 }
+            // Payload (UI.PointerEvent) rides the wire directly like FileSelect, so nothing is read from the element.
+            case ev: UIEvent.PointerDown =>
+                invokeWith(attrs.onPointerDown, ev.pointer).andThen(keepBubbling(elem, attrs.onPointerDown.nonEmpty))
+            case ev: UIEvent.PointerMove =>
+                invokeWith(attrs.onPointerMove, ev.pointer).andThen(keepBubbling(elem, attrs.onPointerMove.nonEmpty))
+            case ev: UIEvent.PointerUp =>
+                invokeWith(attrs.onPointerUp, ev.pointer).andThen(keepBubbling(elem, attrs.onPointerUp.nonEmpty))
             case _ => true
         end match
     end dispatchToElement

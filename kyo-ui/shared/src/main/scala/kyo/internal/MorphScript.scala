@@ -5,7 +5,8 @@ package kyo.internal
   * A morph is a walk over the DOM with its decisions in the walk, so it cannot be data, and no translation from Scala to JavaScript exists in
   * this build. The text is the single source: the body of a factory over `h`, the client's hooks, which answers what a
   * client calls. The server-push page installs it in its script; the browser mount builds it with `Function`. What differs between the
-  * clients is only behind `h`: how a field's property is written and how an animation starts. The hooks are written where their client lives, in [[HtmlRenderer]] and `DomBackend`.
+  * clients is only behind `h`: how a field's property is written, how an animation starts and whether an element's content can be an
+  * attach hook's. The hooks are written where their client lives, in [[HtmlRenderer]] and `DomBackend`.
   *
   * `DomBackendMorphParityTest` holds a table of cases to the answers both clients have to give.
   */
@@ -24,10 +25,14 @@ private[kyo] object MorphScript:
           |}
           |function __kyoMorphNode(from,to){
           |  if(from.nodeType!==1){if(from.nodeValue!==to.nodeValue)from.nodeValue=to.nodeValue;return;}
+          |  // The same element value shown again, with an onAttached hook that may have put content of its own inside: its children are the
+          |  // hook's. Only a client with such hooks asks.
+          |  var attached=h.guardAttached?from.getAttribute("data-kyo-attach"):null;
+          |  var unchanged=attached!==null&&attached===to.getAttribute("data-kyo-attach");
           |  __kyoMorphAttrs(from,to);
           |  // A focused contenteditable would lose its caret if its children were rewritten mid-edit; leave its
           |  // subtree alone (INPUT and TEXTAREA have no element children, so they need no such guard).
-          |  if(!((from===document.activeElement)&&from.hasAttribute("contenteditable")))
+          |  if(!unchanged&&!((from===document.activeElement)&&from.hasAttribute("contenteditable")))
           |    __kyoMorphRun(from,from.firstChild,null,to.firstChild,null);
           |}
           |// Give back every JS property a previous render set and the incoming element no longer carries. applyJsProps
