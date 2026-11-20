@@ -5,6 +5,7 @@ import scala.annotation.implicitNotFound
 import scala.annotation.nowarn
 import scala.annotation.tailrec
 import scala.compiletime.uninitialized
+import scala.util.control.NonFatal
 
 /** A reactive value that can change over time, providing both synchronous access to its current state and asynchronous notification of
   * changes.
@@ -162,6 +163,56 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
     ): Unit < (S & Async) =
         observeProjected[A, S](Signal.identityProjection, baseline, repairInterval)(f)
 
+    /** Runs `f` for the current value and then for every distinct value, until the enclosing `Scope` closes.
+      *
+      * Where the signal allows it, `f` runs without a fiber of its own: for a [[SignalRef]], a `map` or `readOnly` chain over one, and a
+      * constant, `f` runs inside a `set` that changed the value, on that writer's stack. All `onChange` subscribers of one ref share a
+      * single registration on it. Every other signal (`combineLatest`, `zip`, `switchMap`, [[Signal.initRaw]] and the like) is observed by
+      * a fiber forked into the enclosing `Scope`, so `f` then runs shortly after the change instead.
+      *
+      * On the writer's stack the deliveries to one subscriber never overlap, and the writer that is delivering also delivers what other
+      * writes changed in the meantime. With a single writer, every change is delivered before its `set` returns. A write that lands
+      * while a delivery runs, from another thread or from inside `f`, is delivered by the thread already delivering, once the current
+      * delivery returns: the `set` that made it may return before `f` has seen its value, and the delivering writer's `set` returns only
+      * after it. So an `f` that writes a new value on every delivery loops inside the writer.
+      *
+      * Because `f` runs inside somebody else's `set`, it must not block and should be cheap. The signal's `map` functions run there too.
+      * A failure thrown by `f`, or by a `map` function of the chain, is logged to the [[Log]] bound where `onChange` was called, and the
+      * subscription stays active: it neither aborts the writer's `set` nor silences the signal's other subscribers, and on the fiber path
+      * the fiber keeps observing.
+      *
+      * Prefer [[observe]] for asynchronous or expensive work, or when each value needs a `Scope` of its own. Prefer `onChange` for cheap
+      * synchronous side effects, in particular when many observers watch one signal: they cost one shared registration instead of a fiber
+      * each.
+      *
+      * @param f
+      *   The side effect for each distinct value
+      */
+    final def onChange(f: A => Unit < Sync)(using Frame): Unit < (Sync & Scope) =
+        onChange(Absent)(f)
+
+    /** Like [[onChange]] but seeded: `f` is skipped while the current value still equals `baseline`.
+      *
+      * @param baseline
+      *   The value the caller has already processed (for example, already painted)
+      * @param f
+      *   The side effect for each distinct value
+      */
+    final def onChange(baseline: Maybe[A])(f: A => Unit < Sync)(using frame: Frame): Unit < (Sync & Scope) =
+        // The Log is read here, where the subscription is made: a delivery runs inside somebody else's `set`, where none can be read.
+        Log.use { log =>
+            Sync.Unsafe.defer {
+                val report: Throwable => Unit = ex => log.unsafe.error("Signal.onChange callback failed", ex)
+                val run: A => Unit            = a =>
+                    try Sync.Unsafe.evalOrThrow(f(a))
+                    catch case ex if NonFatal(ex) => report(ex)
+                unsafeObserveProjected[A](Signal.identityProjection, baseline, run, report) match
+                    case Present(release) => Scope.ensure(Sync.Unsafe.defer(release()))
+                    case Absent => Fiber.init(observe(baseline, Signal.defaultRepairInterval)(a => Sync.Unsafe.defer(run(a)))).unit
+                end match
+            }
+        }
+
     /** The observation primitive: observes `proj` of this signal and deduplicates on its result, the image.
       *
       * Every observation goes through here. [[observe]] passes the identity; `map` passes its function on to its source, so a chain of maps
@@ -256,6 +307,30 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       */
     private[kyo] def readExact(read: Signal.ExactRead, wakesOnAnyInput: Boolean)(using AllowUnsafe): Maybe[A] = Absent
 
+    /** Fiber-free observation for trivial, non-suspending sinks.
+      *
+      * `cb` is invoked on the writer's own stack, inside the `set` that changed the projected image, instead of waking a fiber through the
+      * scheduler. The image-equality check therefore runs before any hop rather than after it, so a thousand observers of one signal cost a
+      * thousand comparisons rather than a thousand scheduled tasks.
+      *
+      * Returns the release function. `Absent` means this signal has no callback path: only chains rooted in a [[SignalRef]] provide one, so
+      * the caller keeps its fiber-based observation for everything else. The caller must call the release on teardown, since the
+      * registration otherwise outlives it.
+      *
+      * `cb` must not suspend and must stay trivial: it runs inside somebody else's `set`. [[onChange]] is the public form, which releases
+      * on the enclosing `Scope` and falls back to a fiber where this answers `Absent`.
+      *
+      * A failure of `proj` or `cb` neither aborts the writer's `set` nor silences the other subscribers: it is handed to `report`, on the
+      * writer's stack. The caller picks it where it subscribes, typically from the `Log` bound there, since none can be read inside the
+      * writer's `set`.
+      */
+    private[kyo] def unsafeObserveProjected[B](proj: A => B, baseline: Maybe[B], cb: B => Unit, report: Throwable => Unit)(
+        using
+        CanEqual[B, B],
+        AllowUnsafe,
+        Frame
+    ): Maybe[() => Unit] = Absent
+
     /** Creates a new signal by applying a transformation function to this signal's values.
       *
       * This operation creates a derived signal that automatically updates whenever the source signal changes, lazily applying the given
@@ -280,7 +355,13 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                         val p = Signal.lastProjection(proj)
                         self.observeProjected[C, S](a => p(f(a)), baseline, ri)(g)(using canEqualC, frame)
                     },
-            (read, wakesOnAnyInput) => self.readExact(read, wakesOnAnyInput).map(a => f(a))
+            (read, wakesOnAnyInput) => self.readExact(read, wakesOnAnyInput).map(a => f(a)),
+            // The same composition for the callback path, made per subscription. Its dispatch walks can overlap, so the
+            // memo of this stage is the atomic `sharedLastProjection`.
+            [C] =>
+                (proj, baseline, cb, report, canEqualC, allow) =>
+                    val p = Signal.sharedLastProjection(proj)
+                    self.unsafeObserveProjected[C](a => p(f(a)), baseline, cb, report)(using canEqualC, allow, frame)
         )
 
     /** This signal's changes, carrying `b` in place of its own values.
@@ -293,6 +374,8 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       * The baseline is in `b`'s space and `b` is the only value there, so it can only mean "the caller has already processed one
       * delivery". That is honoured by seeding the source observation with the source's current value, after which every source change
       * delivers again.
+      *
+      * The callback path declines (`Absent`): its subscriber deduplicates on the image too.
       */
     private[kyo] def changesTo[B](b: B)(using canEqualB: CanEqual[B, B], frame: Frame): Signal[B] =
         Signal._initRawF(
@@ -306,7 +389,8 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                     if baseline.exists(_ == image) then self.currentWith(a0 => self.observe[S](Present(a0), ri)(_ => g(image)))
                     else self.observe[S](Absent, ri)(_ => g(image))
             ,
-            (read, wakesOnAnyInput) => self.readExact(read, wakesOnAnyInput).map(_ => b)
+            (read, wakesOnAnyInput) => self.readExact(read, wakesOnAnyInput).map(_ => b),
+            [C] => (_, _, _, _, _, _) => Absent
         )
     end changesTo
 
@@ -466,6 +550,22 @@ object Signal:
                     end if
                     lastOut
                 end apply
+
+    /** [[lastProjection]] for the callback path, where two dispatch walks of one subscriber can overlap: the last input and its image
+      * sit in one atomic cell, so a walk reads a consistent pair. An overlap can at worst project the same input twice.
+      */
+    private[kyo] def sharedLastProjection[A, B](proj: A => B)(using CanEqual[A, A]): A => B =
+        if proj.asInstanceOf[AnyRef] eq identityAny then proj
+        else
+            val last = new java.util.concurrent.atomic.AtomicReference[Maybe[(A, B)]](Absent)
+            a =>
+                last.get() match
+                    case Present((in, out)) if in == a => out
+                    case _                             =>
+                        val out = proj(a)
+                        last.set(Present((a, out)))
+                        out
+                end match
 
     /** Waits for any of the given signals to change.
       *
@@ -629,7 +729,18 @@ object Signal:
                     if baseline.exists(_ == image) then Async.never[Unit]
                     else Scope.run(g(image).andThen(Async.never[Unit]))
             ,
-            (_, _) => Present(value)
+            (_, _) => Present(value),
+            // A constant delivers once and can never fire again, so the release is a no-op and there is
+            // nothing to register on. A failure is reported as a ref's subscription reports it, without aborting the subscriber.
+            [C] =>
+                (proj, baseline, cb, report, canEqualC, _) =>
+                    given CanEqual[C, C] = canEqualC
+                    try
+                        val image = proj(value)
+                        if !baseline.exists(_ == image) then cb(image)
+                    catch case ex if NonFatal(ex) => report(ex)
+                    end try
+                    Present(() => ())
         )
 
     /** Creates a new immutable signal with a constant value and applies a transformation function.
@@ -806,7 +917,15 @@ object Signal:
             C => Unit < (S & Async & Scope),
             CanEqual[C, C]
         ) => Unit < (S & Async),
-        inline _readExact: (ExactRead, Boolean) => AllowUnsafe ?=> Maybe[A]
+        inline _readExact: (ExactRead, Boolean) => AllowUnsafe ?=> Maybe[A],
+        inline _unsafeObserveProjected: [C] => (
+            A => C,
+            Maybe[C],
+            C => Unit,
+            Throwable => Unit,
+            CanEqual[C, C],
+            AllowUnsafe
+        ) => Maybe[() => Unit]
     )(
         using
         frame: Frame,
@@ -823,8 +942,71 @@ object Signal:
                 _observeProjected(proj, baseline, repairInterval, g, canEqualC)
             override private[kyo] def readExact(read: ExactRead, wakesOnAnyInput: Boolean)(using AllowUnsafe): Maybe[A] =
                 _readExact(read, wakesOnAnyInput)
+            override private[kyo] def unsafeObserveProjected[C](proj: A => C, baseline: Maybe[C], cb: C => Unit, report: Throwable => Unit)(
+                using
+                canEqualC: CanEqual[C, C],
+                allow: AllowUnsafe,
+                frame: Frame
+            ): Maybe[() => Unit] =
+                _unsafeObserveProjected(proj, baseline, cb, report, canEqualC, allow)
         end new
     end _initRawF
+
+    /** One callback subscriber of a [[SignalRef]], holding the projection it observes through and the last image it was told about.
+      *
+      * Two dispatch walks can overlap, one from a fired waiter and one from the re-arm loop that noticed a version change, so a subscriber
+      * can be asked to deliver from two threads at once. Its deliveries still run one at a time, and each reads the source's current value
+      * itself rather than taking one a caller read earlier: a caller that finds the subscriber busy only records that there is more to
+      * deliver and returns, and the caller already delivering reads the source again before it lets go. One thread reading in turn never
+      * sees the value go back, so `cb` never sees an older image after a newer one, and the re-arm loop's repeat is never mistaken for a
+      * duplicate. Nothing waits on a lock, so a callback that writes another signal cannot deadlock against one that writes back.
+      *
+      * A failure of `proj` or `cb` goes to `report`, which the subscriber chose where it subscribed: the dispatch walk runs on whatever
+      * thread wrote, where no `Log` binding of the subscriber can be read.
+      */
+    final private[kyo] class Sub[A, B](
+        source: SignalRef.Unsafe[A],
+        proj: A => B,
+        cb: B => Unit,
+        val report: Throwable => Unit,
+        initial: Maybe[B]
+    )(using
+        CanEqual[B, B]
+    ):
+        private val alive = new java.util.concurrent.atomic.AtomicBoolean(true)
+        // Deliveries requested and not yet taken; the caller that raises it from zero delivers until it falls back to zero.
+        private val pending = new java.util.concurrent.atomic.AtomicInteger(0)
+        // Read and written only by the delivering caller, which `pending` hands from one to the next.
+        private var last: Maybe[B] = initial
+
+        def isAlive: Boolean = alive.get()
+
+        /** Retire this subscriber; `true` only for the caller that actually retired it, so releasing twice
+          * is a no-op instead of decrementing the live count twice.
+          */
+        def kill(): Boolean = alive.compareAndSet(true, false)
+
+        /** Delivers the source's current value, or leaves that to the caller already delivering. A failing projection or callback does
+          * not stop the deliveries requested behind it; the first failure is rethrown once they are done.
+          */
+        def deliver()(using AllowUnsafe): Unit =
+            if pending.getAndIncrement() == 0 then
+                var failure: Throwable = null
+                var missed             = 1
+                while missed != 0 do
+                    try
+                        val image = proj(source.get())
+                        if !last.exists(_ == image) then
+                            last = Present(image)
+                            cb(image)
+                    catch case ex if NonFatal(ex) => if failure eq null then failure = ex
+                    end try
+                    missed = pending.addAndGet(-missed)
+                end while
+                if failure ne null then throw failure
+            end if
+        end deliver
+    end Sub
 
     /** A one-way view of another signal, deliberately not a [[SignalRef]]. See [[SignalRef.readOnly]].
       *
@@ -844,6 +1026,14 @@ object Signal:
 
         override private[kyo] def readExact(read: ExactRead, wakesOnAnyInput: Boolean)(using AllowUnsafe): Maybe[A] =
             source.readExact(read, wakesOnAnyInput)
+
+        override private[kyo] def unsafeObserveProjected[B](proj: A => B, baseline: Maybe[B], cb: B => Unit, report: Throwable => Unit)(
+            using
+            CanEqual[B, B],
+            AllowUnsafe,
+            Frame
+        ): Maybe[() => Unit] =
+            source.unsafeObserveProjected(proj, baseline, cb, report)
     end ReadOnly
 
     /** The [[SignalRef]]s an exact read went through, each with the version it had before its value was read (see
@@ -963,6 +1153,22 @@ object Signal:
         override private[kyo] def readExact(read: ExactRead, wakesOnAnyInput: Boolean)(using AllowUnsafe): Maybe[A] =
             read.add(_unsafe, _unsafe.version())
             Present(_unsafe.get())
+
+        /** The callback twin of [[observeProjected]]: delivery happens inside the writer's own `set`, with no scheduler hop.
+          *
+          * All subscribers of one ref share a single registration on the next-change promise (see `Unsafe.subscribe`), so a write fires one
+          * waiter and walks an array rather than completing one waiter per subscriber on the writing thread.
+          */
+        override private[kyo] def unsafeObserveProjected[B](proj: A => B, baseline: Maybe[B], cb: B => Unit, report: Throwable => Unit)(
+            using
+            CanEqual[B, B],
+            AllowUnsafe,
+            Frame
+        ): Maybe[() => Unit] =
+            val sub = new Signal.Sub[A, B](_unsafe, proj, cb, report, baseline)
+            _unsafe.subscribe(sub)
+            Present(() => _unsafe.unsubscribe(sub))
+        end unsafeObserveProjected
 
         /** Observes exactly, without a repair timer, through a version-validated register/validate/await protocol.
           *
@@ -1193,11 +1399,182 @@ object Signal:
 
             def waiters()(using AllowUnsafe): Int = nextPromise.get().waiters()
 
-            def safe: SignalRef[A] = SignalRef(this)
+            // Callback subscribers live in a hub created by the first `subscribe`, so a reference nobody subscribes to pays nothing for
+            // them. The field is installed by compare-and-set through `SignalPlatformSpecific.hubSlot`, so it keeps its name.
+            @volatile private var hub: Hub = null
 
+            private def hubForSubscribe(): Hub =
+                val h = hub
+                if h ne null then h
+                else
+                    val fresh = new Hub
+                    // Two first subscribers can race here. The loser's hub was never published: it holds no subscriber and has
+                    // armed no registration, so dropping it loses nothing, and the loser subscribes to the winner's.
+                    if installHub(fresh) then fresh else hub
+                end if
+            end hubForSubscribe
+
+            private def installHub(fresh: Hub): Boolean =
+                SignalPlatformSpecific.hubSlot match
+                    case Present(slot) => slot.install(this, fresh)
+                    case Absent        =>
+                        // Single-threaded platforms: nothing can run between the read in `hubForSubscribe` and this write.
+                        hub = fresh
+                        true
+
+            /** Register `sub`, deliver the current value to it, and make sure a waiter is armed. */
+            private[kyo] def subscribe(sub: Sub[A, ?])(using AllowUnsafe): Unit = hubForSubscribe().subscribe(sub)
+
+            /** Drops `sub` (see [[Hub.unsubscribe]]). */
+            private[kyo] def unsubscribe(sub: Sub[A, ?])(using AllowUnsafe): Unit =
+                val h = hub
+                if h ne null then h.unsubscribe(sub)
+
+            /** Callback subscribers. All of them share one registration on the next-change promise, so a write costs one waiter and one re-registration for the whole fan-out, and the writing thread walks an array of plain calls. Subscribing is rare and notifying is hot, so the list is copy-on-write.
+              */
+            final private class Hub:
+
+                // Never a real version (they count up from zero): a pump handed it dispatches before anything else.
+                private inline val Stale = -1L
+
+                private val subs =
+                    new java.util.concurrent.atomic.AtomicReference[Chunk[Sub[A, ?]]](Chunk.empty)
+                // The one registration on the next-change promise, or null. It enters this slot before it registers and leaves it only by its
+                // own CAS, so a registration that already ran can never be mistaken for the live one.
+                private val armed =
+                    new java.util.concurrent.atomic.AtomicReference[Arm](null)
+                // Live subscribers, tracked separately from `subs.size` because retired ones linger in the list
+                // until a sweep. Reaching zero is what releases the shared registration.
+                private val liveSubs = new java.util.concurrent.atomic.AtomicInteger(0)
+
+                /** Register `sub`, deliver the current value to it, and make sure a waiter is armed. */
+                private[kyo] def subscribe(sub: Sub[A, ?])(using AllowUnsafe): Unit =
+                    @tailrec def add(): Unit =
+                        val cur = subs.get()
+                        if !subs.compareAndSet(cur, cur.append(sub)) then add()
+                    discard(liveSubs.incrementAndGet())
+                    add()
+                    // The version is read before the value, and the pump measures every later write against it: a write landing
+                    // after this delivery (from another thread, or from the sink itself) completes a promise nobody may be
+                    // registered on, so the version is all that records it. The sink's own write is pinned by a test; another
+                    // thread's lands between two atomics, which only a race reaches.
+                    val seen = versionRef.get()
+                    deliverTo(sub)
+                    pump(seen)
+                end subscribe
+
+                /** Drops `sub`; when the last one leaves, releases the shared registration. The next-change promise is masked and outlives its
+                  * subscribers, so leaving the waiter behind would retain every callback.
+                  *
+                  * Retiring is a flag flip, not a list rebuild: filtering the copy-on-write list per removal would make tearing down n
+                  * subscribers quadratic. Dead entries are skipped by the dispatch walk and swept out in one pass once they outnumber the live
+                  * ones; when everything goes at once, the list is dropped wholesale and needs no sweep.
+                  *
+                  * A `subscribe` can race the last leave: it counts itself live before it appends and arms. So the list is dropped only by a
+                  * CAS against the list read while nobody was live, and after the waiter is removed the count is read again: a subscriber
+                  * that arrived in between gets the current value and its waiter back from a fresh pump.
+                  */
+                private[kyo] def unsubscribe(sub: Sub[A, ?])(using AllowUnsafe): Unit =
+                    if sub.kill() then
+                        if liveSubs.decrementAndGet() == 0 then releaseIfIdle()
+                        else sweepIfCluttered()
+                end unsubscribe
+
+                @tailrec private def releaseIfIdle()(using AllowUnsafe): Unit =
+                    val cur = subs.get()
+                    if liveSubs.get() == 0 then
+                        if subs.compareAndSet(cur, Chunk.empty) then
+                            val a = armed.getAndSet(null)
+                            if a ne null then discard(a.promise.remove(a))
+                            // Dispatching first: a write may have completed the promise after its waiter was removed here. Between the
+                            // drop and this read nothing runs on this stack, so only another thread's subscribe reaches this, and no test
+                            // pins it.
+                            if liveSubs.get() > 0 then pump(Stale)
+                        else releaseIfIdle()
+                    end if
+                end releaseIfIdle
+
+                private def sweepIfCluttered(): Unit =
+                    val cur = subs.get()
+                    if cur.size > 2 * liveSubs.get() + 16 then
+                        discard(subs.compareAndSet(cur, cur.filter(_.isAlive)))
+                end sweepIfCluttered
+
+                // A failing sink must not silence the others sharing the dispatch walk, nor abort whoever is setting up a
+                // subscription when it throws on the initial delivery. The failure goes to the subscriber's own report (see Sub).
+                private def deliverTo(sub: Sub[A, ?])(using AllowUnsafe): Unit =
+                    try sub.deliver()
+                    catch case ex if NonFatal(ex) => sub.report(ex)
+
+                private def dispatch()(using AllowUnsafe): Unit =
+                    subs.get().foreach(sub => if sub.isAlive then deliverTo(sub))
+
+                /** Delivers and re-arms until the signal holds still, then leaves exactly one waiter behind.
+                  *
+                  * `seen` is the version the subscribers were last brought up to, or [[Stale]] when they have to be dispatched first. Each
+                  * round reads the version, dispatches if it moved past `seen`, and checks it again once the promise is in hand. That order
+                  * makes the path lossless in every way a write can be dropped: one racing the registration (the case `nextSince` handles),
+                  * one landing between a new subscriber's first delivery and the arm, and one issued from inside a delivery, where the sink
+                  * calls `set` and completes a promise nobody is registered on yet because the re-arm has not happened. A moved version runs
+                  * another round; `Sub.deliver` deduplicates, so a redundant round costs a projection.
+                  */
+                private def pump(seen: Long)(using AllowUnsafe): Unit =
+                    var since = seen
+                    var done  = false
+                    while !done do
+                        if liveSubs.get() == 0 then done = true
+                        else
+                            val v0 = versionRef.get()
+                            if v0 != since then dispatch()
+                            val p = nextPromise.get().asInstanceOf[IOPromise[Any, Any]]
+                            if versionRef.get() != v0 then since = v0
+                            else
+                                // Claiming the slot first makes the arm that wins it the only one that registers. A lost CAS means
+                                // another pump armed, on this promise or an older one whose completion pumps again. Two pumps meet here
+                                // only from two threads, between two atomics, so only a race reaches this and no test pins it.
+                                val a = new Arm(p)
+                                if armed.compareAndSet(null, a) then
+                                    p.onComplete(a)
+                                    // The last subscriber may have released the slot before the registration existed to remove.
+                                    if armed.get() ne a then discard(p.remove(a))
+                                end if
+                                done = true
+                            end if
+                        end if
+                    end while
+                end pump
+
+                /** One registration on the next-change promise. A promise that completed before `onComplete` runs it inline, which is fine: it
+                  * has already left the slot by the time the nested pump arms the next one.
+                  *
+                  * An error completion must not re-arm: the promise is only swapped on a value update (see onUpdate), so re-arming would
+                  * capture the same completed promise, whose registration fires inline, and recurse without bound.
+                  */
+                final private class Arm(val promise: IOPromise[Any, Any]) extends (Result[Any, Any] => Any):
+                    def apply(r: Result[Any, Any]): Any =
+                        // Unsafe: a promise callback, run by whatever completed the promise (the writer's `set`, inside its own
+                        // suspension) with no proof in reach; the pump it runs is the hub's own unsafe-tier work.
+                        import AllowUnsafe.embrace.danger
+                        // A failed CAS means the last subscriber released this registration while it was firing.
+                        if armed.compareAndSet(this, null) && r.isSuccess then pump(Stale)
+                    end apply
+                end Arm
+            end Hub
+
+            def safe: SignalRef[A] = SignalRef(this)
         end Unsafe
 
         object Unsafe:
+
+            /** Installs the callback hub of a [[SignalRef.Unsafe]] by compare-and-set on its field, without a lock or an extra object
+              * per reference (see `SignalPlatformSpecific`).
+              */
+            abstract private[kyo] class HubSlot:
+                /** Sets `ref`'s hub to `hub` if it has none yet; `true` for the call that set it. `hub` is the reference's own `Hub`,
+                  * typed `AnyRef` because that class is private to the reference.
+                  */
+                def install(ref: Unsafe[?], hub: AnyRef): Boolean
+            end HubSlot
 
             /** WARNING: Low-level API meant for integrations, libraries, and performance-sensitive code. See AllowUnsafe for more details.
               */
