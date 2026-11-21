@@ -24,8 +24,11 @@ class MountedTest extends kyo.test.Test[Any]:
 
     /** @param keepsRows
       *   answers a list patch the way the DOM backend does: only the changed rows are painted, the kept ones stay in place
+      * @param beforePaint
+      *   runs before a paint is recorded, with its path and markup, and may suspend it there, as a slow transport would
       */
-    private class Recorder(keepsRows: Boolean = false) extends RecordingExchange:
+    private class Recorder(keepsRows: Boolean = false, beforePaint: (Seq[String], String) => Unit < Async = (_, _) => ())
+        extends RecordingExchange:
         // What the page shows by path: this renders each paint, where the log it extends keeps the UI.
         private val pages = AtomicRef.Unsafe.init(Chunk.empty[(Seq[String], String)])(using AllowUnsafe.embrace.danger)
 
@@ -53,7 +56,9 @@ class MountedTest extends kyo.test.Test[Any]:
             previous: Maybe[UI],
             ui: UI
         )(using Frame): Unit < Async =
-            HtmlRenderer.render(ui, path).map(html => Sync.Unsafe.defer(discard(pages.getAndUpdate(_.append((path, html))))))
+            HtmlRenderer.render(ui, path).map(html =>
+                beforePaint(path, html).andThen(Sync.Unsafe.defer(discard(pages.getAndUpdate(_.append((path, html))))))
+            )
 
         /** The initial page, which a transport renders itself before subscribing. */
         def initial(ui: UI)(using Frame): Unit < Sync =
@@ -78,11 +83,11 @@ class MountedTest extends kyo.test.Test[Any]:
 
     private def click(path: String*): UIEvent = UIEvent.Click(path, MouseEventData(UI.Modifiers.none, Absent))
 
-    private def mount[A](ui: UI, keepsRows: Boolean = false)(
+    private def mount[A](ui: UI, keepsRows: Boolean = false, beforePaint: (Seq[String], String) => Unit < Async = (_, _) => ())(
         f: (Recorder, (Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope)
     )(using Frame): A < Async =
         Scope.run {
-            val recorder = new Recorder(keepsRows)
+            val recorder = new Recorder(keepsRows, beforePaint)
             for
                 _    <- recorder.initial(ui)
                 root <- ReactiveUI.normalize(ui, Seq.empty)
@@ -104,6 +109,155 @@ class MountedTest extends kyo.test.Test[Any]:
                     _ <- showsEventually(recorder, Seq("0"), "loading")
                     _ <- gate.completeUnitDiscard
                     _ <- showsEventually(recorder, Seq("0"), "ready")
+                yield ()
+            }
+        yield succeed
+    }
+
+    // A component that renders its body both as its placeholder and as its content (a tab strip: its static projection is
+    // the strip with its panels) holds every keyed mount in its body twice, and the instance the placeholder started is the
+    // one the content keeps. The demo's pages are exactly that, a section per keyed mount inside the tabs' panel, and a
+    // section whose own content was still on its way when the tabs revealed theirs never left its placeholder.
+    private def nestedKeyed(outerGate: Promise[Unit, Any], innerGate: Promise[Unit, Any])(using Frame): UI =
+        def inner: UI = UI.mounted(innerGate.get.andThen(span("inner-ready"))).keyed("section").placeholder(span("inner-loading"))
+        div(UI.mounted(outerGate.get.andThen(div(span("outer-ready"), inner))).placeholder(div(span("outer-loading"), inner)))
+
+    "a keyed mount the outer placeholder started is revealed once its effect publishes after the outer reveal" in {
+        for
+            outerGate <- Promise.init[Unit, Any]
+            innerGate <- Promise.init[Unit, Any]
+            _         <- mount(nestedKeyed(outerGate, innerGate)) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0"), "outer-loading")
+                    _ <- outerGate.completeUnitDiscard
+                    _ <- showsEventually(recorder, Seq("0"), "outer-ready")
+                    _ <- innerGate.completeUnitDiscard
+                    _ <- showsEventually(recorder, Seq("0", "1"), "inner-ready")
+                yield ()
+            }
+        yield succeed
+    }
+
+    // The outer boundary waits for a slow sibling, and the inner one, a boundary of its own, reveals in the meantime: its paint
+    // reaches the outer gate while that still drops what comes from below. The outer reveal then paints the live state, which
+    // has to be the inner content and not the inner placeholder, or the inner never shows again. The demo's sections inside
+    // a tab strip were exactly this, and a section that revealed before the strip did kept its static copy for good.
+    "a boundary that revealed while the boundary around it was still waiting shows its content after the outer reveal" in {
+        for
+            outerGate <- Promise.init[Unit, Any]
+            innerGate <- Promise.init[Unit, Any]
+            slowGate  <- Promise.init[Unit, Any]
+            innerRan  <- Promise.init[Unit, Any]
+            inner = UI.mounted(innerGate.get.andThen(innerRan.completeUnitDiscard).andThen(span("inner-ready")))
+                .keyed("section").placeholder(span("inner-loading"))
+            slow = UI.mounted(slowGate.get.andThen(span("slow-ready")))
+            ui   = div(UI.mounted(outerGate.get.andThen(div(span("outer-ready"), inner, slow))).placeholder(span("outer-loading")))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _     <- showsEventually(recorder, Seq("0"), "outer-loading")
+                    _     <- outerGate.completeUnitDiscard
+                    _     <- innerGate.completeUnitDiscard
+                    _     <- innerRan.get
+                    _     <- slowGate.completeUnitDiscard
+                    _     <- showsEventually(recorder, Seq("0"), "slow-ready")
+                    shown <- recorder.shown(Seq("0", "1"))
+                    // The inner boundary's own paint, not only the outer reveal's rendering of it: a client that morphs the reveal
+                    // over a placeholder of the same shape leaves the inner keyed slot for its instance to paint, and the paint it
+                    // made while the outer one waited was dropped there.
+                    _ <- assertEventually(recorder.paintsAt(Seq("0", "1")).map(_ > 0))
+                yield assert(shown.contains("inner-ready"), s"the inner boundary after the outer reveal: $shown")
+            }
+        yield succeed
+    }
+
+    // Two boundaries deep: a section revealed inside a waiting strip, with a boundary of its own revealed inside it. The strip's
+    // reveal paints both again. A paint of the section takes the section's lock and then the strip's, so a repaint that went
+    // down through the section's lock while holding the strip's waited on a section that waited on the strip. Under a slow CPU
+    // the demo's pages stopped there, most sections on their placeholder. Here the strip's reveal paint is held at the
+    // transport while the section paints. The sleeps only give the boundaries time to get where the scenario needs them: if
+    // they fall short a round passes without having met the case, it never fails because of them, and there are enough rounds.
+    "a reveal that paints two boundaries deep again while the boundary between them paints finishes" in {
+        Kyo.foreachDiscard(1 to 20) { _ =>
+            for
+                outerGate <- Promise.init[Unit, Any]
+                slowGate  <- Promise.init[Unit, Any]
+                midRan    <- Promise.init[Unit, Any]
+                bottomRan <- Promise.init[Unit, Any]
+                revealing <- Promise.init[Unit, Any]
+                release   <- Promise.init[Unit, Any]
+                tick      <- Signal.initRef(0)
+                bottom = UI.mounted(bottomRan.completeUnitDiscard.andThen(span("bottom-ready")))
+                    .keyed("bottom").placeholder(span("bottom-loading"))
+                mid = UI.mounted(midRan.completeUnitDiscard.andThen(div(tick.render(n => span(s"tick:$n")), bottom)))
+                    .keyed("mid").placeholder(span("mid-loading"))
+                slow       = UI.mounted(slowGate.get.andThen(span("slow-ready")))
+                ui         = div(UI.mounted(outerGate.get.andThen(div(span("outer-ready"), mid, slow))).placeholder(span("outer-loading")))
+                holdReveal = (path: Seq[String], html: String) =>
+                    if path == Seq("0") && html.contains("slow-ready") then revealing.completeUnitDiscard.andThen(release.get) else Kyo.unit
+                _ <- mount(ui, beforePaint = holdReveal) { (recorder, _) =>
+                    for
+                        _ <- showsEventually(recorder, Seq("0"), "outer-loading")
+                        _ <- outerGate.completeUnitDiscard
+                        _ <- midRan.get
+                        _ <- bottomRan.get
+                        _ <- Async.sleep(50.millis)
+                        _ <- slowGate.completeUnitDiscard
+                        _ <- revealing.get
+                        _ <- tick.set(1)
+                        _ <- Async.sleep(50.millis)
+                        _ <- release.completeUnitDiscard
+                        _ <- assertEventually(recorder.shown(Seq("0", "1", "1")).map(_.contains("bottom-ready")))
+                        // The reveal paint already shows the first tick, so only a later one tells whether the section still paints.
+                        _ <- tick.set(2)
+                        // Bounded only so that a section that stopped fails here rather than at the suite's timeout.
+                        _ <- assertEventually(recorder.shown(Seq("0", "1", "0")).map(_.contains("tick:2")), within = 10.seconds)
+                    yield ()
+                }
+            yield ()
+        }.andThen(succeed)
+    }
+
+    // The same, with the inner boundary in a keyed list row, which is where a tab strip keeps its panels: inside a waiting
+    // boundary a list goes the whole-region way, and its rows are resolved from the live state on the reveal too.
+    "a boundary in a keyed row that revealed while the boundary around it was waiting shows its content after the reveal" in {
+        for
+            outerGate <- Promise.init[Unit, Any]
+            innerGate <- Promise.init[Unit, Any]
+            slowGate  <- Promise.init[Unit, Any]
+            innerRan  <- Promise.init[Unit, Any]
+            rows      <- Signal.initRef(Chunk("panel"))
+            inner = UI.mounted(innerGate.get.andThen(innerRan.completeUnitDiscard).andThen(span("inner-ready")))
+                .keyed("section").placeholder(span("inner-loading"))
+            slow = UI.mounted(slowGate.get.andThen(span("slow-ready")))
+            ui   = div(UI.mounted(outerGate.get.andThen(div(div(rows.foreachKeyed(identity)(_ => div(inner))), slow)))
+                .placeholder(span("outer-loading")))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0"), "outer-loading")
+                    _ <- outerGate.completeUnitDiscard
+                    _ <- innerGate.completeUnitDiscard
+                    _ <- innerRan.get
+                    _ <- slowGate.completeUnitDiscard
+                    _ <- showsEventually(recorder, Seq("0"), "slow-ready")
+                    _ <- showsEventually(recorder, Seq("0"), "inner-ready")
+                yield ()
+            }
+        yield succeed
+    }
+
+    // A placeholder is painted, not subscribed, so the keyed mount inside it starts with the content; an effect that has
+    // nothing left to wait for by then publishes at once.
+    "a keyed mount inside an outer placeholder and its content is revealed when its effect has nothing to wait for" in {
+        for
+            outerGate <- Promise.init[Unit, Any]
+            innerGate <- Promise.init[Unit, Any]
+            _         <- mount(nestedKeyed(outerGate, innerGate)) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0"), "outer-loading")
+                    _ <- innerGate.completeUnitDiscard
+                    _ <- outerGate.completeUnitDiscard
+                    _ <- showsEventually(recorder, Seq("0"), "outer-ready")
+                    _ <- showsEventually(recorder, Seq("0", "1"), "inner-ready")
                 yield ()
             }
         yield succeed

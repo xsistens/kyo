@@ -316,6 +316,12 @@ final private[kyo] class DomReactiveRegions private (
       * A nested range still waiting for its first value now holds its incoming markup, kept or cloned, so that markup is
       * what its first value is compared against (see [[replaceWith]]). One whose first value already arrived has no entry
       * and gets none; one that is gone takes its entry with it.
+      *
+      * Only where the range now holds that markup. A reconciliation leaves a keyed slot its instance owns as it is (see
+      * `__kyoPatchLogical` in [[MorphScript]]), so such a range can still show its placeholder while the payload brought the instance's
+      * content. Recorded anyway, that content would be what the instance's own paint of the same content is compared
+      * against, and the paint that has to bring it would be taken for one that changes nothing. Such a range gets no entry,
+      * so its next value is applied.
       */
     private def adoptLive(
         removed: Set[String],
@@ -330,7 +336,9 @@ final private[kyo] class DomReactiveRegions private (
         }
         ranges.addAll(live)
         incomingMarkup.foreach { (id, markup) =>
-            if live.contains(id) && (!removed.contains(id) || inserted.contains(id)) then inserted(id) = markup
+            if live.contains(id) && (!removed.contains(id) || inserted.contains(id)) then
+                if serializeBetween(live(id)) == markup then inserted(id) = markup
+                else discard(inserted.remove(id))
         }
     end adoptLive
 

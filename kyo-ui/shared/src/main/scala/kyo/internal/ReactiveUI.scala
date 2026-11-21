@@ -321,6 +321,27 @@ private[kyo] object ReactiveUI:
                 val contentParentContext = nestedParentContext(parentContext, b.child)
                 val (kids, childHandle)  =
                     walkStatic(b.child, path, svg, contentContext, contentParentContext, cells, rows = 0L, deepRows = Nil)
+                // What the render put on the page for this node, by the rule `HtmlRenderer` paints a boundary with. Until the boundary's
+                // subscription registers its gate that paint is all the reader has seen, so a click on the placeholder must reach the
+                // placeholder: the content it stands for has no instance yet, and the click would fall through to the elements around it.
+                val paintedPlaceholder: Maybe[UI] =
+                    if b.display.isEmpty && b.settings.waits && Boundaries.catchesNow(b.child) then b.settings.placeholderView
+                    else Absent
+                def toPlaceholder(ph: UI, targetPath: Seq[String], event: UIEvent): Boolean < Async =
+                    Sync.Unsafe.defer {
+                        val (_, placeholderHandle) =
+                            walkStatic(
+                                ph,
+                                path,
+                                svg,
+                                contentContext,
+                                nestedParentContext(parentContext, ph),
+                                cells,
+                                rows = 0L,
+                                deepRows = Nil
+                            )
+                        placeholderHandle(targetPath, event)
+                    }
                 // Content a boundary holds back is not on the page, so no event reaches it, while its placeholder is and takes them;
                 // and a range that keeps showing old content while its new content loads takes no event, which would otherwise land
                 // in the new content.
@@ -328,21 +349,9 @@ private[kyo] object ReactiveUI:
                     cells.boundary(contentContext).map {
                         case Present(gate) if !gate.isRevealed =>
                             gate.livePlaceholder match
-                                case Present(ph) =>
-                                    Sync.Unsafe.defer {
-                                        val (_, placeholderHandle) = walkStatic(
-                                            ph,
-                                            path,
-                                            svg,
-                                            contentContext,
-                                            nestedParentContext(parentContext, ph),
-                                            cells,
-                                            rows = 0L,
-                                            deepRows = Nil
-                                        )
-                                        placeholderHandle(targetPath, event)
-                                    }
-                                case Absent => true
+                                case Present(ph) => toPlaceholder(ph, targetPath, event)
+                                case Absent      => true
+                        case Absent if paintedPlaceholder.nonEmpty => toPlaceholder(paintedPlaceholder.get, targetPath, event)
                         case _ => cells.held(targetPath).map(held => if held then true else childHandle(targetPath, event))
                     }
                 ReactiveUI(
@@ -1071,6 +1080,34 @@ private[kyo] object ReactiveUI:
             case Present(row) => Sync.Unsafe.defer(row.add(release))
             case Absent       => Scope.ensure(Sync.defer(release()))
 
+    /** How a region or a mount inside a waiting boundary takes its values: each is a pass with a group of its own, and the first one is due
+      * from now, so the boundary does not reveal before this has rendered and subscribed what it shows. `shownOf` is what a value paints,
+      * `step` shows it through the group.
+      */
+    private[internal] def throughHold[A](hold: BoundaryHold, rui: ReactiveUI)(shownOf: A => UI)(
+        step: (A, UIExchange) => Unit < (Async & Scope)
+    )(using Frame): (A => Unit < (Async & Scope)) < (Async & Scope) =
+        for
+            first <- hold.group
+            // Unsafe: read and cleared in one step by this region's own loop, created before that loop is forked.
+            due = AtomicRef.Unsafe.init(Maybe(first))(using AllowUnsafe.embrace.danger)
+            _ <- Scope.ensure(first.close)
+        yield (value: A) =>
+            Sync.Unsafe.defer(due.getAndSet(Absent)).map(_.fold(hold.group)(Kyo.lift)).map { group =>
+                Scope.ensure(group.close)
+                    .andThen(group.paints(BoundaryRange(
+                        rui.region,
+                        rui.path,
+                        rui.contentContext,
+                        rui.parentContext,
+                        shownOf(value),
+                        rui
+                    )))
+                    .andThen(step(value, group))
+                    .andThen(BoundaryHold.duringPass.use(_(rui.path)))
+                    .andThen(group.started)
+            }
+
     /** Starts the fiber of a region over a `Signal[UI]`, with a fresh Scope per value: each value is painted, walked, and its
       * reactive children subscribed in that Scope, so the next value or an interrupt tears them down by cascade. `regionMounts` is the
       * region's mount table, which outlives the subscription (see [[MountTableRef]]).
@@ -1169,28 +1206,8 @@ private[kyo] object ReactiveUI:
         exchange.gate match
             case Absent        => start(onValue(_, _, exchange))
             case Present(hold) =>
-                // Inside a waiting boundary every value is a pass with a group of its own, and the first one is due from now, so
-                // the boundary does not reveal before this region has rendered and subscribed what it shows.
-                for
-                    first <- hold.group
-                    due = AtomicRef.Unsafe.init(Maybe(first))(using AllowUnsafe.embrace.danger)
-                    _ <- Scope.ensure(first.close)
-                    _ <- start { (current, isFirst) =>
-                        Sync.Unsafe.defer(due.getAndSet(Absent)).map(_.fold(hold.group)(Kyo.lift)).map { group =>
-                            Scope.ensure(group.close)
-                                .andThen(group.paints(BoundaryRange(
-                                    rui.region,
-                                    rui.path,
-                                    rui.contentContext,
-                                    rui.parentContext,
-                                    current,
-                                    rui
-                                )))
-                                .andThen(onValue(current, isFirst, group))
-                                .andThen(group.started)
-                        }
-                    }
-                yield ()
+                throughHold[(UI, Boolean)](hold, rui)(_._1)((value, group) => onValue(value._1, value._2, group))
+                    .map(held => start((current, isFirst) => held((current, isFirst))))
         end match
     end subscribeRegion
 

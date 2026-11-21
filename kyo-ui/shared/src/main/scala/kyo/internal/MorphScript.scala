@@ -202,7 +202,22 @@ private[kyo] object MorphScript:
           |  return (id!==null&&__kyoSpanClose(node,id))?id:null;
           |}
           |function __kyoMoveLogicalBefore(parent,node,ref){__kyoEachSpanNode(node,function(n){parent.insertBefore(n,ref);});}
+          |// A mount paints its placeholder bare into its slot, and its content arrives inside a range of its own. Taken
+          |// as an element against a span, that pair is replaced whole, and with it every node of a placeholder built
+          |// like its content and everything hanging off them. A bare live run facing exactly one incoming range is
+          |// wrapped in that range instead and reconciled against what it holds: the same markup, the nodes kept.
+          |// Answers [live close, incoming close], or null when the runs are not that pair.
+          |function __kyoWrapInIncomingRange(parent,fromStart,fromEnd,toStart,toEnd){
+          |  if(!toStart||!fromStart||fromStart===fromEnd)return null;
+          |  var tid=__kyoSpanId(toStart);if(tid===null)return null;
+          |  var tclose=__kyoSpanClose(toStart,tid);if(!tclose||tclose.nextSibling!==toEnd)return null;
+          |  for(var n=fromStart;n&&n!==fromEnd;n=n.nextSibling)if(__kyoSpanId(n)!==null)return null;
+          |  parent.insertBefore(document.importNode(toStart,false),fromStart);
+          |  return [parent.insertBefore(document.importNode(tclose,false),fromEnd),tclose];
+          |}
           |function __kyoMorphRun(parent,fromStart,fromEnd,toStart,toEnd){
+          |  var wrapped=__kyoWrapInIncomingRange(parent,fromStart,fromEnd,toStart,toEnd);
+          |  if(wrapped){__kyoMorphRun(parent,fromStart,wrapped[0],toStart.nextSibling,wrapped[1]);return;}
           |  var fromNodes=[],fromKeys=[],toNodes=[],toKeys=[];
           |  __kyoCollectLogical(fromStart,fromEnd,fromNodes,fromKeys);
           |  __kyoCollectLogical(toStart,toEnd,toNodes,toKeys);

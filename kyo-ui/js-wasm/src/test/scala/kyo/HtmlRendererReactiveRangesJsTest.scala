@@ -243,6 +243,24 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
         assert(!box.checked.asInstanceOf[Boolean], "the checkbox still shows the tick the render took back")
     }
 
+    // A mount's placeholder sits bare in its slot, and its content arrives inside a range of its own: the morph has to
+    // wrap the live nodes in that range rather than replace them as an element against a span.
+    "embedded morph keeps a placeholder's nodes when the content arrives inside a range of its own" in {
+        install(
+            "<!--kyo-rs:r s--><div id='box' data-kyo-path='1'><p id='para' data-kyo-path='1.0'>a</p></div><!--kyo-re:r-->"
+        )
+        val box  = live("box")
+        val para = live("para")
+        replace("r", "<!--kyo-rs:r~1--><div id='box' data-kyo-path='1'><p id='para' data-kyo-path='1.0'>b</p></div><!--kyo-re:r~1-->")
+        assert(live("box") eq box, "the placeholder's root was replaced instead of morphed")
+        assert(live("para") eq para, "the placeholder's child was replaced instead of morphed")
+        assert(dom.document.body.innerHTML.contains("<!--kyo-rs:r~1--><div"), dom.document.body.innerHTML)
+        // The range the content arrived in is registered: it can be patched by its own id.
+        replace("r~1", "<div id='box' data-kyo-path='1'><p id='para' data-kyo-path='1.0'>c</p></div>")
+        assert(live("para") eq para)
+        assert(para.textContent.asInstanceOf[String] == "c")
+    }
+
     "embedded morph leaves the reader's tick on an unbound checkbox" in {
         val id = "r"
         install(s"<!--kyo-rs:$id--><input id='free' type='checkbox'><span>0</span><!--kyo-re:$id-->")
