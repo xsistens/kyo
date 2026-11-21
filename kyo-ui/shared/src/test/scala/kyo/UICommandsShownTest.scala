@@ -5,8 +5,8 @@ import kyo.internal.HtmlRenderer
 import kyo.internal.ReactiveUI
 import kyo.internal.UICommands
 
-/** [[kyo.UI.Commands]] from inside a mount: a command waits for the paint of the instance's own content, and is dropped with it when
-  * it never shows.
+/** [[kyo.UI.Commands]] from inside a mount: a command waits for the paints it belongs to, the instance's own content and whatever
+  * holds that content back, and is dropped with them when they never show.
   *
   * The screen applies every paint the way the client does, so a command logged with `true` found its element on the page.
   */
@@ -56,6 +56,30 @@ class UICommandsShownTest extends UIScreen:
         mountLogged(div(selfFocusing("own"))) { (_, log) =>
             assertEventually(log.get.map(_.nonEmpty)).andThen(log.get.map(seen => assert(seen == Chunk("focus:own:true"), seen.toString)))
         }
+    }
+
+    "inside a boundary that holds the content back, the command waits for the reveal" in {
+        for
+            gate <- Promise.init[Unit, Any]
+            ui = div(
+                UI.mounted(
+                    UI.commands.map(_.focusId("held")).andThen(div(input.id("held"), UI.mounted(gate.get.andThen(span("loaded")))))
+                ).placeholder(span("loading"))
+            )
+            result <- mountLogged(ui) { (screen, log) =>
+                for
+                    _      <- screen.await("the placeholder")(_.contains("loading"))
+                    before <- log.get
+                    _      <- gate.completeUnitDiscard
+                    _      <- screen.await("the content")(_.contains("loaded"))
+                    _      <- assertEventually(log.get.map(_.nonEmpty))
+                    after  <- log.get
+                yield (before, after)
+            }
+        yield
+            val (before, after) = result
+            assert(before.isEmpty, s"sent while the content was held back: $before")
+            assert(after == Chunk("focus:held:true"), after.toString)
     }
 
     "a command whose content never shows is dropped, and a measure waiting there answers Absent" in {

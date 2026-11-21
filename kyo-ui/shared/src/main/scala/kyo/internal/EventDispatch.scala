@@ -16,6 +16,7 @@ private[kyo] object EventDispatch:
     private[internal] def dispatch(
         elem: Element,
         myPath: Seq[String],
+        at: ReactiveRegion.RegionIdentity,
         targetPath: Seq[String],
         event: UIEvent,
         reactiveChildren: Seq[ReactiveUI],
@@ -48,7 +49,7 @@ private[kyo] object EventDispatch:
                 // not hide it. All four come out of one resolution: they are four questions about one
                 // element, not four searches for it.
                 facts <-
-                    if isClick || isKeyDown then targetFacts(elem, myPath, targetPath, mounts)
+                    if isClick || isKeyDown then targetFacts(elem, myPath, at, targetPath, mounts)
                     else Kyo.lift(TargetFacts.none)
                 // "Is it disabled" is a question about the current value behind a channel, not about a
                 // field (see boolAttrNow), so it is read from the resolved element rather than carried.
@@ -316,6 +317,7 @@ private[kyo] object EventDispatch:
     private def resolveTarget(
         node: UI,
         nodePath: Seq[String],
+        at: ReactiveRegion.RegionIdentity,
         targetPath: Seq[String],
         rootDepth: Int,
         controlBelow: Boolean,
@@ -328,17 +330,19 @@ private[kyo] object EventDispatch:
         def unresolved(seen: Boolean): TargetFacts = TargetFacts(Absent, seen)
         node match
             case kc: KeyedChild[?] =>
-                resolveTarget(kc.child, nodePath, targetPath, rootDepth, controlBelow, mounts)
+                resolveTarget(kc.child, nodePath, at, targetPath, rootDepth, controlBelow, mounts)
             case r: Reactive[?] =>
                 // A Reactive's rendered content occupies the same path as the boundary, so re-resolve at nodePath.
-                r.signal.current(using r.frame).map(cur => resolveTarget(cur, nodePath, targetPath, rootDepth, controlBelow, mounts))
+                r.signal.current(using r.frame).map(cur =>
+                    resolveTarget(cur, nodePath, at.transparent, targetPath, rootDepth, controlBelow, mounts)
+                )
             case Fragment(children) =>
                 if targetPath.size <= nodePath.size then unresolved(controlBelow)
                 else
                     val seg = targetPath(nodePath.size)
                     Maybe.fromOption(seg.toIntOption) match
                         case Present(i) if i >= 0 && i < children.size =>
-                            resolveTarget(children(i), nodePath :+ seg, targetPath, rootDepth, controlBelow, mounts)
+                            resolveTarget(children(i), nodePath :+ seg, at.child(seg), targetPath, rootDepth, controlBelow, mounts)
                         case _ => unresolved(controlBelow)
                     end match
             case fe: Foreach[?, ?] @unchecked =>
@@ -352,8 +356,17 @@ private[kyo] object EventDispatch:
                                     case Present(f) => items.indexWhere(it => f(it) == seg)
                                     case Absent     => Maybe.fromOption(seg.toIntOption).getOrElse(-1)
                                 if idx >= 0 && idx < items.size then
-                                    resolveTarget(renderFn(idx, items(idx)), nodePath :+ seg, targetPath, rootDepth, controlBelow, mounts)
+                                    resolveTarget(
+                                        renderFn(idx, items(idx)),
+                                        nodePath :+ seg,
+                                        at.child(seg),
+                                        targetPath,
+                                        rootDepth,
+                                        controlBelow,
+                                        mounts
+                                    )
                                 else unresolved(controlBelow)
+                                end if
                             }
                     }
             case e: Element =>
@@ -363,7 +376,7 @@ private[kyo] object EventDispatch:
                     val seg = targetPath(nodePath.size)
                     Maybe.fromOption(seg.toIntOption) match
                         case Present(i) if i >= 0 && i < e.children.size =>
-                            resolveTarget(e.children(i), nodePath :+ seg, targetPath, rootDepth, seen, mounts)
+                            resolveTarget(e.children(i), nodePath :+ seg, at.child(seg), targetPath, rootDepth, seen, mounts)
                         case _ => unresolved(seen)
                     end match
                 end if
@@ -372,25 +385,46 @@ private[kyo] object EventDispatch:
             case _: Text | _: RawHtml | _: StyleElement => unresolved(controlBelow)
             // A mount's content lives with its instance, found through the dispatch table like the node's handler finds it, and
             // occupies the node's path. An inert snapshot resolves to nothing, since no event reaches it.
+            case m: Mounted if Boundaries.implicitOf(m).nonEmpty =>
+                resolveTarget(Boundaries.implicitOf(m).get, nodePath, at, targetPath, rootDepth, controlBelow, mounts)
             case m: Mounted =>
-                mounts.lookup(nodePath).map {
+                mounts.lookup(at.transparent).map {
                     case Absent        => unresolved(controlBelow)
                     case Present(cell) =>
                         cell.current.map {
                             case MountState.Pending(Present(_)) => unresolved(controlBelow)
                             case state                          =>
                                 val content = state.content(MountedSpec(m, nodePath, Nil))
-                                resolveTarget(content, nodePath, targetPath, rootDepth, controlBelow, mounts)
+                                resolveTarget(content, nodePath, at.transparent, targetPath, rootDepth, controlBelow, mounts)
                         }
+                }
+            // Held-back content is not on the page; once revealed it occupies the boundary's path.
+            case b: Bounded =>
+                mounts.boundary(at.transparent).map {
+                    case Present(gate) if !gate.isRevealed =>
+                        gate.livePlaceholder.fold(Kyo.lift(unresolved(controlBelow)))(ph =>
+                            resolveTarget(ph, nodePath, at.transparent, targetPath, rootDepth, controlBelow, mounts)
+                        )
+                    case _ =>
+                        mounts.held(targetPath).map(held =>
+                            if held then unresolved(controlBelow)
+                            else resolveTarget(b.child, nodePath, at.transparent, targetPath, rootDepth, controlBelow, mounts)
+                        )
                 }
         end match
     end resolveTarget
 
     /** The facts a bubbling dispatch reads about its target, in a single resolution. */
-    private def targetFacts(elem: Element, myPath: Seq[String], targetPath: Seq[String], mounts: MountDispatch)(using
+    private def targetFacts(
+        elem: Element,
+        myPath: Seq[String],
+        at: ReactiveRegion.RegionIdentity,
+        targetPath: Seq[String],
+        mounts: MountDispatch
+    )(using
         Frame
     ): TargetFacts < Sync =
-        resolveTarget(elem, myPath, targetPath, myPath.size, false, mounts)
+        resolveTarget(elem, myPath, at, targetPath, myPath.size, false, mounts)
 
     /** Whether an element is a control in its own right, something the reader operates directly, as
       * opposed to markup an ancestor made clickable.

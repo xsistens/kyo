@@ -294,6 +294,137 @@ class DomBackendTest extends UITest:
         }
     }
 
+    /** A page whose outer mount shows a shell and an inner mount, which answers at once for "a" and waits for the `release`
+      * button for "b"; `swap` starts the outer mount again under "b".
+      */
+    private def innerLoads(outer: (String, UI) => UI): UI < Async =
+        for
+            which <- Signal.initRef("a")
+            gate  <- Promise.init[Unit, Any]
+        yield
+            val inner = (w: String) =>
+                if w == "a" then Kyo.lift[UI, Async](UI.span("old part").id("iold")) else gate.get.andThen(UI.span("new part").id("inew"))
+            UI.div(
+                UI.button("swap").id("iswap").onClick(which.set("b")),
+                UI.button("release").id("irelease").onClick(gate.completeUnitDiscard),
+                which.map(w => UI.div(outer(w, UI.div(UI.span(s"shell $w").id("ishell"), UI.mounted(inner(w))).id("ipage"))))
+            )
+
+    private def showsNothingOld(outer: (String, UI) => UI)(using Frame, kyo.test.AssertScope) =
+        withUI(innerLoads(outer)) {
+            for
+                _       <- Browser.assertText(Selector.id("iold"), "old part")
+                _       <- Browser.click(Selector.id("iswap"))
+                _       <- Browser.assertText(Selector.id("ishell"), "shell b")
+                waiting <- Browser.evalJson[String]("document.getElementById('ipage').textContent")
+                _       <- Browser.click(Selector.id("irelease"))
+                _       <- Browser.assertText(Selector.id("inew"), "new part")
+                after   <- Browser.evalJson[String]("document.getElementById('ipage').textContent")
+            yield
+                assert(waiting == "shell b", s"while the inner mount loads: $waiting")
+                assert(after == "shell bnew part")
+        }
+
+    "the mounts inside a keyed mount whose key changed show nothing of the instances before them" in {
+        // A new instance of the outer mount is a new instance of every mount inside it, so its slots are not adopted
+        // ones: keeping them showed the inner mount of the instance that had gone until the new one published.
+        showsNothingOld((w, content) => UI.mounted(Kyo.lift[UI, Async](content)).keyed(w))
+    }
+
+    "the mounts inside a keyless mount started again show nothing of the instances before them" in {
+        // The keyless twin: the outer mount starts again at its region's emission, and its first content went into a
+        // range whose inner slot the instance before it had adopted.
+        showsNothingOld((_, content) => UI.mounted(Kyo.lift[UI, Async](content)))
+    }
+
+    "a keyless mount whose placeholder holds a region shows its new content after its region re-renders" in {
+        // The shape of uic.SelectButton: its placeholder is itself a reactive region. The region around the mount
+        // re-renders, the new instance publishes, and the page must show that content, not keep what the first instance showed.
+        val app: UI < Async =
+            for
+                tick  <- Signal.initRef(0)
+                other <- Signal.initRef("a")
+            yield UI.div(
+                UI.button("bump").id("pbump").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(t =>
+                    UI.mounted(Kyo.lift[UI, Async](UI.span(s"body-$t").id("pbody")))
+                        .placeholder(other.map(o => UI.span(s"waiting-$o").id("pwait")))
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("pbody"), "body-0")
+                _ <- Browser.click(Selector.id("pbump"))
+                _ <- Browser.assertText(Selector.id("pbody"), "body-1")
+                _ <- Browser.click(Selector.id("pbump"))
+                _ <- Browser.assertText(Selector.id("pbody"), "body-2")
+            yield succeed
+        }
+    }
+
+    "a keyless mount with a placeholder keeps showing its new content over several re-renders of its region" in {
+        // The second repaint used to stick: the first one had the client adopt the mount's own range, inside the slot of
+        // its implicit boundary, as a second slot, which every later repaint of that boundary then left alone.
+        val app: UI < Async =
+            for tick <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("bump").id("sbump").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(t => UI.mounted(Kyo.lift[UI, Async](UI.span(s"body-$t").id("sbody"))).placeholder(UI.span("wait")))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("sbody"), "body-0")
+                _ <- Browser.click(Selector.id("sbump"))
+                _ <- Browser.assertText(Selector.id("sbody"), "body-1")
+                _ <- Browser.click(Selector.id("sbump"))
+                _ <- Browser.assertText(Selector.id("sbody"), "body-2")
+                _ <- Browser.click(Selector.id("sbump"))
+                _ <- Browser.assertText(Selector.id("sbody"), "body-3")
+            yield succeed
+        }
+    }
+
+    "a mount with a placeholder whose content is a mount with a placeholder shows it, and its handler runs" in {
+        // A mount's content sits at the mount's path, so the two boundaries and the two instances share one. Looked up by path
+        // alone, the inner boundary found the outer one and the engine recursed until it ran out of memory.
+        val app: UI < Async =
+            for clicks <- Signal.initRef(0)
+            yield UI.div(
+                UI.mounted(Kyo.lift[UI, Async](
+                    UI.mounted(Kyo.lift[UI, Async](UI.button("inner").id("nested-inner").onClick(clicks.getAndUpdate(_ + 1).unit)))
+                        .placeholder(UI.span("inner skeleton"))
+                )).keyed("k").placeholder(UI.span("outer skeleton")),
+                clicks.map(n => UI.span(s"clicks=$n").id("nested-clicks"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("nested-inner"), "inner")
+                _ <- Browser.click(Selector.id("nested-inner"))
+                _ <- Browser.assertText(Selector.id("nested-clicks"), "clicks=1")
+            yield succeed
+        }
+    }
+
+    "a mount with a placeholder whose content is a mount with a placeholder, made under one frame, shows it, and its handler runs" in {
+        // A helper taking a `Frame` makes both mounts under its caller's, as a component library's do, so the call site does not
+        // tell them apart either.
+        def nested(clicks: SignalRef[Int])(using Frame): UI =
+            UI.mounted(Kyo.lift[UI, Async](
+                UI.mounted(Kyo.lift[UI, Async](UI.button("inner").id("framed-inner").onClick(clicks.getAndUpdate(_ + 1).unit)))
+                    .placeholder(UI.span("inner skeleton"))
+            )).keyed("k").placeholder(UI.span("outer skeleton"))
+        val app: UI < Async =
+            for clicks <- Signal.initRef(0)
+            yield UI.div(nested(clicks), clicks.map(n => UI.span(s"clicks=$n").id("framed-clicks")))
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("framed-inner"), "inner")
+                _ <- Browser.click(Selector.id("framed-inner"))
+                _ <- Browser.assertText(Selector.id("framed-clicks"), "clicks=1")
+            yield succeed
+        }
+    }
+
     "a mount from another call site under the same key still resets its slot" in {
         // A mount is identified by its call site as well as its key, so the mount below replaces the one above even
         // though both name the slot "same". The slot must not stay opaque for the new instance: node identity must

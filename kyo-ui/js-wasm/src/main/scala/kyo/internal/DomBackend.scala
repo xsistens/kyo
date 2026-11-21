@@ -272,9 +272,9 @@ private[kyo] object DomBackend:
     /** The elements in the document whose `onAttached` hook runs, each with the scope it lives in and the element value it started for.
       *
       * Attached means in the document, so this is decided here and nowhere else: after every patch the page took, an element carrying
-      * the marker that is not tracked yet starts its hook, and a tracked one that is no longer connected closes its scope. A node a morph
-      * kept that now shows a rebuilt element value closes the old scope and starts the hook again, so whether the morph happened to keep
-      * the node never decides what runs.
+      * the marker that is not tracked yet starts its hook, and a tracked one that is no longer connected closes its scope. Content a
+      * boundary holds back never reaches the page and is never seen. A node a morph kept that now shows a rebuilt element value closes
+      * the old scope and starts the hook again, so whether the morph happened to keep the node never decides what runs.
       *
       * Both go through the session's event drain, the attach as an [[UIEvent.Attach]] dispatched to the element's path, so the hook
       * meets what a handler there meets; one drain also keeps an element's close after its start.
@@ -656,7 +656,27 @@ private[kyo] object DomBackend:
 
         private var open = true
 
-        private[kyo] def close(using Frame): Unit < Sync = Sync.defer { open = false }
+        // A range that waits when the mount ends gets no release from its boundary any more, so the marks go here.
+        private[kyo] def close(using Frame): Unit < Sync = regions.releaseHolds.andThen(Sync.defer { open = false })
+
+        override def onHold(region: ReactiveRegion, held: Boolean)(using Frame): Unit < Async =
+            Sync.defer(open).flatMap { isOpen =>
+                if !isOpen then Kyo.unit
+                else
+                    region match
+                        case ReactiveRegion.HtmlRange(regionId) => regions.hold(regionId, held)
+                        case _: ReactiveRegion.SvgElement       => Kyo.unit
+            }
+
+        // An SVG region is replaced whole on every paint, so it keeps no slot from one paint to the next.
+        override def onFreshInstance(region: ReactiveRegion)(using Frame): Unit < Async =
+            Sync.defer(open).flatMap { isOpen =>
+                if !isOpen then Kyo.unit
+                else
+                    region match
+                        case ReactiveRegion.HtmlRange(regionId) => regions.releaseSlots(regionId)
+                        case _: ReactiveRegion.SvgElement       => Kyo.unit
+            }
 
         /** Fingerprint of the HTML each region painted last, kept only while a devtools sink is observing.
           *

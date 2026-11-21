@@ -533,6 +533,28 @@ object UI:
     end MountedOps
     export MountedOps.*
 
+    /** Prototype, not implemented: how the [[kyo.UI.mounted]] nodes inside a subtree load and fail. While the mounts it catches load
+      * for the first time, including the mounts in their content, the boundary shows its placeholder once, in its own place, and then
+      * reveals its content at once. A failed mount counts as loaded and shows the error view in its own place. The innermost boundary
+      * catches a mount; an error view that does not match a failure leaves it to the next boundary around it. A mount's own
+      * `.placeholder`, `.onError` and `.whilePending` are a boundary around that mount alone.
+      */
+    def boundary: Boundary = Boundary(Absent, Absent, Absent)
+
+    final case class Boundary(
+        placeholderView: Maybe[UI],
+        errorView: Maybe[PartialFunction[MountError, UI]],
+        pending: Maybe[PendingPolicy]
+    ):
+        def placeholder(ui: UI): Boundary                          = copy(placeholderView = Present(ui))
+        def onError(pf: PartialFunction[MountError, UI]): Boundary = copy(errorView = Present(pf))
+        def whilePending(p: PendingPolicy): Boundary               = copy(pending = Present(p))
+        def apply(ui: UI)(using Frame): UI                         = Ast.Bounded(this, ui, Absent)
+
+        /** Whether the boundary holds its content back while the mounts it catches load. */
+        private[kyo] def waits: Boolean = placeholderView.nonEmpty
+    end Boundary
+
     /** Server-push: returns HTTP handlers (SSR page GET and a WebSocket route) for this UI at the given path. Compose with other handlers
       * via HttpServer.init.
       *
@@ -605,10 +627,10 @@ object UI:
       * reads and re-renders from.
       *
       * A command sent from a `UI.mounted` effect, or a fiber it forked, goes out once that mount's own content is on the page,
-      * behind the paints that bring it there, so an effect can address the element it yields. If that content never shows, the
-      * command is dropped and a measure waiting for it answers `Absent`. A measure sent while the effect still runs goes out at
-      * once, since an effect that waits for it before yielding can only be measuring something already on the page, and so does a
-      * command from an event handler.
+      * behind the paints that bring it there and after any boundary holding it back has revealed it, so an effect can address the
+      * element it yields. If that content never shows, the command is dropped and a measure waiting for it answers `Absent`. A
+      * measure sent while the effect still runs goes out at once, since an effect that waits for it before yielding can only be
+      * measuring something already on the page, and so does a command from an event handler.
       */
     final class Commands private[kyo] (
         private[kyo] val emit: internal.HtmlOp => Unit < Async,
@@ -2158,6 +2180,12 @@ object UI:
         case class Fragment[C <: UI](children: Chunk[UI])(using val frame: Frame) extends UI
 
         private[kyo] case class KeyedChild[C <: UI](key: String, child: UI)(using val frame: Frame) extends UI
+
+        /** A subtree under a [[kyo.UI.boundary]]. `display`, when present, is what a static rendering shows in place of the boundary's
+          * own choice between its placeholder and `child`: the live state the engine resolved for a reveal or a snapshot.
+          */
+        private[kyo] case class Bounded(settings: UI.Boundary, child: UI, display: Maybe[UI])(using val frame: Frame) extends UI
+            with HtmlContent
 
         /** A component that runs an effect to produce its content, built by [[kyo.UI.mounted]]. Its static rendering is its
           * placeholder; the live content belongs to the instance the renderer runs. `site` is where [[kyo.UI.MountedOps.keyed]] was
