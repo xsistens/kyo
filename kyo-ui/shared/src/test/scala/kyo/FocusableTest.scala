@@ -610,6 +610,35 @@ class FocusableTest extends UITest:
         }
     }
 
+    "a scroll-auto element in a scroll container of its own is in view from the first paint" in {
+        // A list opened on a selected row, a rail opened on a deep link. The browser restores nothing inside such a
+        // container, so leaving it at the top would leave the row the page is about off screen. The client's first
+        // sweep runs when its script loads, before the session is live, so this reads its result directly.
+        val app: UI < Async =
+            UI.div(
+                UI.div("spacer").style(Style.minHeight(Length.Px(2000))),
+                UI.div("the selected row").id("row").scrollAuto(true)
+            ).id("scroller").style(Style.height(Length.Px(200)).overflowY(_.auto))
+        withUI(app) {
+            for scrolled <- Browser.evalInt("document.getElementById('scroller').scrollTop")
+            yield assert(scrolled > 0, s"the container stayed at $scrolled")
+        }
+    }
+
+    "a scroll-auto element the document scrolls is left where the browser puts it on the first paint" in {
+        // The document's position is the one the browser restores on reload and on back; scrolling it at load would
+        // fight that restoration.
+        val app: UI < Async =
+            UI.div(
+                UI.div("spacer").style(Style.minHeight(Length.Px(3000))),
+                UI.div("far down").id("far").scrollAuto(true)
+            )
+        withUI(app) {
+            for scrolled <- Browser.evalInt("Math.round(window.scrollY)")
+            yield assert(scrolled == 0, s"the document was scrolled to $scrolled at load")
+        }
+    }
+
     "closing a focus-restore panel returns focus to the previously focused element" in {
         val app: UI < Async =
             for showPanel <- Signal.initRef(false)
