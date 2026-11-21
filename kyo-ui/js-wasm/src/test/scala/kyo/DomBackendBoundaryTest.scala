@@ -1,5 +1,6 @@
 package kyo
 
+import kyo.UI.foreachKeyed
 import kyo.UI.render
 import kyo.internal.DomBackend
 import org.scalajs.dom
@@ -212,6 +213,75 @@ class DomBackendBoundaryTest extends kyo.test.Test[Any]:
 
     "a mount with a placeholder whose content renders a mount with a region for its placeholder, made under one frame, shows it" in {
         showsNestedUnderOneFrame(throughRegion = true)
+    }
+
+    /** A tab strip of sections, the way the component demo builds its pages: a mount with a placeholder (the strip) whose content
+      * keeps its panel in a keyed list row, the panel holding keyed sections that are mounts with placeholders of their own, and a
+      * slow neighbour that keeps the strip waiting. `innerFirst` lets the sections publish before the strip reveals.
+      */
+    private def sectionsInAStrip(innerFirst: Boolean, placeholderIsBody: Boolean = false, placeholderSameAsBody: Boolean = false)(using
+        Frame,
+        kyo.test.AssertScope
+    ) =
+        for
+            outerGate <- Promise.init[Unit, Any]
+            innerGate <- Promise.init[Unit, Any]
+            slowGate  <- Promise.init[Unit, Any]
+            innerRan  <- Promise.init[Unit, Any]
+            panels    <- Signal.initRef(Chunk("examples"))
+            section = (n: Int) =>
+                UI.mounted(innerGate.get.andThen(innerRan.completeUnitDiscard).andThen(UI.span(s"live-$n").id(s"live-$n")))
+                    .keyed(s"section-$n").placeholder(UI.span(s"static-$n").id(s"static-$n"))
+            body = UI.div(
+                UI.div(panels.foreachKeyed(identity)(_ => UI.div(section(1), section(2)))),
+                UI.mounted(slowGate.get.andThen(UI.span("slow").id("slow")))
+            )
+            ui = UI.div(UI.mounted(outerGate.get.andThen(body)).placeholder(
+                if placeholderSameAsBody then body
+                else if placeholderIsBody then UI.div(UI.span("strip-loading").id("strip-loading"), body)
+                else UI.span("strip-loading").id("strip-loading")
+            ))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && (el("strip-loading") != null || el("static-1") != null)))
+            _     <- outerGate.completeUnitDiscard
+            _     <- (if innerFirst then innerGate.completeUnitDiscard.andThen(innerRan.get) else Kyo.unit): Unit < Async
+            _     <- slowGate.completeUnitDiscard
+            _     <- assertEventually(Sync.defer(el("slow") != null))
+            _     <- (if innerFirst then Kyo.unit else innerGate.completeUnitDiscard): Unit < Async
+            _     <- assertEventually(Sync.defer(el("live-1") != null && el("live-2") != null))
+            stale <- Sync.defer(el("static-1") == null && el("static-2") == null)
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield assert(stale, s"a section kept its placeholder: ${text()}")
+
+    "sections that publish before the strip around them reveals show their content" in {
+        sectionsInAStrip(innerFirst = true)
+    }
+
+    "sections that publish after the strip around them reveals show their content" in {
+        sectionsInAStrip(innerFirst = false)
+    }
+
+    // A tab strip's static projection is the strip itself, panels and sections included, so the sections stand in the
+    // placeholder before they stand in the content.
+    "sections in a strip whose placeholder is its own body show their content when they publish first" in {
+        sectionsInAStrip(innerFirst = true, placeholderIsBody = true)
+    }
+
+    "sections in a strip whose placeholder is its own body show their content when they publish last" in {
+        sectionsInAStrip(innerFirst = false, placeholderIsBody = true)
+    }
+
+    // The tab strip exactly: its placeholder IS its body, so the reveal morphs the body over itself, and each section's slot
+    // is there under its own key already. A section that published while the strip was still waiting had its paint dropped
+    // with everything else below the strip, so the strip's reveal is the only paint that brings its content.
+    "sections in a strip whose placeholder is exactly its body show their content when they publish first" in {
+        sectionsInAStrip(innerFirst = true, placeholderSameAsBody = true)
+    }
+
+    "sections in a strip whose placeholder is exactly its body show their content when they publish last" in {
+        sectionsInAStrip(innerFirst = false, placeholderSameAsBody = true)
     }
 
 end DomBackendBoundaryTest

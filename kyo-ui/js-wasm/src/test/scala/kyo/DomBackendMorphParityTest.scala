@@ -221,6 +221,11 @@ class DomBackendMorphParityTest extends kyo.test.Test[Any]:
         """<!--kyo-rs:r.2--><span id="m">b</span><!--kyo-re:r.2-->"""
     )(o => o.html.contains("kyo-rs:r.2") && !o.html.contains("kyo-rs:r.1"))
     morph(
+        "a bare run facing one incoming range is wrapped in it and keeps its nodes",
+        """<span id="n">a</span>""",
+        """<!--kyo-rs:r.1--><span id="n">b</span><!--kyo-re:r.1-->"""
+    )(o => o.retained.contains("n") && o.html.contains("kyo-rs:r.1"))
+    morph(
         "a slot its mount owns is opaque to the render around it",
         """<!--kyo-rs:r.1 m k=a--><span id="n">content</span><!--kyo-re:r.1-->""",
         """<!--kyo-rs:r.1 s k=a--><span id="n">placeholder</span><!--kyo-re:r.1-->"""

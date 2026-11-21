@@ -1,5 +1,6 @@
 package kyo
 
+import kyo.internal.BoundaryHold
 import kyo.internal.HtmlRenderer
 import kyo.internal.KeyboardEventData
 import kyo.internal.MouseEventData
@@ -193,6 +194,109 @@ class BoundaryTest extends kyo.test.Test[Any]:
     /** How often `name` received each kind, in the order of [[kinds]]. */
     private def received(log: Chunk[String], name: String): Chunk[Int] = kinds.map(kind => log.count(_ == s"$name:$kind"))
 
+    /** Runs `f` with the event handler of a subscription whose paints reach `screen`, and which holds the first paint `shownWhen` holds
+      * for on its way out until `f` returns: a client that has it, and answers, while the server still delivers. `reached` completes when
+      * that paint has reached the screen.
+      */
+    private def holdingPaint[A](ui: UI)(shownWhen: String => Boolean)(
+        f: (Screen, Promise[Unit, Any], (Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope)
+    )(using Frame): A < Async =
+        Scope.run {
+            for
+                initial <- HtmlRenderer.render(ui, Seq.empty)
+                screen = new Screen(initial)
+                reached <- Promise.init[Unit, Any]
+                letGo   <- Promise.init[Unit, Any]
+                exchange = new UIExchange:
+                    def onChange(
+                        region: ReactiveRegion,
+                        path: Seq[String],
+                        context: ReactiveRegion.RegionIdentity,
+                        parentContext: ReactiveRegion.ParentContext,
+                        previous: Maybe[UI],
+                        painted: UI
+                    )(using Frame): Unit < Async =
+                        screen.onChange(region, path, context, parentContext, previous, painted).andThen(screen.now).map { shown =>
+                            if shownWhen(shown) then reached.completeUnitDiscard.andThen(letGo.get) else Kyo.unit
+                        }
+                root <- ReactiveUI.normalize(ui, Seq.empty)
+                sub  <- ReactiveUI.subscribe(root, exchange)
+                a    <- f(screen, reached, sub.handle)
+                _    <- letGo.completeUnitDiscard
+            yield a
+        }
+
+    "an event answering the reveal's paint reaches the content while that paint is still on its way out" in {
+        for
+            log  <- AtomicRef.init(Chunk.empty[String])
+            gate <- Promise.init[Unit, Any]
+            ui = div(UI.boundary.placeholder(probe("placeholder", log))(UI.mounted(gate.get.andThen(probe("content", log)))))
+            during <- holdingPaint(ui)(v => v.contains("content")) { (screen, reached, handle) =>
+                for
+                    _      <- screen.await("the placeholder")(_.contains("placeholder"))
+                    _      <- gate.completeUnitDiscard
+                    _      <- reached.get
+                    _      <- sendAll(handle, Seq("0"))
+                    during <- log.get
+                yield during
+            }
+        yield assert(received(during, "content") == kinds.map(_ => 1) && received(during, "placeholder") == kinds.map(_ => 0), s"$during")
+    }
+
+    "under Placeholder, an event answering the placeholder's paint reaches it while that paint is still on its way out" in {
+        for
+            log   <- AtomicRef.init(Chunk.empty[String])
+            key   <- Signal.initRef("a")
+            gateB <- Promise.init[Unit, Any]
+            effect = (k: String) => (if k == "a" then Kyo.unit else gateB.get).andThen(probe(s"content:$k", log))
+            ui     = div(
+                UI.boundary.placeholder(probe("placeholder", log)).whilePending(PendingPolicy.Placeholder)(
+                    key.render(k => UI.mounted(effect(k)).keyed(k))
+                )
+            )
+            sawContent = new java.util.concurrent.atomic.AtomicBoolean(false)
+            during <- holdingPaint(ui) { v =>
+                if v.contains("content:a") then sawContent.set(true)
+                sawContent.get() && v.contains("placeholder")
+            } { (screen, reached, handle) =>
+                for
+                    _      <- screen.await("content:a")(_.contains("content:a"))
+                    _      <- key.set("b")
+                    _      <- reached.get
+                    _      <- sendAll(handle, Seq("0"))
+                    during <- log.get
+                yield during
+            }
+        yield assert(received(during, "placeholder") == kinds.map(_ => 1), s"$during")
+    }
+
+    "a click answering the paint that ends a wait reaches the new content while that paint is still on its way out" in {
+        for
+            route    <- Signal.initRef("1")
+            likes    <- AtomicInt.init(0)
+            started2 <- Promise.init[Unit, Any]
+            never    <- Promise.init[Unit, Any]
+            detail = (id: String) =>
+                val load = id match
+                    case "2" => started2.completeUnitDiscard.andThen(never.get)
+                    case _   => Kyo.unit
+                UI.mounted(load.andThen(div(span(s"title:$id"), button(s"like:$id").onClick(likes.incrementAndGet)))).keyed(id)
+            ui   = div(UI.boundary.placeholder(span("skel"))(div(span("header"), route.render(id => div(detail(id))))))
+            like = Seq("0", "1", "0", "1")
+            count <- holdingPaint(ui)(v => v.contains("title:3") && !v.contains("title:1")) { (screen, reached, handle) =>
+                for
+                    _     <- screen.await("issue 1")(_.contains("title:1"))
+                    _     <- route.set("2")
+                    _     <- started2.get
+                    _     <- route.set("3")
+                    _     <- reached.get
+                    _     <- handle(like, UIEvent.Click(like, MouseEventData(UI.Modifiers.none, Absent)))
+                    count <- likes.get
+                yield count
+            }
+        yield assert(count == 1, s"the click reached issue 3 $count times")
+    }
+
     // ---- One mount: its own modifiers and a boundary around it behave the same ----
 
     private case class Form(name: String, wrap: (UI.Ast.Mounted, Boundary) => UI)
@@ -307,6 +411,43 @@ class BoundaryTest extends kyo.test.Test[Any]:
                     end for
                 }
             yield succeed
+        }
+
+        s"${form.name}: a click on the placeholder a region just painted reaches it before the boundary is subscribed" in {
+            for
+                cancels <- AtomicInt.init(0)
+                outer   <- AtomicInt.init(0)
+                open    <- Signal.initRef(false)
+                gate    <- Promise.init[Unit, Any]
+                painted <- Promise.init[Unit, Any]
+                release <- Promise.init[Unit, Any]
+                content = UI.mounted(gate.get.andThen(span("ready")))
+                ui      = div.onClick(outer.incrementAndGet)(
+                    open.render(o =>
+                        if o then form.wrap(content, UI.boundary.placeholder(button("cancel").onClick(cancels.incrementAndGet)))
+                        else UI.empty
+                    )
+                )
+                // Holds the engine right after it painted the opened region, before it goes on to subscribe what the paint holds:
+                // the reader already sees the placeholder, and clicks it.
+                exchange = new RecordingExchange(beforePaint =
+                    (_, _) => painted.done.map(first => if first then Kyo.unit else painted.completeUnitDiscard.andThen(release.get))
+                )
+                // The region and the placeholder it paints are each the root of the node's range at path 0.
+                target = Seq("0")
+                result <- Scope.run {
+                    for
+                        root <- ReactiveUI.normalize(ui, Seq.empty)
+                        sub  <- ReactiveUI.subscribe(root, exchange)
+                        _    <- open.set(true)
+                        _    <- painted.get
+                        _    <- sub.handle(target, UIEvent.Click(target, MouseEventData(UI.Modifiers.none, Absent)))
+                        _    <- release.completeUnitDiscard
+                        c    <- cancels.get
+                        o    <- outer.get
+                    yield (c, o)
+                }
+            yield assert(result == ((1, 1)), s"(placeholder, element around it) heard the click $result times")
         }
 
         s"${form.name}: keyboard, focus, input and submit reach the placeholder while the mount loads, and the content after" in {
@@ -653,6 +794,35 @@ class BoundaryTest extends kyo.test.Test[Any]:
         yield assert(halfway.isEmpty, s"issue 2 without its comments: $halfway")
     }
 
+    "navigating to a page that draws at once keeps the old page until the mount in its content has loaded" in {
+        for
+            route           <- Signal.initRef("1")
+            commentsStarted <- Promise.init[Unit, Any]
+            commentsGate    <- Promise.init[Unit, Any]
+            // The detail page draws in the pass and loads nothing itself; only the comments in it load. What the route pass holds is
+            // its own paint, the detail's and the comments', one per range: sent one after another, the page showed each step between.
+            comments = (id: String) =>
+                val load = if id == "1" then Kyo.unit else commentsStarted.completeUnitDiscard.andThen(commentsGate.get)
+                UI.mounted(load.andThen(span(s"comments:$id"))).keyed(id)
+            detail = (id: String) => UI.mounted(Kyo.lift(div(span(s"title:$id"), comments(id)))).keyed(id)
+            ui     = div(UI.boundary.placeholder(span("skel"))(div(route.render(id => div(detail(id))))))
+            states <- mount(ui) { screen =>
+                for
+                    _      <- screen.await("issue 1")(v => v.contains("title:1") && v.contains("comments:1") && !v.contains("skel"))
+                    _      <- route.set("2")
+                    _      <- commentsStarted.get
+                    _      <- commentsGate.completeUnitDiscard
+                    _      <- screen.await("issue 2")(v => v.contains("title:2") && v.contains("comments:2") && !v.contains("title:1"))
+                    states <- screen.states
+                yield states
+            }
+            // From the first page on, every state shows one whole issue: the old one, or the new one with its comments.
+            torn = states.drop(1).filterNot(v =>
+                (v.contains("title:1") && v.contains("comments:1")) || (v.contains("title:2") && v.contains("comments:2"))
+            )
+        yield assert(torn.isEmpty, s"states between the issues: $torn")
+    }
+
     "a click on the old page while the new one loads reaches no handler, and after the reveal reaches the new page" in {
         for
             route           <- Signal.initRef("1")
@@ -793,6 +963,149 @@ class BoundaryTest extends kyo.test.Test[Any]:
                 yield assert(count == 1, s"the click on issue 3 reached it $count times")
             }
         yield succeed
+    }
+
+    /** Runs `f` with passes at `path` pausing, once armed, until `letGo` completes; `paused` completes when one has. */
+    private def pausingPass[A](path: Seq[String], paused: Promise[Unit, Any], letGo: Promise[Unit, Any])(
+        f: (() => Unit) => A < Async
+    )(using Frame): A < Async =
+        val armed = new java.util.concurrent.atomic.AtomicBoolean(false)
+        BoundaryHold.duringPass.let(at =>
+            if at == path && armed.compareAndSet(true, false) then paused.completeUnitDiscard.andThen(letGo.get) else Kyo.unit
+        )(f(() => armed.set(true)))
+    end pausingPass
+
+    "a click during a re-render that loads nothing reaches its handler, before that re-render has painted" in {
+        for
+            tick   <- Signal.initRef(0)
+            clicks <- AtomicInt.init(0)
+            paused <- Promise.init[Unit, Any]
+            letGo  <- Promise.init[Unit, Any]
+            ui = div(UI.boundary.placeholder(span("skel"))(tick.render(n => button(s"count:$n").onClick(clicks.incrementAndGet))))
+            count <- pausingPass(Seq("0"), paused, letGo) { arm =>
+                mountWith(ui) { (screen, handle) =>
+                    for
+                        _     <- screen.await("the first content")(_.contains("count:0"))
+                        _     <- Sync.defer(arm())
+                        _     <- tick.set(1)
+                        _     <- paused.get
+                        shown <- screen.now
+                        _     <- handle(Seq("0"), UIEvent.Click(Seq("0"), MouseEventData(UI.Modifiers.none, Absent)))
+                        count <- clicks.get
+                        _     <- letGo.completeUnitDiscard
+                        _     <- screen.await("the new content")(_.contains("count:1"))
+                    yield
+                        assert(shown.contains("count:0") && !shown.contains("count:1"), s"the re-render has not painted yet: $shown")
+                        count
+                }
+            }
+        yield assert(count == 1, s"the click reached the button $count times; nothing on the page said it would not")
+    }
+
+    "a click during a re-render whose mount is kept reaches its handler, before that re-render has painted" in {
+        for
+            tick   <- Signal.initRef(0)
+            clicks <- AtomicInt.init(0)
+            runs   <- AtomicInt.init(0)
+            paused <- Promise.init[Unit, Any]
+            letGo  <- Promise.init[Unit, Any]
+            ui = div(UI.boundary.placeholder(span("skel"))(tick.render(n =>
+                div(
+                    button(s"count:$n").onClick(clicks.incrementAndGet),
+                    UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box")
+                )
+            )))
+            at = Seq("0", "0")
+            count <- pausingPass(Seq("0"), paused, letGo) { arm =>
+                mountWith(ui) { (screen, handle) =>
+                    for
+                        _     <- screen.await("the first content")(v => v.contains("count:0") && v.contains("runs:1"))
+                        _     <- Sync.defer(arm())
+                        _     <- tick.set(1)
+                        _     <- paused.get
+                        _     <- handle(at, UIEvent.Click(at, MouseEventData(UI.Modifiers.none, Absent)))
+                        count <- clicks.get
+                        _     <- letGo.completeUnitDiscard
+                        _     <- screen.await("the new content")(v => v.contains("count:1") && v.contains("runs:1"))
+                    yield count
+                }
+            }
+            total <- runs.get
+        yield
+            assert(count == 1, s"the click reached the button $count times")
+            assert(total == 1, s"the mount ran $total times, it is kept")
+        end for
+    }
+
+    "a mount loading in a nested region keeps the range of the re-render around it from taking events" in {
+        for
+            route   <- Signal.initRef("1")
+            outer   <- AtomicInt.init(0)
+            started <- Promise.init[Unit, Any]
+            gate    <- Promise.init[Unit, Any]
+            inner = (id: String) =>
+                val load = if id == "1" then Kyo.unit else started.completeUnitDiscard.andThen(gate.get)
+                UI.mounted(load.andThen(span(s"inner:$id"))).keyed(id)
+            nested <- Signal.initRef(0)
+            // The button is in the outer region's range and outside the nested one's, whose mount is the one loading.
+            ui = div(UI.boundary.placeholder(span("skel"))(route.render(id =>
+                div(button(s"outer:$id").onClick(outer.incrementAndGet), nested.render(_ => div(inner(id))))
+            )))
+            at = Seq("0", "0")
+            _ <- mountWith(ui) { (screen, handle) =>
+                def click = handle(at, UIEvent.Click(at, MouseEventData(UI.Modifiers.none, Absent)))
+                for
+                    _       <- screen.await("the first content")(v => v.contains("outer:1") && v.contains("inner:1"))
+                    _       <- route.set("2")
+                    _       <- started.get
+                    shown   <- screen.now
+                    _       <- click
+                    waiting <- outer.get
+                    _       <- gate.completeUnitDiscard
+                    _       <- screen.await("the new content")(v => v.contains("outer:2") && v.contains("inner:2"))
+                    _       <- click
+                    after   <- outer.get
+                yield
+                    assert(shown.contains("outer:1") && !shown.contains("outer:2"), s"while the mount loads: $shown")
+                    assert(waiting == 0, s"a click on the button the page still shows the old content of reached it $waiting times")
+                    assert(after == 1, s"the click after the reveal reached it $after times")
+                end for
+            }
+        yield succeed
+    }
+
+    "a new mount's effect finds the range it may hold up taking no events from its first step" in {
+        val at = Seq("0", "0")
+        for
+            route  <- Signal.initRef("1")
+            outer  <- AtomicInt.init(0)
+            sender <- AtomicRef.init(Maybe.empty[(Seq[String], UIEvent) => Boolean < Async])
+            sent   <- Promise.init[Int, Any]
+            gate   <- Promise.init[Unit, Any]
+            click = UIEvent.Click(at, MouseEventData(UI.Modifiers.none, Absent))
+            load  = (id: String) =>
+                val first: Unit < Async =
+                    if id == "1" then Kyo.unit
+                    else
+                        sender.get.map(_.get(
+                            at,
+                            click
+                        )).andThen(outer.get).map(n => sent.completeDiscard(Result.succeed(n))).andThen(gate.get)
+                first
+            ui = div(UI.boundary.placeholder(span("skel"))(route.render(id =>
+                div(button(s"outer:$id").onClick(outer.incrementAndGet), UI.mounted(load(id).andThen(span(s"inner:$id"))).keyed(id))
+            )))
+            count <- mountWith(ui) { (screen, handle) =>
+                for
+                    _     <- sender.set(Present(handle))
+                    _     <- screen.await("the first content")(v => v.contains("outer:1") && v.contains("inner:1"))
+                    _     <- route.set("2")
+                    count <- sent.get
+                    _     <- gate.completeUnitDiscard
+                yield count
+            }
+        yield assert(count == 0, s"the click reached the button the page still shows the old content of $count times")
+        end for
     }
 
     "under KeepLatest a boundary keeps its whole old content while a re-render loads" in {

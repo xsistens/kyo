@@ -458,6 +458,10 @@ final private[kyo] class MountTableRef private (
             }
         }
 
+    /** Whether `identity` has an instance in the table, which a claim on it keeps rather than starts. */
+    def hasInstance(identity: MountIdentity)(using Frame): Boolean < Sync =
+        Sync.Unsafe.defer(slot.get().exists(_.hasInstance(identity)))
+
     /** A keyless instance for `spec`, released with the caller's scope; only the reference the table follows leaves its snapshot. */
     def startKeyless(spec: MountedSpec)(using Frame): MountInstance < (Async & Scope) =
         force.map { table =>
@@ -524,6 +528,10 @@ final private[kyo] class MountTable:
             Maybe.fromOption(slots.find(slot => slot.instance.nonEmpty && slot.path == path).orElse(slots.find(_.instance.nonEmpty)))
                 .flatMap(_.instance)
         }
+
+    /** Whether a slot of `identity` holds an instance. */
+    def hasInstance(identity: MountIdentity)(using AllowUnsafe): Boolean =
+        instances.get().get(identity).exists(_.exists(_.instance.nonEmpty))
 
     def region(key: RegionKey)(using AllowUnsafe): Maybe[MountTable] = regions.get().get(key)
 
@@ -712,9 +720,13 @@ private[kyo] object MountRegions:
         mounts: MountTableRef,
         dispatch: MountDispatch
     )(using Frame): Unit < (Async & Scope) =
-        val instance = spec.identity match
-            case Present(identity) => mounts.claim(rui, identity, spec)
-            case Absent            => mounts.startKeyless(spec)
+        // An effect may run from the moment it starts, before the content subscription counts it as loading, so what it may hold up takes
+        // no event from before that. A kept instance starts nothing.
+        def beforeStart: Unit < Async = exchange.gate.fold(Kyo.unit: Unit < Async)(_.holdRanges)
+        val instance                  = spec.identity match
+            case Present(identity) =>
+                mounts.hasInstance(identity).map(kept => if kept then Kyo.unit else beforeStart).andThen(mounts.claim(rui, identity, spec))
+            case Absent => beforeStart.andThen(mounts.startKeyless(spec))
         instance.map(subscribeMountContent(rui, spec, _, exchange, signalChangeTime, dispatch))
     end subscribeMounted
 
@@ -814,30 +826,18 @@ private[kyo] object MountRegions:
             observed <- exchange.gate match
                 case Absent        => Kyo.lift((state: MountState) => renderState(state, exchange))
                 case Present(hold) =>
-                    import AllowUnsafe.embrace.danger
-                    val loaded = AtomicBoolean.Unsafe.init(first.settled)
+                    // Unsafe: whether this mount has told the boundary it loaded, made before its loop is forked, where no proof is at hand;
+                    // read and written only inside Sync.Unsafe.defer below.
+                    val loaded = AtomicBoolean.Unsafe.init(first.settled)(using AllowUnsafe.embrace.danger)
                     for
-                        firstGroup <- hold.group
-                        due = AtomicRef.Unsafe.init(Maybe(firstGroup))
                         registered <- if first.settled then Kyo.lift(Maybe.empty[BoundaryHold]) else hold.load.map(Present(_))
-                        _          <- Scope.ensure(firstGroup.close)
-                        _ <- Scope.ensure(Sync.Unsafe.defer(if loaded.compareAndSet(false, true) then registered.foreach(_.settle)))
-                    yield (state: MountState) =>
-                        Sync.Unsafe.defer(due.getAndSet(Absent)).map(_.fold(hold.group)(Kyo.lift)).map { group =>
-                            Scope.ensure(group.close)
-                                .andThen(group.paints(BoundaryRange(
-                                    rui.region,
-                                    rui.path,
-                                    rui.contentContext,
-                                    rui.parentContext,
-                                    state.content(spec),
-                                    rui
-                                )))
-                                .andThen(renderState(state, group))
-                                .andThen(Sync.Unsafe.defer(if state.settled && loaded.compareAndSet(false, true) then
-                                    registered.foreach(_.settle)))
-                                .andThen(group.started)
+                        held       <- throughHold[MountState](hold, rui)(_.content(spec)) { (state, group) =>
+                            renderState(state, group).andThen(Sync.Unsafe.defer(
+                                if state.settled && loaded.compareAndSet(false, true) then registered.foreach(_.settle)
+                            ))
                         }
+                        _ <- Scope.ensure(Sync.Unsafe.defer(if loaded.compareAndSet(false, true) then registered.foreach(_.settle)))
+                    yield held
                     end for
             _ <- startOwnedFiber(
                 Abort.run[Throwable](instance.cell.observe(observed)).map { result =>
