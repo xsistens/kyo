@@ -497,6 +497,35 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
         end for
     }
 
+    "Space on an element with role button and a click handler declines the page scroll and reaches the click" in {
+        // A span is no button, so the browser scrolls on Space and clicks on neither key. The element lists the keydown
+        // because it says it is a button and takes a click, the client declines the browser's default, and the
+        // dispatcher answers the key with the click (KeyPolicy.activatesAsButton).
+        for
+            hits  <- AtomicInt.init
+            ready <- Sync.defer(new DomTestEnv.MountReady)
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(
+                UI.div(UI.span.id("role-button").role("button").tabIndex(0).onClick(hits.incrementAndGet.unit)("go")),
+                ready
+            )))
+            _         <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("role-button") != null), installBudget)
+            listed    <- Sync.defer(dom.document.getElementById("role-button").getAttribute("data-kyo-ev"))
+            prevented <- Sync.defer {
+                val target = dom.document.getElementById("role-button")
+                val event  = scalajs.Dynamic.newInstance(dom.window.asInstanceOf[scalajs.Dynamic].KeyboardEvent)(
+                    "keydown",
+                    scalajs.Dynamic.literal(key = " ", bubbles = true, cancelable = true)
+                )
+                discard(target.asInstanceOf[scalajs.Dynamic].dispatchEvent(event))
+                event.defaultPrevented.asInstanceOf[Boolean]
+            }
+            _ <- assertEventually(hits.get.map(_ == 1), installBudget)
+            _ <- fiber.interrupt
+            _ <- fiber.getResult
+        yield assert(prevented && listed == "click,keydown", s"prevented $prevented, listed $listed")
+        end for
+    }
+
     "a click right after the first paint reaches its handler, before the subscription behind that paint has run" in {
         // The browser hands over events between the paint and the session behind it: a real Chrome took a click on this page
         // 12 to 234 ms after the paint with nothing listening. `regionsOpened` runs right after the paint, which is that moment.
