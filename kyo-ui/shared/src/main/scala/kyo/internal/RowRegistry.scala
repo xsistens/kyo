@@ -137,7 +137,8 @@ final private class RowPlan[T](
     val built: Array[RowPlan.Built],
     val finalRows: Array[RowInstance],
     var rebuilt: Chunk[Int],
-    retainedKeys: java.util.HashSet[String]
+    retainedKeys: java.util.HashSet[String],
+    prev: Vector[RowInstance]
 ):
     def size: Int = keys.length
 
@@ -173,6 +174,13 @@ final private class RowPlan[T](
         scala.collection.immutable.ArraySeq.unsafeWrapArray(out)
     end listRows
 
+    def reordered: Boolean =
+        if prev.size != size then true
+        else
+            var i = 0
+            while i < size && keys(i) == prev(i).key do i += 1
+            i < size
+
     def finalRowsSeq: Seq[RowInstance] = scala.collection.immutable.ArraySeq.unsafeWrapArray(finalRows)
 
     def freshRows: Seq[RowInstance] = rebuilt.map(i => finalRows(i)).toSeq
@@ -193,6 +201,7 @@ private object RowPlan:
       */
     def decide[T](
         chunk: Chunk[T],
+        prev: Vector[RowInstance],
         prevByKey: Map[String, RowInstance],
         keyFn: T => String
     ): RowPlan[T] =
@@ -236,7 +245,7 @@ private object RowPlan:
             end if
             i += 1
         end while
-        new RowPlan(items, keys, dup, built, kept, Chunk.from(rebuilt), retainedKeys)
+        new RowPlan(items, keys, dup, built, kept, Chunk.from(rebuilt), retainedKeys, prev)
     end decide
 end RowPlan
 
@@ -328,6 +337,9 @@ private[kyo] object RowRegions:
                                     rendered.set(Present(Fragment[UI](Chunk.from(built.toSeq.map(r => KeyedChild[UI](r.key, r.rowUI))))))
                                 )
                                 _ <- rows.replaceAll(built.toSeq, built.toSeq)
+                                // No paint happened, so no cost is charged, but the rows did come into existence, in the
+                                // enclosing region's paint. Same accounting as the region skip branch in subscribeRegion.
+                                _ <- reportUnpainted(rui, UI.RenderKind.ListPatch(0, built.size))
                             yield ()
                             end for
                         end seed
@@ -338,7 +350,7 @@ private[kyo] object RowRegions:
                                 _         <- signalChangeTime.set(now)
                                 prev      <- rows.snapshot
                                 prevByKey <- rows.byKey
-                                plan = RowPlan.decide(items, prevByKey, keyFn)
+                                plan = RowPlan.decide(items, prev, prevByKey, keyFn)
                                 _ <-
                                     if plan.duplicates then
                                         Log.warn(
@@ -379,7 +391,12 @@ private[kyo] object RowRegions:
                                 // duplicate-key gate it restates, and without rendering anything.
                                 // So does the emission after one with duplicate keys: its page still shows two rows under one key.
                                 addressable = plan.built.forall(b => HtmlRenderer.paintsAsKeyedRoot(b.rowUI))
-                                kept <-
+                                kept <- measuredPaint(
+                                    rui,
+                                    UI.RenderKind.ListPatch(plan.rebuilt.length, plan.size),
+                                    UI.RenderCause.Signal,
+                                    alsoWasted = plan.rebuilt.isEmpty && !plan.reordered
+                                ) {
                                     if plan.duplicates || prevByKey.size != prev.size || !addressable then
                                         exchange.onChange(rui.region, path, rui.contentContext, rui.parentContext, previous, fragment)
                                             .andThen(false)
@@ -392,6 +409,7 @@ private[kyo] object RowRegions:
                                             previous,
                                             plan.listRows
                                         )
+                                }
                                 // A repaint of the kept rows replaced what their subscriptions had painted into them, a
                                 // mount's content among it: subscribe them again, as a whole-list repaint always did.
                                 _ <-

@@ -38,7 +38,9 @@ private[kyo] case class ReactiveUI(
     // Present on a region whose node kept the signal before its projection to UI (UI.Ast.Reactive.source). Subscribe observes
     // that, so an emission whose value is unchanged never re-renders a subtree that can only be compared as UI; a source lifted
     // from a Signal[String] is bound straight to the backend's text write instead (see bindTextRegion).
-    source: Maybe[UI.Ast.Reactive.Source[?]] = Absent
+    source: Maybe[UI.Ast.Reactive.Source[?]] = Absent,
+    // The AST node's own `Frame`, so [[Devtools]] can name a region by its user call site rather than its path.
+    frame: Frame = Frame.internal
 )
 
 /** Normalization-time companion of a [[kyo.UI.Ast.Foreach]] node: keeps the typed machinery (item signal, key
@@ -82,7 +84,7 @@ private[kyo] object ReactiveUI:
         deepRows: Chunk[Int] = Chunk.empty
     )(
         handle: (Seq[String], UIEvent) => Boolean < Async
-    ): ReactiveUI =
+    )(using frame: Frame): ReactiveUI =
         ReactiveUI(
             path,
             signal,
@@ -95,7 +97,8 @@ private[kyo] object ReactiveUI:
             discoverContentRootBound = true,
             origin = origin,
             rows = rows,
-            deepRows = deepRows
+            deepRows = deepRows,
+            frame = frame
         )
 
     /** The root of a mount session: creates the session's [[MountDispatch]] and records it on the returned node for `subscribe`. */
@@ -323,7 +326,8 @@ private[kyo] object ReactiveUI:
                     rows = rows,
                     deepRows = deepRows,
                     channels = channels,
-                    renderedChannels = snapshot
+                    renderedChannels = snapshot,
+                    frame = ui.frame
                 )
 
             case ui: Mounted =>
@@ -363,7 +367,8 @@ private[kyo] object ReactiveUI:
                     contentContext = contentContext,
                     parentContext = parentContext,
                     discoverContentRootBound = true,
-                    mounted = Present(spec)
+                    mounted = Present(spec),
+                    frame = ui.frame
                 )
 
             case ui =>
@@ -381,7 +386,8 @@ private[kyo] object ReactiveUI:
                     ReactiveRegion.from(regionIdentity, svg),
                     regionIdentity,
                     parentContext,
-                    discoverContentRootBound = false
+                    discoverContentRootBound = false,
+                    frame = ui.frame
                 )
         end match
     end normalizeAt
@@ -772,7 +778,7 @@ private[kyo] object ReactiveUI:
         // Start the scoped in-place-patch observers for this node's reactive channels. Runs unconditionally: a
         // no-op for attribute-less nodes, but an element carrying only reactive attrs is `isConst = true` and
         // would otherwise fork no observer of its own.
-        forkChannelObservers(rui.path, rui.channels, rui.renderedChannels, exchange, releases).andThen {
+        forkChannelObservers(rui.path, rui.channels, rui.renderedChannels, exchange, rui.frame, releases).andThen {
             if rui.mounted.nonEmpty then
                 subscribeMounted(rui, rui.mounted.get, exchange, signalChangeTime, mounts, dispatch)
             else if rui.isConst then
@@ -827,18 +833,57 @@ private[kyo] object ReactiveUI:
                 val rendered = rui.renderedValue match
                     case Present(t: Text) => Present(t.value)
                     case _                => Absent
-                Log.use { log =>
-                    Sync.Unsafe.defer {
-                        // A failing write is logged to the Log bound here: the write runs inside the writer's `set`.
-                        val report: Throwable => Unit =
-                            ex => log.unsafe.error(s"kyo-ui: text binding failed at path=${rui.path.mkString(".")}", ex)
-                        sig.unsafeObserveProjected[String](identity, rendered, v => patch(rui.path, v), report) match
-                            case Absent           => Kyo.lift(false)
-                            case Present(release) => registerRelease(release, releases).andThen(true)
+                // The sink is read here and not inside the callback: the write fires inside the writer's own
+                // `set`, where no effect context exists to read a `Local` from. With none installed the
+                // original patcher is used unwrapped, so the off path writes exactly what an unobserved one does.
+                Devtools.currentSink.map { devSink =>
+                    val write = reporting[String](
+                        devSink,
+                        cheapEvent(rui.path, ReactiveRegion.htmlIdOf(rui.region), rui.frame, UI.RenderKind.Text)
+                    )(v => patch(rui.path, v))
+                    Log.use { log =>
+                        Sync.Unsafe.defer {
+                            // A failing write is logged to the Log bound here: the write runs inside the writer's `set`.
+                            val report: Throwable => Unit =
+                                ex => log.unsafe.error(s"kyo-ui: text binding failed at path=${rui.path.mkString(".")}", ex)
+                            sig.unsafeObserveProjected[String](identity, rendered, write, report) match
+                                case Absent           => Kyo.lift(false)
+                                case Present(release) => registerRelease(release, releases).andThen(true)
+                        }
                     }
                 }
             case _ => false
     end bindTextRegion
+
+    /** The report for a write that re-renders nothing: one attribute, one class, or one text node. It carries no duration
+      * and no bytes, since a single DOM assignment is not measured on a repaint's axis.
+      */
+    private def cheapEvent(
+        path: Seq[String],
+        regionId: Maybe[String],
+        frame: Frame,
+        kind: UI.RenderKind
+    ): UI.RenderEvent =
+        UI.RenderEvent(path, regionId, frame, kind, UI.RenderCause.Signal, wasted = false, duration = Duration.Zero, bytes = 0)
+
+    /** `write` that reports `event` after each write, for a write that runs on the writer's stack. With no sink `write` itself comes back, so
+      * the off path writes exactly what an unobserved one does.
+      */
+    private[kyo] def reporting[A](sink: Maybe[UI.RenderEvent => Unit], event: => UI.RenderEvent)(write: A => Unit): A => Unit =
+        sink match
+            case Absent          => write
+            case Present(report) =>
+                a =>
+                    write(a)
+                    report(event)
+
+    /** [[reporting]] for a write that goes over a channel's fiber. */
+    private def reportingAsync[A](sink: Maybe[UI.RenderEvent => Unit], event: => UI.RenderEvent)(write: A => Unit < Async)(using
+        Frame
+    ): A => Unit < Async =
+        sink match
+            case Absent          => write
+            case Present(report) => a => write(a).andThen(Sync.defer(report(event)))
 
     /** Starts the channel observers of the element a region paints as its root. A walk only gives the root's children nodes of their
       * own, so the root's channels at `path` are started here, in the current scope like the children's subscriptions.
@@ -846,7 +891,7 @@ private[kyo] object ReactiveUI:
     private[internal] def forkRootChannels(path: Seq[String], content: UI, exchange: UIExchange)(using Frame): Unit < (Async & Scope) =
         content match
             case el: Element if el.attrs.hasChannels =>
-                forkChannelObservers(path, Channels.of(el), RenderedChannels.empty, exchange, Absent)
+                forkChannelObservers(path, Channels.of(el), RenderedChannels.empty, exchange, el.frame, Absent)
             case _ => Kyo.unit
 
     /** Fork the scoped in-place-patch observers for one node's reactive attr/bool-attr/class channels at
@@ -858,34 +903,75 @@ private[kyo] object ReactiveUI:
         channels: Channels,
         rendered: RenderedChannels,
         exchange: UIExchange,
+        // The node these channels belong to, for the devtools report.
+        nodeFrame: Frame,
         releases: Maybe[RowScope]
     )(using Frame): Unit < (Async & Scope) =
-        // A channel's handler is one attribute write, so where the exchange offers a synchronous sink the
-        // channel binds through `Signal.onChange`: for a signal rooted in a SignalRef the patch runs inside the
-        // writer's own `set`, and the comparison with the previous value happens before any scheduler hop.
-        // An exchange without a sink (the server transport) runs the channel on its own fiber. Both are seeded
-        // with the render-time value: normalize happens-before the HTML render on every paint path, so the DOM
-        // already shows it, while a change landing between render and subscribe differs from it and still fires.
-        def bindAll[A](
-            signals: Map[String, Signal[A]],
-            seen: Map[String, A],
-            patcher: Maybe[(Seq[String], String, A) => Unit],
-            slow: (String, A) => Unit < Async
-        )(using CanEqual[A, A]): Unit < (Async & Scope) =
-            if signals.isEmpty then Kyo.unit
-            else
-                Kyo.foreachDiscard(signals.toSeq) { (name, sig) =>
-                    val baseline = Maybe.fromOption(seen.get(name))
-                    patcher match
-                        case Present(patch) => bindChannel(sig, baseline, (v: A) => patch(path, name, v), releases)
-                        case Absent         => Fiber.init(sig.observe(baseline, Signal.defaultRepairInterval)(slow(name, _))).unit
-                }
-        end bindAll
+        // Most nodes bind no channel at all; they leave before the sink is read or a loop is set up.
+        if channels.isEmpty then Kyo.unit
+        else
+            // Read once, at bind time, for the same reason bindTextRegion does: the fast path's write runs inside
+            // the writer's `set`, with no effect context to read a `Local` from. With no sink installed both the
+            // patcher and the fallback are passed through untouched.
+            Devtools.currentSink.map { devSink =>
+                // A channel's handler is one attribute write, so where the exchange offers a synchronous sink the
+                // channel binds through `Signal.onChange`: for a signal rooted in a SignalRef the patch runs inside the
+                // writer's own `set`, and the comparison with the previous value happens before any scheduler hop.
+                // An exchange without a sink (the server transport) runs the channel on its own fiber. Both are seeded
+                // with the render-time value: normalize happens-before the HTML render on every paint path, so the DOM
+                // already shows it, while a change landing between render and subscribe differs from it and still fires.
+                def bindAll[A](
+                    signals: Map[String, Signal[A]],
+                    seen: Map[String, A],
+                    patcher: Maybe[(Seq[String], String, A) => Unit],
+                    slow: (String, A) => Unit < Async
+                )(using CanEqual[A, A]): Unit < (Async & Scope) =
+                    if signals.isEmpty then Kyo.unit
+                    else
+                        Kyo.foreachDiscard(signals.toSeq) { (name, sig) =>
+                            val baseline = Maybe.fromOption(seen.get(name))
+                            def event    = cheapEvent(path, Absent, nodeFrame, UI.RenderKind.Channel(name))
+                            patcher match
+                                case Present(patch) =>
+                                    bindChannel(sig, baseline, reporting[A](devSink, event)(v => patch(path, name, v)), releases)
+                                case Absent =>
+                                    val write = reportingAsync[A](devSink, event)(v => slow(name, v))
+                                    Fiber.init(sig.observe(baseline, Signal.defaultRepairInterval)(write)).unit
+                            end match
+                        }
+                end bindAll
 
-        bindAll(channels.attrs, rendered.attrs, exchange.attrPatcherNow, exchange.onAttrPatch(path, _, _))
-            .andThen(bindAll(channels.bools, rendered.bools, exchange.boolAttrPatcherNow, exchange.onBoolAttrPatch(path, _, _)))
-            .andThen(bindAll(channels.classes, rendered.classes, exchange.classPatcherNow, exchange.onClassPatch(path, _, _)))
-            .andThen(channels.style.fold(Kyo.unit: Unit < (Async & Scope))(bindStyle(path, _, rendered.style, exchange, releases)))
+                /** The inline-style channel. A value is its declarations, and a patch sets them and removes the properties the
+                  * previous value had and this one lacks: the previous value is what this observer last wrote, seeded with what
+                  * the render wrote, which only the observer knows (the client never saw a value as a value).
+                  */
+                def bindStyle(sig: Signal[Style]): Unit < (Async & Scope) =
+                    given CanEqual[Seq[(String, String)], Seq[(String, String)]] = CanEqual.derived
+                    val decls                                                    = sig.map(CssStyleRenderer.declarations)
+                    // Unsafe: one channel's own last write, read and replaced in one step by whichever of its writes runs, on
+                    // the writer's stack (the synchronous sink) or on its fiber; it never leaves this observer.
+                    val last = new java.util.concurrent.atomic.AtomicReference[Seq[(String, String)]](rendered.style.getOrElse(Nil))
+                    def step(next: Seq[(String, String)]): Seq[String] =
+                        val names = next.iterator.map(_._1).toSet
+                        last.getAndSet(next).map(_._1).filterNot(names.contains)
+                    def event = cheapEvent(path, Absent, nodeFrame, UI.RenderKind.Channel("style"))
+                    exchange.stylePatcherNow match
+                        case Present(patch) =>
+                            val write = reporting[Seq[(String, String)]](devSink, event)(next => patch(path, next, step(next)))
+                            bindChannel(decls, rendered.style, write, releases)
+                        case Absent =>
+                            val write = reportingAsync[Seq[(String, String)]](devSink, event)(next =>
+                                Sync.defer(step(next)).map(exchange.onStylePatch(path, next, _))
+                            )
+                            Fiber.init(decls.observe(rendered.style, Signal.defaultRepairInterval)(write)).unit
+                    end match
+                end bindStyle
+
+                bindAll(channels.attrs, rendered.attrs, exchange.attrPatcherNow, exchange.onAttrPatch(path, _, _))
+                    .andThen(bindAll(channels.bools, rendered.bools, exchange.boolAttrPatcherNow, exchange.onBoolAttrPatch(path, _, _)))
+                    .andThen(bindAll(channels.classes, rendered.classes, exchange.classPatcherNow, exchange.onClassPatch(path, _, _)))
+                    .andThen(channels.style.fold(Kyo.unit: Unit < (Async & Scope))(bindStyle))
+            }
     end forkChannelObservers
 
     /** Bind one channel to its synchronous sink. A signal with a callback path runs the write inside the writer's own `set` and
@@ -933,12 +1019,14 @@ private[kyo] object ReactiveUI:
             regionMounts.beginWalk(kids, keys)
                 .andThen(subscribeWalked(kids, keys, regionMounts, exchange, signalChangeTime, dispatch))
         end subscribeKids
-        def renderValue(current: UI): Unit < (Async & Scope) =
+        def renderValue(current: UI, cause: UI.RenderCause): Unit < (Async & Scope) =
             for
                 now      <- Clock.now
                 _        <- signalChangeTime.set(now)
                 previous <- Sync.Unsafe.defer(rendered.getAndSet(Present(current)))
-                _        <- exchange.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, current)
+                _        <- measuredPaint(rui, UI.RenderKind.Repaint, cause)(
+                    exchange.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, current)
+                )
                 svgContext = rui.region match
                     case _: ReactiveRegion.HtmlRange  => false
                     case _: ReactiveRegion.SvgElement => true
@@ -976,10 +1064,13 @@ private[kyo] object ReactiveUI:
                         // The enclosing render already painted exactly this value: skip the repaint and the re-walk, but
                         // still subscribe what renderValue would have. The value is recorded as this region's last render,
                         // so the NEXT emission diffs against it rather than re-sending the whole region.
+                        //
+                        // Devtools still hears about it, as the "rebuilt by my parent" half of the story (see reportUnpainted).
                         Sync.Unsafe.defer(rendered.set(Present(current)))
+                            .andThen(reportUnpainted(rui, UI.RenderKind.Repaint))
                             .andThen(forkRootChannels(rui.path, current, exchange))
                             .andThen(subscribeKids(rui.children))
-                    else renderValue(current)
+                    else renderValue(current, if isFirst then UI.RenderCause.Created else UI.RenderCause.Signal)
                     end if
                 }
             }.map { result =>
@@ -994,39 +1085,51 @@ private[kyo] object ReactiveUI:
         }
     end subscribeRegion
 
-    /** The inline-style channel. A value is its declarations, and a patch sets them and removes the properties the previous value had
-      * and this one lacks: the previous value is what this observer last wrote, seeded with what the render wrote, which only the
-      * observer knows (the client never saw a value as a value).
+    /** Runs `paint` under a fresh devtools probe, which the backend writes the paint's cost into, and reports it as `kind`.
+      * With no sink installed the probe is `Absent`, and nothing is allocated or clocked.
+      *
+      * `alsoWasted` is for a keyed-list emission, where `wasted` is stricter than "the backend changed nothing": a pure reorder
+      * repaints no row and still moves the DOM, and calling that wasted would send a reader looking for a bug that is not there.
+      * It is by name because answering it can cost a pass over the rows, and only a measured paint ever asks.
       */
-    private def bindStyle(
-        path: Seq[String],
-        sig: Signal[Style],
-        renderedStyle: Maybe[Seq[(String, String)]],
-        exchange: UIExchange,
-        releases: Maybe[RowScope]
-    )(using Frame): Unit < (Async & Scope) =
-        given CanEqual[Seq[(String, String)], Seq[(String, String)]] = CanEqual.derived
-        val decls                                                    = sig.map(CssStyleRenderer.declarations)
-        // Unsafe: one channel's own last write, read and replaced in one step by whichever of its writes runs, on the writer's
-        // stack (the synchronous sink) or on its fiber; it never leaves this observer.
-        val last = AtomicRef.Unsafe.init[Seq[(String, String)]](renderedStyle.getOrElse(Nil))(using AllowUnsafe.embrace.danger)
-        def step(next: Seq[(String, String)])(using AllowUnsafe): Seq[String] =
-            val names = next.iterator.map(_._1).toSet
-            last.getAndSet(next).map(_._1).filterNot(names.contains)
-        exchange.stylePatcherNow match
-            case Present(patch) =>
-                bindChannel(
-                    decls,
-                    renderedStyle,
-                    (next: Seq[(String, String)]) => patch(path, next, step(next)(using AllowUnsafe.embrace.danger)),
-                    releases
+    private[internal] def measuredPaint[A, S](rui: ReactiveUI, kind: UI.RenderKind, cause: UI.RenderCause, alsoWasted: => Boolean = false)(
+        paint: => A < S
+    )(using Frame): A < (S & Sync) =
+        for
+            probe   <- Devtools.newProbe
+            started <- if probe.isEmpty then Kyo.lift(Duration.Zero) else Clock.nowMonotonic
+            result  <- Devtools.probe.let(probe)(paint)
+            _       <- report(rui, kind, cause, probe, started, alsoWasted)
+        yield result
+    end measuredPaint
+
+    /** Reports content the enclosing render already painted. Zero duration and zero bytes are not a rounding-off: the cost sits
+      * in the enclosing region's own event, and charging it twice would make every parent look cheap and every child expensive.
+      */
+    private[internal] def reportUnpainted(rui: ReactiveUI, kind: UI.RenderKind)(using Frame): Unit < Sync =
+        report(rui, kind, UI.RenderCause.Created, Absent, Duration.Zero, alsoWasted = false)
+
+    /** One render event to the devtools sink; a no-op with none installed. `probe` is `Absent` both when devtools is off and
+      * when nothing was painted, which is why the two collapse into the same zero-cost event.
+      */
+    private[internal] def report(
+        rui: ReactiveUI,
+        kind: UI.RenderKind,
+        cause: UI.RenderCause,
+        probe: Maybe[Devtools.Probe],
+        started: Duration,
+        alsoWasted: => Boolean
+    )(using Frame): Unit < Sync =
+        def event(wasted: Boolean, duration: Duration, bytes: Int) =
+            UI.RenderEvent(rui.path, ReactiveRegion.htmlIdOf(rui.region), rui.frame, kind, cause, wasted, duration, bytes)
+        probe match
+            case Absent     => Devtools.emit(event(wasted = false, duration = Duration.Zero, bytes = 0))
+            case Present(p) =>
+                Clock.nowMonotonic.map(ended =>
+                    Devtools.emit(event(p.wasted || alsoWasted, ended.minusOrZero(started), p.bytes))
                 )
-            case Absent =>
-                Fiber.init(decls.observe(renderedStyle, Signal.defaultRepairInterval)(next =>
-                    Sync.Unsafe.defer(step(next)).map(exchange.onStylePatch(path, next, _))
-                )).unit
         end match
-    end bindStyle
+    end report
 
     // ---- Shared UI tree utilities (used by both backends) ----
 

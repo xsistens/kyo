@@ -583,10 +583,17 @@ private[kyo] object MountRegions:
             _     <- dispatch.register(rui.path, instance.cell)
             _     <- Scope.ensure(dispatch.unregister(rui.path, instance.cell))
             first <- instance.cell.current
-            _     <- first match
+            // Instrumented like any other paint: every `onChange` the engine issues is reported, or the wasted-render figure
+            // quietly excludes a whole class of paint and a page full of mounts reads as cleaner than it is.
+            paint = (cause: UI.RenderCause, previous: Maybe[UI], content: UI) =>
+                for
+                    _ <- measuredPaint(rui, UI.RenderKind.Repaint, cause)(
+                        exchange.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, content)
+                    )
+                yield ()
+            _ <- first match
                 case MountState.Pending(Absent) => Kyo.unit
-                case state                      =>
-                    exchange.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, Absent, state.content(spec))
+                case state                      => paint(UI.RenderCause.Created, Absent, state.content(spec))
             // Unsafe: single-writer state of this region's own loop, as in subscribeScoped.
             painted     = AtomicRef.Unsafe.init[MountState](first)(using AllowUnsafe.embrace.danger)
             renderState = (state: MountState) =>
@@ -597,14 +604,7 @@ private[kyo] object MountRegions:
                         if previous eq state then Kyo.unit
                         else
                             Clock.now.map(signalChangeTime.set).andThen(
-                                exchange.onChange(
-                                    rui.region,
-                                    rui.path,
-                                    rui.contentContext,
-                                    rui.parentContext,
-                                    Present(previous.content(spec)),
-                                    content
-                                )
+                                paint(UI.RenderCause.Signal, Present(previous.content(spec)), content)
                             )
                     _ <- state match
                         case MountState.Pending(Present(_)) => Kyo.unit
