@@ -75,6 +75,16 @@ private[kyo] object HtmlOp:
     // Detach the scroll/resize listeners started by ObserveViewportById(id).
     case class UnobserveViewportById(id: String) extends HtmlOp derives Schema
 
+    /** Marks the range `regionId` as one that keeps showing old content while its new content loads (`held`), or no longer: while held
+      * it is inert and busy, so it takes no focus and no input that the server would drop.
+      */
+    case class HoldRange(regionId: String, held: Boolean) extends HtmlOp derives Schema
+
+    /** A new mount instance paints the range `regionId` next: the mount slots in it belong to no instance any more, so the client drops
+      * their adoption and the paint resets them (see `UIExchange.onFreshInstance`).
+      */
+    case class ReleaseSlots(regionId: String) extends HtmlOp derives Schema
+
     // --- Drag operations ---
 
     /** Requests a bounded byte range from a dropped browser file. */

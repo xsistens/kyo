@@ -71,8 +71,8 @@ class UIAttachedTest extends kyo.test.Test[Any]:
     }
 
     "inside a mount whose placeholder holds its content back, the hook starts once the content is shown" in {
-        // The case that left the demo's code editor empty: a mount shows its placeholder until its effect publishes, and the effect
-        // that builds the element runs before the element is on the page.
+        // The case that left the demo's code editor empty: a mount's own placeholder is a boundary, and the effects inside it run
+        // before the boundary shows anything.
         val log = recorder()
         Scope.run {
             for

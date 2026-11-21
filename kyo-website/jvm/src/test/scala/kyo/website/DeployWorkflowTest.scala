@@ -106,10 +106,10 @@ class DeployWorkflowTest extends WebsiteTest:
     // ---- the deployed bundle is minified ----
 
     // Resolved the way the deploy's render step resolves it (no --bundle-dir), from the fullLinkJS this suite depends on. The
-    // minified bundle measures 3.3 MB; the same code unminified is 9.6 MB, and the full locale database adds 25 MB more. The
-    // bound leaves 20% headroom for the site to grow.
-    "the bundle the deploy ships is minified and under 4 MB" in {
-        val maxBytes = 4_000_000L
+    // minified bundle measures 4.4 MB (3.3 MB before UI.boundary and the engine work above it), and the full locale database
+    // would add 25 MB more. The bound leaves about 12% headroom for the site to grow.
+    "the bundle the deploy ships is minified and under 5 MB" in {
+        val maxBytes = 5_000_000L
         WebsiteMain.parseBundleDir(Chunk.empty[String], repoRoot().toString).map { dir =>
             Sync.defer {
                 val js    = Paths.get(dir, "main.js")

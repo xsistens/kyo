@@ -10,9 +10,9 @@ final private[kyo] case class HeldCommand(send: Unit < Async, drop: Unit < Sync,
 /** The commands of one mount instance that wait for its own content to be on the page.
   *
   * A command a mount sends is about the content that mount shows, and that content reaches the page later than the effect that built
-  * it runs: after the effect publishes and the region over the instance paints it. So a command waits here until the instance's own
-  * content has been painted, and goes out behind that paint. Content that never shows takes its commands with it: [[drop]] answers
-  * each the way a missing element answers.
+  * it runs: after the effect publishes, and inside a boundary only once the boundary reveals it. So a command waits here until the
+  * instance's own content has been painted, then follows that paint through whatever holds it back (see [[BoundaryHold.afterShown]]).
+  * Content that never shows takes its commands with it: [[drop]] answers each the way a missing element answers.
   *
   * A measure while the effect still runs goes out at once. The content it would wait for is what the effect is building, and an
   * effect that measures before it yields waits for the answer, so holding it would hold the effect forever; what it measures can only
@@ -41,20 +41,20 @@ final private[kyo] class AfterShown:
                 case other               => other
             }
         }.map {
-            case State.Waiting(_) => Kyo.unit
-            case State.Shown      => command.send
-            case State.Dropped    => command.drop
+            case State.Waiting(_)      => Kyo.unit
+            case State.Shown(exchange) => AfterShown.follow(exchange, command)
+            case State.Dropped         => command.drop
         }
 
-    /** The instance's own content was just painted: what waited goes out behind that paint, and so does what comes later. */
-    def shown(using Frame): Unit < Async =
+    /** The instance's own content was just painted through `exchange`: what waited follows that paint, and so does what comes later. */
+    def shown(exchange: UIExchange)(using Frame): Unit < Async =
         Sync.Unsafe.defer {
             state.getAndUpdate {
                 case State.Dropped => State.Dropped
-                case _             => State.Shown
+                case _             => State.Shown(exchange)
             }
         }.map {
-            case State.Waiting(held) => Kyo.foreachDiscard(held)(_.send)
+            case State.Waiting(held) => Kyo.foreachDiscard(held)(AfterShown.follow(exchange, _))
             case _                   => Kyo.unit
         }
 
@@ -69,7 +69,13 @@ end AfterShown
 private[kyo] object AfterShown:
     private enum State derives CanEqual:
         case Waiting(held: Chunk[HeldCommand])
-        case Shown
+        case Shown(exchange: UIExchange)
         case Dropped
     end State
+
+    /** Sends `command` behind the paint just made through `exchange`: held by the hold that paint went to, at once where none did. */
+    def follow(exchange: UIExchange, command: HeldCommand)(using Frame): Unit < Async =
+        exchange.gate match
+            case Present(hold) => hold.afterShown(command)
+            case Absent        => command.send
 end AfterShown

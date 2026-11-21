@@ -67,6 +67,11 @@ class MountedTest extends kyo.test.Test[Any]:
         def paintsAt(path: Seq[String])(using Frame): Int < Sync =
             Sync.Unsafe.defer(pages.get()).map(_.count((p, _) => p == path))
 
+        def paintCount(using Frame): Int < Sync = Sync.Unsafe.defer(pages.get().size)
+
+        /** Every paint after the first `n`, oldest first. */
+        def paintsAfter(n: Int)(using Frame): Chunk[(Seq[String], String)] < Sync = Sync.Unsafe.defer(pages.get().drop(n))
+
         def paintsEndingWith(suffix: Seq[String])(using Frame): Int < Sync =
             Sync.Unsafe.defer(pages.get()).map(_.count((p, _) => p.endsWith(suffix)))
     end Recorder
@@ -328,11 +333,36 @@ class MountedTest extends kyo.test.Test[Any]:
             dispatch <- MountDispatch.init
             cell     <- Signal.initRef[MountState](MountState.Pending(Absent))
             path = Seq("0", "1")
-            _     <- dispatch.register(path, cell)
-            _     <- dispatch.register(path, cell)
-            _     <- dispatch.unregister(path, cell)
-            found <- dispatch.lookup(path)
+            at   = ReactiveRegion.RegionIdentity(path, 1)
+            node = UI.mounted(Kyo.lift(UI.empty))
+            _     <- dispatch.register(at, cell)
+            _     <- dispatch.register(at, cell)
+            _     <- dispatch.unregister(at, cell)
+            found <- dispatch.lookup(at)
         yield assert(found.exists(_ eq cell))
+    }
+
+    "two mounts at one path, one the content of the other, made under one frame, are each found by their own content" in {
+        // A helper taking a `Frame` makes both under its caller's, so only how deep each one's content sits at the path tells them apart.
+        def nested(using Frame)    = (UI.mounted(Kyo.lift(UI.empty)), UI.mounted(Kyo.lift(UI.empty)))
+        val (outerNode, innerNode) = nested
+        val path                   = Seq("0")
+        val outerAt                = ReactiveRegion.RegionIdentity(path, 1)
+        val innerAt                = ReactiveRegion.RegionIdentity(path, 3)
+        for
+            dispatch <- MountDispatch.init
+            outer    <- Signal.initRef[kyo.internal.MountState](kyo.internal.MountState.Pending(Absent))
+            inner    <- Signal.initRef[kyo.internal.MountState](kyo.internal.MountState.Pending(Absent))
+            _        <- dispatch.register(outerAt, outer)
+            before   <- dispatch.lookup(innerAt)
+            _        <- dispatch.register(innerAt, inner)
+            o        <- dispatch.lookup(outerAt)
+            i        <- dispatch.lookup(innerAt)
+        yield
+            assert(outerNode.frame == innerNode.frame)
+            assert(before.isEmpty, "the inner mount found the outer one's cell before its own registered")
+            assert(o.exists(_ eq outer) && i.exists(_ eq inner))
+        end for
     }
 
     "siblings appearing before a keyed node do not change its identity" in {
@@ -654,6 +684,81 @@ class MountedTest extends kyo.test.Test[Any]:
                 yield
                     assert(n == 1, s"the snapshot re-ran a nested mount: $n runs")
                     assert(c == 1, s"a click on the snapshot reached the old handler: $c clicks")
+            }
+        yield succeed
+    }
+
+    "while a new instance is pending, the KeepLatest snapshot shows what the nested mounts showed" in {
+        // A detail view whose thread is a mount of its own: the snapshot is the whole old view, thread included, not the
+        // view with an empty hole where the thread was.
+        for
+            key  <- Signal.initRef("a")
+            gate <- Promise.init[Unit, Any]
+            effect = (k: String) =>
+                if k == "a" then
+                    Kyo.lift(div(
+                        span("old"),
+                        UI.mounted(Kyo.lift(span("keyless:a"))),
+                        UI.mounted(Kyo.lift(span("thread:a"))).keyed("thread-a")
+                    ))
+                else gate.get.andThen(span("new"))
+            ui = div(key.render(k => div(UI.mounted(effect(k)).keyed(k))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _      <- showsEventually(recorder, Seq("0", "0", "2"), "thread:a")
+                    _      <- showsEventually(recorder, Seq("0", "0", "1"), "keyless:a")
+                    before <- recorder.paintsAt(Seq("0"))
+                    _      <- key.set("b")
+                    _      <- assertEventually(recorder.paintsAt(Seq("0")).map(_ > before))
+                    _      <- showsEventually(recorder, Seq("0", "0"), "old")
+                    held   <- recorder.shown(Seq("0", "0"))
+                    _      <- gate.completeUnitDiscard
+                    _      <- showsEventually(recorder, Seq("0", "0"), "new")
+                yield assert(held.contains("keyless:a") && held.contains("thread:a"), s"the snapshot lost a nested mount: $held")
+            }
+        yield succeed
+    }
+
+    "the KeepLatest snapshot is held, so nothing in it looks live, until the new content shows" in {
+        // The snapshot takes no events, so a field in it must not look like one the reader can type into.
+        for
+            key  <- Signal.initRef("a")
+            gate <- Promise.init[Unit, Any]
+            effect = (k: String) => if k == "a" then Kyo.lift(input.id("note")) else gate.get.andThen(span("new"))
+            ui     = div(key.render(k => div(UI.mounted(effect(k)).keyed(k))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _       <- showsEventually(recorder, Seq("0", "0"), "note")
+                    _       <- key.set("b")
+                    _       <- assertEventually(recorder.holds.map(_.map(_.held) == Chunk(true)))
+                    whileIn <- recorder.holds
+                    _       <- gate.completeUnitDiscard
+                    _       <- showsEventually(recorder, Seq("0", "0"), "new")
+                    _       <- assertEventually(recorder.holds.map(_.map(_.held) == Chunk(true, false)))
+                    all     <- recorder.holds
+                yield assert(all.map(_.region).distinct == Chunk(whileIn.head.region), s"held and released different ranges: $all")
+            }
+        yield succeed
+    }
+
+    "a key change under KeepLatest paints the snapshot and then the new content, never an empty slot" in {
+        for
+            key  <- Signal.initRef("a")
+            gate <- Promise.init[Unit, Any]
+            effect = (k: String) => if k == "a" then Kyo.lift(span("old")) else gate.get.andThen(span("new"))
+            ui     = div(key.render(k => div(UI.mounted(effect(k)).keyed(k))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _      <- showsEventually(recorder, Seq("0", "0"), "old")
+                    before <- recorder.paintCount
+                    _      <- key.set("b")
+                    _      <- assertEventually(recorder.paintsAfter(before).map(_.nonEmpty))
+                    _      <- gate.completeUnitDiscard
+                    _      <- showsEventually(recorder, Seq("0", "0"), "new")
+                    after  <- recorder.paintsAfter(before)
+                yield
+                    val empty = after.filterNot((_, html) => html.contains("old") || html.contains("new"))
+                    assert(empty.isEmpty, s"a paint showed neither the old content nor the new: $empty")
             }
         yield succeed
     }

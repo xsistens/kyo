@@ -93,10 +93,15 @@ private[kyo] class RecordingExchange(
         if synchronous then
             Present((path, set, removed) => record(Op.Style(path, set, removed, Sink.Now))(using AllowUnsafe.embrace.danger))
         else Absent
-
     override val textPatcherNow: Maybe[(Seq[String], String) => Unit] =
         if synchronous then Present((path, value) => record(Op.Text(path, value))(using AllowUnsafe.embrace.danger))
         else Absent
+
+    override def onHold(region: ReactiveRegion, held: Boolean)(using Frame): Unit < Async =
+        recording(Op.Hold(region, held))
+
+    override def onFreshInstance(region: ReactiveRegion)(using Frame): Unit < Async =
+        recording(Op.FreshInstance(region))
 
     /** Everything recorded so far, oldest first. */
     def ops(using Frame): Chunk[Op] < Sync = Sync.Unsafe.defer(log.get())
@@ -106,13 +111,15 @@ private[kyo] class RecordingExchange(
         // Unsafe: a read of the log, for a test that compares it right away; nothing here suspends or writes.
         log.get()(using AllowUnsafe.embrace.danger)
 
-    def paints(using Frame): Chunk[Op.Paint] < Sync         = ops.map(_.collect { case op: Op.Paint => op })
-    def listPatches(using Frame): Chunk[Op.List] < Sync     = ops.map(_.collect { case op: Op.List => op })
-    def attrPatches(using Frame): Chunk[Op.Attr] < Sync     = ops.map(_.collect { case op: Op.Attr => op })
-    def boolPatches(using Frame): Chunk[Op.BoolAttr] < Sync = ops.map(_.collect { case op: Op.BoolAttr => op })
-    def classPatches(using Frame): Chunk[Op.Class] < Sync   = ops.map(_.collect { case op: Op.Class => op })
-    def stylePatches(using Frame): Chunk[Op.Style] < Sync   = ops.map(_.collect { case op: Op.Style => op })
-    def textPatches(using Frame): Chunk[Op.Text] < Sync     = ops.map(_.collect { case op: Op.Text => op })
+    def paints(using Frame): Chunk[Op.Paint] < Sync                 = ops.map(_.collect { case op: Op.Paint => op })
+    def listPatches(using Frame): Chunk[Op.List] < Sync             = ops.map(_.collect { case op: Op.List => op })
+    def attrPatches(using Frame): Chunk[Op.Attr] < Sync             = ops.map(_.collect { case op: Op.Attr => op })
+    def boolPatches(using Frame): Chunk[Op.BoolAttr] < Sync         = ops.map(_.collect { case op: Op.BoolAttr => op })
+    def classPatches(using Frame): Chunk[Op.Class] < Sync           = ops.map(_.collect { case op: Op.Class => op })
+    def stylePatches(using Frame): Chunk[Op.Style] < Sync           = ops.map(_.collect { case op: Op.Style => op })
+    def textPatches(using Frame): Chunk[Op.Text] < Sync             = ops.map(_.collect { case op: Op.Text => op })
+    def holds(using Frame): Chunk[Op.Hold] < Sync                   = ops.map(_.collect { case op: Op.Hold => op })
+    def freshInstances(using Frame): Chunk[Op.FreshInstance] < Sync = ops.map(_.collect { case op: Op.FreshInstance => op })
 
     /** Waits until an op that `pred` accepts has been recorded, whether already or later. */
     def awaitOp(pred: Op => Boolean)(using Frame): Unit < Async =
@@ -138,5 +145,7 @@ private[kyo] object RecordingExchange:
         case Class(path: Seq[String], name: String, on: Boolean, sink: Sink)
         case Style(path: Seq[String], set: Seq[(String, String)], removed: Seq[String], sink: Sink)
         case Text(path: Seq[String], value: String)
+        case Hold(region: ReactiveRegion, held: Boolean)
+        case FreshInstance(region: ReactiveRegion)
     end Op
 end RecordingExchange

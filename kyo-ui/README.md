@@ -365,7 +365,7 @@ A plain `Fiber.init` still runs on the node's `Scope`, but its failure does not 
 
 #### The page and a mount's effect
 
-A mount effect runs before what it returns is on the page: the content shows once the effect has published it. Two things follow from that, and kyo-ui takes care of both.
+A mount effect runs before what it returns is on the page: the content shows once the effect has published it, and under a `.placeholder`, `.onError` or `UI.boundary`, which hold their content back until every mount inside has loaded, only once that boundary reveals it. Two things follow, and kyo-ui takes care of both.
 
 A command a mount sends about an element (`focusId`, `scrollIntoViewId`, `requestMeasureById`, the `bind*ById` channels, `observeViewportById`), from its effect or a fiber the effect forked, goes out once the mount's own content is on the page, behind the paints that put it there. A mount can therefore focus the field it just built. If that content never shows, because the region switched away first, the command is dropped, and a measure waiting for it answers `Absent`. A measure the effect itself waits for before it yields goes out at once, since it can only be about something already on the page, and so does a command from an event handler.
 
