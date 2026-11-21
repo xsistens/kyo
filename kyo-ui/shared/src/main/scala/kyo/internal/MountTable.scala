@@ -37,8 +37,12 @@ final private[kyo] class MountDispatch(cells: AtomicRef[Dict[Seq[String], Chunk[
 end MountDispatch
 
 private[kyo] object MountDispatch:
-    def init(using Frame): MountDispatch < Sync =
-        AtomicRef.init(Dict.empty[Seq[String], Chunk[Signal[MountState]]]).map(new MountDispatch(_))
+    def init(using Frame): MountDispatch < Sync = Sync.Unsafe.defer(initNow())
+
+    /** The table for a pass that already holds the thread (see [[SignalNow]]). */
+    def initNow()(using AllowUnsafe): MountDispatch =
+        new MountDispatch(AtomicRef.Unsafe.init(Dict.empty[Seq[String], Chunk[Signal[MountState]]]).safe)
+end MountDispatch
 
 /** A `Mounted` node as normalization found it: the node, its render path, and the keys of the keyed list rows between it and its
   * enclosing reactive region, innermost first.
@@ -604,7 +608,7 @@ private[kyo] object MountRegions:
                         case MountState.Pending(Present(_)) => Kyo.unit
                         case _                              =>
                             for
-                                (kids, _) <- walkStatic(
+                                (kids, _) <- SignalNow.Locals.take(Sync.Unsafe.defer(walkStatic(
                                     content,
                                     rui.path,
                                     svgContext,
@@ -613,7 +617,7 @@ private[kyo] object MountRegions:
                                     dispatch,
                                     rows = 0L,
                                     deepRows = Nil
-                                )
+                                )))
                                 keys = RegionKeys(kids)
                                 _ <- instance.children.beginWalk(kids, keys)
                                 _ <- forkRootChannels(rui.path, content, exchange)

@@ -1,6 +1,7 @@
 package kyo.internal
 
 import kyo.*
+import kyo.UI.foreachKeyed
 import kyo.internal.RecordingExchange.Op
 
 /** What the callback binding of the reactive channels costs, asserted by counting rather than by timing.
@@ -22,9 +23,11 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
     private val fanOut = 1000
 
     final private class Recording:
-        val exchange     = new RecordingExchange(synchronous = true)
+        // Leaves kept rows in place, as the DOM backend whose sinks this stands in for does. Answering `false` would have the region
+        // bind them again after the paint, so a write right after it could land between the two bindings.
+        val exchange     = new RecordingExchange(synchronous = true, keepsRows = true)
         def patches: Int = exchange.recorded.count { case _: Op.Attr | _: Op.Class => true; case _ => false }
-        def paints: Int  = exchange.recorded.count { case _: Op.Paint => true; case _ => false }
+        def paints: Int  = exchange.recorded.count { case _: Op.Paint | _: Op.List => true; case _ => false }
     end Recording
 
     "a thousand class channels on one signal share one registration" in {
@@ -107,6 +110,26 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
             // deselects row 0. Comparing source values instead of each channel's image would deliver to all
             // thousand rows on every move and produce the same output.
             yield assert(after3 == 2 && after8 == 4, s"first=$after3 second=$after8 (expected 2 then 4)")
+        }
+    }
+
+    "an evicted keyed row releases its channel bindings" in {
+        Scope.run {
+            for
+                sel  <- Signal.initRef(false)
+                rows <- Signal.initRef(Chunk.from(0 until fanOut))
+                rec = new Recording
+                ui  = UI.div(rows.foreachKeyed(_.toString)(_ => UI.span("x").cssClass("hot", sel: Signal[Boolean])))
+                root <- ReactiveUI.normalize(ui, Seq.empty)
+                _    <- ReactiveUI.subscribe(root, rec.exchange)
+                _    <- assertEventually(sel.waiters.map(_ == 1))
+                _    <- rows.set(Chunk.from(0 until fanOut / 2))
+                // The rows leave before the list paints, so a paint means the eviction is done.
+                _ <- assertEventually(Sync.defer(rec.paints == 1))
+                _ <- sel.set(true)
+                after = rec.patches
+            // The half that left must not be written to, and the half that stayed must, before `set` returns.
+            yield assert(after == fanOut / 2, s"expected ${fanOut / 2} patches after evicting half the rows, got $after")
         }
     }
 

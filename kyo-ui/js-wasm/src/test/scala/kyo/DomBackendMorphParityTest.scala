@@ -5,7 +5,6 @@ import kyo.internal.DomBackend
 import kyo.internal.DomReactiveRegions
 import kyo.internal.HtmlRenderer
 import kyo.internal.ListRow
-import kyo.internal.ReactiveRegion
 import org.scalajs.dom
 import scala.scalajs.js as scalajs
 
@@ -45,18 +44,7 @@ class DomBackendMorphParityTest extends kyo.test.Test[Any]:
           |function __kyoPortalTwin(p){return document.querySelector('body > '+__kyoPathSel(p)+'[data-kyo-portal]');}
           |function __kyoAdoptPortals(){}
           |function __kyoRetireOrphanTwins(){}
-          |function __kyoRangeIdPath(id){
-          |  if(!id||id.charAt(0)!=="r")return null;
-          |  var end=id.indexOf("n",1);if(end<0)end=id.length;
-          |  var i=1,segs=[];
-          |  while(i<end){
-          |    if(i+8>end)return null;
-          |    var len=parseInt(id.substring(i,i+8),16);i+=8;
-          |    var s="";
-          |    for(var k=0;k<len;k++){if(i+4>end)return null;s+=String.fromCharCode(parseInt(id.substring(i,i+4),16));i+=4;}
-          |    segs.push(s);
-          |  }
-          |  return segs.join(".");}
+          |function __kyoRangeIdPath(id){var parts=id.split(".");parts.shift();return parts.join(".");}
           |function __kyoSyncField(el,name,value){
           |  if(name==="value"&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&el.value!==value)el.value=value;
           |  else if(name==="value"&&el.tagName==="SELECT"&&el.value!==value)el.value=value;}
@@ -216,29 +204,29 @@ class DomBackendMorphParityTest extends kyo.test.Test[Any]:
     )(o => o.retained == Set("host", "b") && !o.html.contains("""id="a""""))
     morph(
         "a nested range reconciles as one child and keeps its markers",
-        """<div id="o"><!--kyo-rs:r000000010031--><span id="n">a</span><!--kyo-re:r000000010031--></div>""",
-        """<div id="o"><!--kyo-rs:r000000010031--><span id="n">b</span><!--kyo-re:r000000010031--></div>"""
-    )(o => o.retained.contains("n") && o.html.contains("<!--kyo-rs:r000000010031--><span"))
+        """<div id="o"><!--kyo-rs:r.1--><span id="n">a</span><!--kyo-re:r.1--></div>""",
+        """<div id="o"><!--kyo-rs:r.1--><span id="n">b</span><!--kyo-re:r.1--></div>"""
+    )(o => o.retained.contains("n") && o.html.contains("<!--kyo-rs:r.1--><span"))
     morph(
         "a range of another id is replaced, markers and all",
-        """<!--kyo-rs:r000000010031--><span id="n">a</span><!--kyo-re:r000000010031-->""",
-        """<!--kyo-rs:r000000010032--><span id="m">b</span><!--kyo-re:r000000010032-->"""
-    )(o => o.html.contains("kyo-rs:r000000010032") && !o.html.contains("kyo-rs:r000000010031"))
+        """<!--kyo-rs:r.1--><span id="n">a</span><!--kyo-re:r.1-->""",
+        """<!--kyo-rs:r.2--><span id="m">b</span><!--kyo-re:r.2-->"""
+    )(o => o.html.contains("kyo-rs:r.2") && !o.html.contains("kyo-rs:r.1"))
     morph(
         "a slot its mount owns is opaque to the render around it",
-        """<!--kyo-rs:r000000010031 m k=a--><span id="n">content</span><!--kyo-re:r000000010031-->""",
-        """<!--kyo-rs:r000000010031 s k=a--><span id="n">placeholder</span><!--kyo-re:r000000010031-->"""
+        """<!--kyo-rs:r.1 m k=a--><span id="n">content</span><!--kyo-re:r.1-->""",
+        """<!--kyo-rs:r.1 s k=a--><span id="n">placeholder</span><!--kyo-re:r.1-->"""
     )(o => o.html.contains(">content</span>"))
     morph(
         "a slot with another key is reset and adopts it",
-        """<!--kyo-rs:r000000010031 m k=a--><span id="n">content</span><!--kyo-re:r000000010031-->""",
-        """<!--kyo-rs:r000000010031 s k=b--><span id="n">placeholder</span><!--kyo-re:r000000010031-->"""
-    )(o => o.html.contains(">placeholder</span>") && o.html.contains("kyo-rs:r000000010031 m k=b"))
+        """<!--kyo-rs:r.1 m k=a--><span id="n">content</span><!--kyo-re:r.1-->""",
+        """<!--kyo-rs:r.1 s k=b--><span id="n">placeholder</span><!--kyo-re:r.1-->"""
+    )(o => o.html.contains(">placeholder</span>") && o.html.contains("kyo-rs:r.1 m k=b"))
     morph(
         "a span against a plain node is replaced",
         """<span id="n">a</span><p id="k">k</p>""",
-        """<!--kyo-rs:r000000010031--><span id="n">b</span><!--kyo-re:r000000010031--><p id="k">k</p>"""
-    )(o => o.html.contains("kyo-rs:r000000010031") && o.html.contains(">b</span>") && o.retained.contains("k"))
+        """<!--kyo-rs:r.1--><span id="n">b</span><!--kyo-re:r.1--><p id="k">k</p>"""
+    )(o => o.html.contains("kyo-rs:r.1") && o.html.contains(">b</span>") && o.retained.contains("k"))
     morph("another tag replaces the node", """<span id="n">a</span>""", """<p id="n">a</p>""")(o =>
         o.html.contains("<p ") && !o.retained.contains("n")
     )
@@ -258,18 +246,16 @@ class DomBackendMorphParityTest extends kyo.test.Test[Any]:
 
     // ---- list patch ----
 
-    /** Live rows under the range of path `0`, each `<li>` at path `0.<key>`, and rows `(key, html)` to bring: empty html for one kept as it is. */
+    /** Live rows under a range `r.0`, each `<li>` at path `0.<key>`, and rows `(key, html)` to bring: empty html for one kept as it is. */
     private def rowHtml(key: String, text: String): String = s"""<li id="$key" data-kyo-path="0.$key">$text</li>"""
 
-    private val listId    = ReactiveRegion.htmlId(Seq("0"))
-    private val rowId     = ReactiveRegion.htmlId(Seq("0", "a", "0"))
-    private val listStart = s"<!--kyo-rs:$listId-->"
-    private val listEnd   = s"<!--kyo-re:$listId-->"
+    private val listStart = "<!--kyo-rs:r.0-->"
+    private val listEnd   = "<!--kyo-re:r.0-->"
 
     private def listThroughScala(live: String, rows: Seq[(String, String)], prepare: Prepare)(using Frame): Outcome < (Sync & Scope) =
         Sync.defer(setUp(live, prepare)).andThen(DomReactiveRegions.init(host)).map { regions =>
             val changed = rows.map(_._2).mkString
-            regions.withRegionFragment(listId, changed) { (target, scope) =>
+            regions.withRegionFragment("r.0", changed) { (target, scope) =>
                 DomBackend.listPatch(target, scope, Seq("0"), rows.map((k, h) => ListRow(k, UI.empty, h.nonEmpty)))
             }.andThen(regions.entries).map(entries => outcome(entries.keySet.toSet))
         }
@@ -277,7 +263,7 @@ class DomBackendMorphParityTest extends kyo.test.Test[Any]:
     private def listThroughScript(live: String, rows: Seq[(String, String)], prepare: Prepare): Outcome =
         setUp(live, prepare)
         discard(scalajs.Dynamic.global.eval(hooks + "\n" + HtmlRenderer.reactiveRangesJs))
-        discard(scalajs.Dynamic.global.__kyoApplyList(listId, scalajs.Array(rows.map(_._1)*), rows.map(_._2).mkString))
+        discard(scalajs.Dynamic.global.__kyoApplyList("r.0", scalajs.Array(rows.map(_._1)*), rows.map(_._2).mkString))
         val ids = scalajs.Dynamic.global.eval("Array.from(__kyoRanges.keys())").asInstanceOf[scalajs.Array[String]]
         outcome(ids.toSet)
     end listThroughScript
@@ -312,13 +298,13 @@ class DomBackendMorphParityTest extends kyo.test.Test[Any]:
     )
     list(
         "a row holding a nested range keeps the registry true",
-        listStart + s"""<li id="a" data-kyo-path="0.a"><!--kyo-rs:$rowId--><span id="s">x</span><!--kyo-re:$rowId--></li>""" +
+        listStart + """<li id="a" data-kyo-path="0.a"><!--kyo-rs:r.0.a.0--><span id="s">x</span><!--kyo-re:r.0.a.0--></li>""" +
             rowHtml("b", "b") + listEnd,
         Seq(
             "b" -> "",
-            "a" -> s"""<li id="a" data-kyo-path="0.a"><!--kyo-rs:$rowId--><span id="s">y</span><!--kyo-re:$rowId--></li>"""
+            "a" -> """<li id="a" data-kyo-path="0.a"><!--kyo-rs:r.0.a.0--><span id="s">y</span><!--kyo-re:r.0.a.0--></li>"""
         )
-    )(o => o.ranges == Set(listId, rowId) && o.html.contains(">y</span>") && o.retained.contains("s"))
+    )(o => o.ranges == Set("r.0", "r.0.a.0") && o.html.contains(">y</span>") && o.retained.contains("s"))
     list(
         "a reorder keeps focus and caret in a row",
         listStart + """<li id="a" data-kyo-path="0.a"><input id="f" data-kyo-path="0.a.0" value="abc"></li>""" + rowHtml("b", "b") +

@@ -1,6 +1,7 @@
 package kyo
 
 import kyo.Browser.*
+import kyo.UI.foreachKeyed
 import kyo.internal.HtmlOp
 import kyo.internal.KeyboardEventData
 import kyo.internal.MouseEventData
@@ -19,8 +20,8 @@ class ReactiveUITest extends UITest:
     }
 
     "HtmlOp.ReplaceRange carries region id and inner html" in {
-        val op = HtmlOp.ReplaceRange("r000000010030", "<span>hello</span>")
-        assert(op.regionId == "r000000010030")
+        val op = HtmlOp.ReplaceRange("r.0", "<span>hello</span>")
+        assert(op.regionId == "r.0")
         assert(op.html == "<span>hello</span>")
     }
 
@@ -212,6 +213,34 @@ class ReactiveUITest extends UITest:
         }
     }
 
+    "keyed foreach row whose root is a reactive region patches at the row path" in {
+        // A row rendered AS a Reactive (signal.map) is a fragment child whose root is itself a region. The renderer
+        // paints its markers under the row's own region id, the one that spells the row path. The walk must subscribe
+        // the row under that same identity, not under one nested below it, or every patch names a range the page does
+        // not have and the row keeps showing its first value.
+        val app: UI < Async =
+            for
+                rows   <- Signal.initRef(Chunk("a", "b"))
+                status <- Signal.initRef("s0")
+            yield UI.div(
+                UI.ul(
+                    rows.foreachKeyed(identity) { item =>
+                        status.map(s => UI.li.id(s"rrow-$item")(s"$item:$s"))
+                    }
+                ),
+                UI.button("bump").id("rbump").onClick(status.set("s1"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("rrow-a"), "a:s0")
+                _ <- Browser.assertText(Selector.id("rrow-b"), "b:s0")
+                _ <- Browser.click(Selector.id("rbump"))
+                _ <- Browser.assertText(Selector.id("rrow-a"), "a:s1")
+                _ <- Browser.assertText(Selector.id("rrow-b"), "b:s1")
+            yield ()
+        }
+    }
+
     // ---- keyboard activation the dispatcher emulates ----
     //
     // No browser runs these: the tree is normalized, subscribed, and handed a `UIEvent.KeyDown`
@@ -254,6 +283,18 @@ class ReactiveUITest extends UITest:
 
     "a key that activates nothing leaves the click handler alone" in {
         activations(anchor, "ArrowDown").map(n => assert(n == 0))
+    }
+
+    "the walk that subscribes a page keeps, as what it painted, the value a Local-chosen signal has where the page mounts" in {
+        val label: Local[String]                  = Local.init("unset")
+        def all(rui: ReactiveUI): Seq[ReactiveUI] = rui +: rui.children.flatMap(all)
+        val labelled                              = Signal.withLocal(label)(l => Signal.initConst(s"label:$l"))
+        label
+            .let("set")(ReactiveUI.normalize(UI.div(UI.span(labelled).id("l")), Seq.empty))
+            .map { rui =>
+                val painted = all(rui).flatMap(_.renderedValue.toList).collect { case t: UI.Ast.Text => t.value }
+                assert(painted == Seq("label:set"))
+            }
     }
 
 end ReactiveUITest
