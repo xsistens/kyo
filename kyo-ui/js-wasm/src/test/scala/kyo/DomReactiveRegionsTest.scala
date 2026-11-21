@@ -2,6 +2,7 @@ package kyo
 
 import kyo.internal.DomBackend
 import kyo.internal.DomReactiveRegions
+import kyo.internal.ReactiveRegion
 import org.scalajs.dom
 
 class DomReactiveRegionsTest extends kyo.test.Test[Any]:
@@ -599,6 +600,84 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
             yield
                 assert(!took)
                 assert(touched(before, after).isEmpty)
+        }
+    }
+
+    "a replacement drops the ranges nested anywhere inside it and still refuses an id that lives outside it" in {
+        val root = host(
+            s"<!--kyo-rs:$Outer--><div><p><!--kyo-rs:$Old-->old<!--kyo-re:$Old--></p></div><!--kyo-re:$Outer-->" +
+                s"<!--kyo-rs:$One-->one<!--kyo-re:$One-->"
+        )
+        Scope.run {
+            for
+                regions <- DomReactiveRegions.init(root)
+                before = root.innerHTML
+                duplicate <- Fiber.initUnscoped(regions.replace(Outer, s"<!--kyo-rs:$One-->again<!--kyo-re:$One-->")).map(_.getResult)
+                unchanged = root.innerHTML
+                _      <- regions.replace(Outer, s"<b><!--kyo-rs:$Old-->back<!--kyo-re:$Old--></b>")
+                size   <- regions.size
+                hasOld <- regions.contains(Old)
+                hasOne <- regions.contains(One)
+                _      <- regions.replace(Old, "again")
+            yield
+                assertPanicContains(duplicate, s"Duplicate reactive range id: $One")
+                assert(unchanged == before)
+                assert(size == 3)
+                assert(hasOld)
+                assert(hasOne)
+                assert(root.innerHTML ==
+                    s"<!--kyo-rs:$Outer--><b><!--kyo-rs:$Old-->again<!--kyo-re:$Old--></b><!--kyo-re:$Outer-->" +
+                    s"<!--kyo-rs:$One-->one<!--kyo-re:$One-->")
+        }
+    }
+
+    "replacing one row of a list examines the same registry entries for ten rows and for a thousand" in {
+        val list                          = ReactiveRegion.htmlId(Seq("list"))
+        def row(i: Int)                   = ReactiveRegion.htmlId(Seq("list", i.toString))
+        def cell(i: Int)                  = ReactiveRegion.htmlId(Seq("list", i.toString, "cell"))
+        def rowHtml(i: Int, text: String) =
+            s"<!--kyo-rs:${row(i)}--><li><!--kyo-rs:${cell(i)}-->$text<!--kyo-re:${cell(i)}--></li><!--kyo-re:${row(i)}-->"
+        def patchOneRow(rows: Int): (Long, Int, Boolean, String) < Async =
+            val root = host(s"<ul><!--kyo-rs:$list-->${(0 until rows).map(i => rowHtml(i, s"r$i")).mkString}<!--kyo-re:$list--></ul>")
+            val k    = rows / 2
+            Scope.run {
+                for
+                    regions <- DomReactiveRegions.init(root)
+                    before  <- regions.examined
+                    _       <- regions.replace(row(k), s"<li><!--kyo-rs:${cell(k)}-->new<!--kyo-re:${cell(k)}--></li>")
+                    after   <- regions.examined
+                    size    <- regions.size
+                    hasCell <- regions.contains(cell(k))
+                    _       <- regions.replace(cell(k), "newer")
+                yield (after - before, size, hasCell, root.querySelectorAll("li")(k).textContent)
+            }
+        end patchOneRow
+        for
+            small <- patchOneRow(10)
+            large <- patchOneRow(1000)
+        yield assert(
+            (small, large) == ((1L, 21, true, "newer"), (1L, 2001, true, "newer")),
+            s"ten rows: $small, a thousand rows: $large"
+        )
+        end for
+    }
+
+    "forgetting a subtree drops exactly the ranges whose opening markers stand in it" in {
+        val root = host(s"<!--kyo-rs:$One-->one<!--kyo-re:$One--><div id='leaving'><!--kyo-rs:$Two-->two<!--kyo-re:$Two--></div>")
+        // A detached copy carrying a marker for One: the registry does not name it, so it takes nothing with it.
+        val copy = host(s"<!--kyo-rs:$One-->copy<!--kyo-re:$One-->")
+        Scope.run {
+            for
+                regions      <- DomReactiveRegions.init(root)
+                _            <- Sync.defer(DomReactiveRegions.forgetRangesUnder(copy))
+                afterCopy    <- regions.entries.map(_.keySet)
+                _            <- Sync.defer(DomReactiveRegions.forgetRangesUnder(root.querySelector("#leaving")))
+                afterLeaving <- regions.entries.map(_.keySet)
+                _            <- regions.replace(One, "again")
+            yield
+                assert(afterCopy == Set(One, Two))
+                assert(afterLeaving == Set(One))
+                assert(root.innerHTML.startsWith(s"<!--kyo-rs:$One-->again<!--kyo-re:$One-->"))
         }
     }
 

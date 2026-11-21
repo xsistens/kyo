@@ -1343,7 +1343,8 @@ private[kyo] object HtmlRenderer:
           |// The morph lives in MorphScript: both clients run that one walk over their own hooks.
           |var __kyoMorph=(function(h){
           |""".stripMargin + MorphScript.js +
-            """})({syncField:__kyoSyncField,portalTwin:__kyoPortalTwin,beginAnimations:ba,guardAttached:false,
+            """})({syncField:__kyoSyncField,portalTwin:__kyoPortalTwin,rewrite:function(slot,twin,change){return __kyoRangeRewrite(twin,change);},
+          |  beginAnimations:ba,guardAttached:false,
           |  listBefore:__kyoListBefore,listAfter:__kyoListAfter});
           |var __kyoMorphRun=__kyoMorph.run,__kyoSpanId=__kyoMorph.spanId,__kyoLogicalNext=__kyoMorph.logicalNext,__kyoEachSpanNode=__kyoMorph.eachSpanNode;
           |// Nested ranges reconcile as logical children, so a region containing another region morphs like any other;
@@ -1375,6 +1376,34 @@ private[kyo] object HtmlRenderer:
           |  var n=first;
           |  while(n&&n!==until){var next=n.nextSibling;visit(n);n=next;}
           |  if(open.length)kyoRangeFail("start marker has no end after morphing "+id+": "+open[open.length-1].id);
+          |}
+          |// Runs change, which replaces or reconciles node outside any range patch, and brings the registry in line with
+          |// what stands afterwards: the ranges registered under node are retired first (a change may drop markers, whose
+          |// ids are unreadable afterwards), and the ranges under the node change answers are read after it. A portal twin
+          |// reconciled through its slot and a replaced SVG region are such changes. Twin of DomReactiveRegions.rewrite.
+          |function __kyoRangeRewrite(node,change){
+          |  var before=__kyoRanges?__kyoRangesUnder(node):[];
+          |  var after=change();
+          |  if(__kyoRanges){
+          |    for(var i=0;i<before.length;i++)__kyoRanges.delete(before[i]);
+          |    if(after){var found=new Map();__kyoRangeScanRun("rewrite",after,after.nextSibling,found);
+          |      found.forEach(function(pair,key){__kyoRanges.set(key,pair);});}}
+          |  return after;
+          |}
+          |// Drops the ranges registered under node, which is about to leave the document outside any range patch (a
+          |// retired portal twin), so the registry names only markers in the document. Twin of
+          |// DomReactiveRegions.forgetRangesUnder.
+          |function __kyoRangeForget(node){
+          |  if(!__kyoRanges)return;
+          |  var ids=__kyoRangesUnder(node);for(var i=0;i<ids.length;i++)__kyoRanges.delete(ids[i]);
+          |}
+          |// The ids of the registered ranges whose opening marker is node or lies under it.
+          |function __kyoRangesUnder(node){
+          |  var out=[];
+          |  function take(n){var key=__kyoSpanId(n);if(key!==null){var pair=__kyoRanges.get(key);if(pair&&pair.start===n)out.push(key);}}
+          |  take(node);
+          |  if(node.nodeType===1){var w=document.createTreeWalker(node,128,null,false);while(w.nextNode())take(w.currentNode);}
+          |  return out;
           |}
           |// Every range id opening at or under node. Twin of collectStartIds in DomReactiveRegions.
           |function __kyoCollectStartIds(node,into){
@@ -1571,6 +1600,17 @@ private[kyo] object HtmlRenderer:
           |  while(a!==end&&b){if(!kyoRangeSameNode(a,b))return false;a=a.nextSibling;b=b.nextSibling;}
           |  return a===end&&b===null;
           |}
+          |// The ids of the registered ranges inside the range, nested at any depth, read off the comments between its
+          |// anchors: the cost is the size of the range, not of the registry. An id counts only when its entry opens at
+          |// the marker found. Twin of nestedIn in DomReactiveRegions.
+          |function kyoRangeNested(endpoints){
+          |  var found=new Set(),walker=document.createTreeWalker(endpoints.start.parentNode,128,null,false);
+          |  walker.currentNode=endpoints.start;
+          |  for(var node=walker.nextNode();node&&node!==endpoints.end;node=walker.nextNode()){
+          |    var key=__kyoSpanId(node);if(key===null)continue;
+          |    var pair=__kyoRanges.get(key);if(pair&&pair.start===node)found.add(key);}
+          |  return found;
+          |}
           |function kyoRangeReplace(id,html){
           |  if(!kyoRangeId(id))kyoRangeFail("malformed replacement id: "+id);
           |  if(!__kyoRanges)kyoRangeFail("registry is closed");var endpoints=__kyoRanges.get(id);
@@ -1582,27 +1622,28 @@ private[kyo] object HtmlRenderer:
           |  var range=document.createRange();range.setStartAfter(endpoints.start);range.setEndBefore(endpoints.end);
           |  var parent=endpoints.start.parentNode,synthetic=parent.tagName==="TBODY"&&parent.getAttribute("data-kyo-range-host")===id;
           |  var parser=range;if(synthetic){parser=document.createRange();parser.selectNode(parent);}
-          |  var fragment=parser.createContextualFragment(html),incoming=kyoRangeScan(fragment),removed=[];
+          |  var fragment=parser.createContextualFragment(html),incoming=kyoRangeScan(fragment),removed=kyoRangeNested(endpoints);
           |  // Gone from the registry's point of view: inside the range about to be patched, or stranded in a tree
-          |  // this one no longer shares. The second case is a portal twin the sweep retired: its markers went with
-          |  // it into a detached subtree, and the sweep moves DOM without walking the registry, so the entry
-          |  // outlives the nodes it names. A dead entry is not a duplicate of the region coming back; it is the
-          |  // same region's corpse, and keeping it would refuse the live one.
+          |  // this one no longer shares. Every change that takes registered markers out of the document outside a
+          |  // range patch drops their entries as it does it (__kyoRangeForget, __kyoRangeRewrite), so a stranded
+          |  // entry is not expected; the test stays as the net for one that slipped through. A dead entry is not a
+          |  // duplicate of the region coming back; it is the same region's corpse, and keeping it would refuse the
+          |  // live one.
           |  //
           |  // The test is "same tree", not "in the document": a live portal twin under <body> shares the document
-          |  // with the range being patched and therefore stays, which is what the twin check below relies on.
+          |  // with the range being patched and therefore stays, which is what the twin check below relies on. It is
+          |  // asked only of the ids the payload brings back, the only ones that can be refused.
           |  // Twin of the `removed` computation in DomReactiveRegions.
-          |  var liveRoot=__kyoTreeRoot(endpoints.start);
-          |  __kyoRanges.forEach(function(pair,key){
-          |    if(key!==id&&(range.intersectsNode(pair.start)||__kyoTreeRoot(pair.start)!==liveRoot))removed.push(key);});
           |  // A region registered inside a portal twin is not a second copy of itself: the payload carries the portal
           |  // element inline (the twin's inline original), and this patch either morphs the twin in place (markers,
           |  // and so the registration, untouched) or replaces the range wholesale, in which case the incoming markers
           |  // take the id over and the sweep retires the stale twin. It must not join `removed` either: nothing inside
           |  // the live range re-registers it, so deleting it would leave the next write to that region unknown.
-          |  incoming.forEach(function(pair,key){
-          |    if(__kyoRanges.has(key)&&removed.indexOf(key)<0&&!__kyoInPortalTwin(__kyoRanges.get(key).start))
-          |      kyoRangeFail("duplicate id: "+key);});
+          |  var liveRoot=null;
+          |  incoming.forEach(function(pair,key){var live=__kyoRanges.get(key);if(!live||removed.has(key))return;
+          |    if(liveRoot===null)liveRoot=__kyoTreeRoot(endpoints.start);
+          |    if(__kyoTreeRoot(live.start)!==liveRoot)removed.add(key);
+          |    else if(!__kyoInPortalTwin(live.start))kyoRangeFail("duplicate id: "+key);});
           |  var oldRoots=kyoRangeRoots(endpoints.start,endpoints.end),newRoots=kyoRangeFragmentRoots(fragment),newSemanticRoots=kyoRangeSemanticRoots(newRoots,id),active=document.activeElement;
           |  var newHost=newRoots.length===1&&newRoots[0].tagName==="TBODY"&&newRoots[0].getAttribute("data-kyo-range-host")===id;
           |  // Compare synthetic table hosts separately from their semantic children. Keeping equivalent live nodes preserves a pressed click.
@@ -1625,11 +1666,11 @@ private[kyo] object HtmlRenderer:
           |  var finalRoots,morphed=unchanged||(!synthetic&&!hostWrapped&&kyoRangeMorph(endpoints,fragment));
           |  if(unchanged)__kyoMorph.adoptSlots(endpoints.start,endpoints.end);
           |  if(morphed){finalRoots=kyoRangeRoots(endpoints.start,endpoints.end);
-          |    for(var i=0;i<removed.length;i++)__kyoRanges.delete(removed[i]);
+          |    removed.forEach(function(key){__kyoRanges.delete(key);});
           |    kyoRangeRescan(id,endpoints).forEach(function(pair,key){__kyoRanges.set(key,pair);});
           |    for(var i=0;i<finalRoots.length;i++)applyJsProps(finalRoots[i]);
           |  }else{
-          |  range.deleteContents();for(var i=0;i<removed.length;i++)__kyoRanges.delete(removed[i]);
+          |  range.deleteContents();removed.forEach(function(key){__kyoRanges.delete(key);});
           |  finalRoots=newSemanticRoots;if(synthetic&&newRoots.length===1&&newRoots[0].tagName==="TBODY"&&newRoots[0].getAttribute("data-kyo-range-host")===id){
           |    var incomingHost=newRoots[0];kyoRangeSyncHost(parent,incomingHost,id);while(incomingHost.firstChild)parent.insertBefore(incomingHost.firstChild,endpoints.end);finalRoots=kyoRangeRoots(endpoints.start,endpoints.end);
           |  }else if(synthetic){var table=parent.parentNode;if(!table)kyoRangeFail("table range host is detached: "+id);
@@ -1769,8 +1810,9 @@ private[kyo] object HtmlRenderer:
            |      var __en=faEnterPaths(el);
            |      var __gh=kyoLeavePrepare(el,kyoLeaveSurv(op.Replace.html));
            |      var __fa=focusAutoPaths(el);
-           |      el.outerHTML=op.Replace.html;
-           |      var nel=document.querySelector('[data-kyo-path="'+p+'"]');if(nel){applyJsProps(nel);ba(nel);}
+           |      // The element may hold HTML ranges (under a foreignObject), which the replacement removes and brings anew.
+           |      var nel=__kyoRangeRewrite(el,function(){el.outerHTML=op.Replace.html;return document.querySelector('[data-kyo-path="'+p+'"]');});
+           |      if(nel){applyJsProps(nel);ba(nel);}
            |      if(ap){var rf=document.querySelector('[data-kyo-path="'+ap+'"]');if(rf){rf.focus({preventScroll:true});if(ss!==null)kyoSetCaret(rf,ss,se);}}
            |      // Seed after focus/caret restore so a newly appeared focus-auto element wins restore-to-trigger.
            |      if(nel){kyoEnterSeed(nel,__en);seedFocusAuto(nel,__fa);}
@@ -1783,7 +1825,7 @@ private[kyo] object HtmlRenderer:
            |    var p=op.Remove.path.join(".");
            |    var el=document.querySelector('[data-kyo-path="'+p+'"]');
            |    var __rgh=el?kyoLeavePrepare(el,{}):[];
-           |    if(el)el.remove();
+           |    if(el){__kyoRangeForget(el);el.remove();}
            |    kyoSpawnGhosts(__rgh);
            |    // The removed subtree may have held portal placeholders: retire their body twins.
            |    __kyoRetireOrphanTwins();
@@ -2075,7 +2117,7 @@ private[kyo] object HtmlRenderer:
            |      // the sweep idempotent, since an adopted twin is a direct body child and never under a region again.
            |      if(p!==null&&el.parentNode&&el.parentNode!==document.body){
            |        var stale=__kyoPortalTwin(p);
-           |        if(stale&&stale!==el)document.body.removeChild(stale);
+           |        if(stale&&stale!==el){__kyoRangeForget(stale);document.body.removeChild(stale);}
            |        var svgNs="http://www.w3.org/2000/svg";
            |        var slot=(el.namespaceURI===svgNs)?document.createElementNS(svgNs,"g"):document.createElement("span");
            |        slot.setAttribute("data-kyo-portal-slot",p);
@@ -2101,6 +2143,7 @@ private[kyo] object HtmlRenderer:
            |      var tp=tw.getAttribute("data-kyo-path");
            |      if(!document.querySelector('[data-kyo-portal-slot="'+tp+'"]')){
            |        var tg=kyoLeavePrepare(tw,{});
+           |        __kyoRangeForget(tw);
            |        document.body.removeChild(tw);
            |        kyoSpawnGhosts(tg);
            |      }

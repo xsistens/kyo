@@ -954,6 +954,40 @@ class DomBackendTest extends UITest:
     private val strandedEntries =
         "(function(){var n=0;__kyoRanges.forEach(function(p){if(!document.contains(p.start)||!document.contains(p.end))n++;});return String(n);})()"
 
+    "a region inside a portal leaves the registry with its twin and comes back under its id" in {
+        val app: UI < Async =
+            for
+                open  <- Signal.initRef(true)
+                inner <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("toggle").id("fgt").onClick(open.getAndUpdate(!_).unit),
+                UI.button("inner").id("fgi").onClick(inner.getAndUpdate(_ + 1).unit),
+                open.map(o =>
+                    if o then UI.div.id("fgpanel").portal(true)(inner.map(i => UI.span(s"v:$i").id("fgtxt"): UI)): UI
+                    else UI.span("closed").id("fgclosed"): UI
+                )
+            )
+        withUI(app) {
+            for
+                _        <- Browser.assertText(Selector.id("fgtxt"), "v:0")
+                id       <- Browser.eval(firstRangeUnder("fgpanel"))
+                held     <- Browser.eval(s"String(__kyoRanges.has('$id'))")
+                _        <- Browser.click(Selector.id("fgt"))
+                _        <- Browser.assertText(Selector.id("fgclosed"), "closed")
+                released <- Browser.eval(s"String(__kyoRanges.has('$id'))")
+                stranded <- Browser.eval(strandedEntries)
+                _        <- Browser.click(Selector.id("fgt"))
+                _        <- Browser.assertText(Selector.id("fgtxt"), "v:0")
+                _        <- Browser.click(Selector.id("fgi"))
+                _        <- Browser.assertText(Selector.id("fgtxt"), "v:1")
+                back     <- Browser.eval(s"String(__kyoRanges.has('$id'))")
+            yield assert(
+                (id.nonEmpty, held, released, stranded, back) == (true, "true", "false", "0", "true"),
+                s"id=$id held=$held released=$released stranded=$stranded back=$back"
+            )
+        }
+    }
+
     "a region in a row a list patch inserted keeps updating, and a removed row takes its regions with it" in {
         val app: UI < Async =
             for
@@ -983,6 +1017,68 @@ class DomBackendTest extends UITest:
                 (first.nonEmpty, released, stranded) == (true, "false", "0"),
                 s"first=$first released=$released stranded=$stranded"
             )
+        }
+    }
+
+    // The SVG region's first paint already replaces its element (the page serializes it differently from the payload), so an
+    // HTML region under a foreignObject in it has to keep updating from the start, not only once the region repaints.
+    "an SVG region repaint forgets the HTML ranges it removes and registers the ones it inserts" in {
+        val app: UI < Async =
+            for
+                gate  <- Signal.initRef(true)
+                inner <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("gate").id("fogate").onClick(gate.getAndUpdate(!_).unit),
+                UI.button("inner").id("foinc").onClick(inner.getAndUpdate(_ + 1).unit),
+                Svg.svg(UI.when(gate)(Svg.g(Svg.foreignObject(UI.div.id("foin-host")(inner.map(i => UI.span(s"i:$i").id("foin"): UI))))))
+            )
+        withUI(app) {
+            for
+                _        <- Browser.assertText(Selector.id("foin"), "i:0")
+                _        <- Browser.click(Selector.id("foinc"))
+                _        <- Browser.assertText(Selector.id("foin"), "i:1")
+                id       <- Browser.eval(firstRangeUnder("foin-host"))
+                _        <- Browser.click(Selector.id("fogate"))
+                _        <- Browser.assertNotExists(Selector.id("foin"))
+                released <- Browser.eval(s"String(__kyoRanges.has('$id'))")
+                stranded <- Browser.eval(strandedEntries)
+                _        <- Browser.click(Selector.id("fogate"))
+                _        <- Browser.assertText(Selector.id("foin"), "i:1")
+                back     <- Browser.eval(s"String(__kyoRanges.has('$id'))")
+                after    <- Browser.eval(strandedEntries)
+                _        <- Browser.click(Selector.id("foinc"))
+                _        <- Browser.assertText(Selector.id("foin"), "i:2")
+            yield assert(
+                (id.nonEmpty, released, stranded, back, after) == (true, "false", "0", "true", "0"),
+                s"id=$id released=$released stranded=$stranded back=$back strandedAfter=$after"
+            )
+        }
+    }
+
+    "a portal whose content swaps one region for another keeps the new one updating" in {
+        val app: UI < Async =
+            for
+                mode <- Signal.initRef(true)
+                b    <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("mode").id("swmode").onClick(mode.set(false)),
+                UI.button("b").id("swbump").onClick(b.getAndUpdate(_ + 1).unit),
+                mode.map(m =>
+                    UI.div.id("swpanel").portal(true)(
+                        if m then UI.div(b.map(i => UI.span(s"a:$i").id("swa"): UI))
+                        else UI.p(UI.span("x"), b.map(i => UI.span(s"b:$i").id("swb"): UI))
+                    ): UI
+                )
+            )
+        withUI(app) {
+            for
+                _        <- Browser.assertText(Selector.id("swa"), "a:0")
+                _        <- Browser.click(Selector.id("swmode"))
+                _        <- Browser.assertText(Selector.id("swb"), "b:0")
+                stranded <- Browser.eval(strandedEntries)
+                _        <- Browser.click(Selector.id("swbump"))
+                _        <- Browser.assertText(Selector.id("swb"), "b:1")
+            yield assert(stranded == "0", s"stranded=$stranded")
         }
     }
 

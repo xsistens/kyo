@@ -61,10 +61,14 @@ private[kyo] object DomBackend:
       * A host whose `Content-Security-Policy` lacks `unsafe-eval` fails here, at mount, loudly (see `mountInto`).
       */
     private[kyo] lazy val morphScript: js.Dynamic =
+        given Frame                                               = Frame.internal
         def elements(nodes: js.Array[dom.Node]): Seq[dom.Element] = nodes.toSeq.collect { case e: dom.Element => e }
         val hooks                                                 = js.Dynamic.literal(
             syncField = js.Any.fromFunction3((el: dom.Element, name: String, value: String) => syncFieldProperty(el, name, value)),
             portalTwin = js.Any.fromFunction1((path: String) => portalTwin(path)),
+            rewrite = js.Any.fromFunction3((slot: dom.Node, twin: dom.Node, change: js.Function0[dom.Node]) =>
+                discard(DomReactiveRegions.rewriting(slot, twin)(Maybe(change())))
+            ),
             beginAnimations = js.Any.fromFunction1((node: dom.Node) =>
                 node match
                     case element: dom.Element => beginAnimationsSync(element)
@@ -847,8 +851,12 @@ private[kyo] object DomBackend:
                     val oldEnter                       = enterPaths(Seq(element))
                     val ghosts                         = prepareLeaveGhosts(Seq(element), leaveSurvSet(finalHtml))
                     val oldFocus                       = focusAutoPaths(Seq(element))
-                    element.outerHTML = finalHtml
-                    val updated = Maybe(document.querySelector(s"""[data-kyo-path="$pathAttr"]""")).toList
+                    // The element may hold HTML ranges (under a foreignObject), which the replacement removes and
+                    // brings anew, so the registry follows it.
+                    val updated = regions.rewrite(element) {
+                        element.outerHTML = finalHtml
+                        Maybe(document.querySelector(s"""[data-kyo-path="$pathAttr"]"""))
+                    }.toList
                     updated.foreach { newElement =>
                         applyJsPropsSync(newElement)
                         beginAnimationsSync(newElement)
@@ -1901,7 +1909,9 @@ private[kyo] object DomBackend:
                 if path != null && el.parentNode != null && (el.parentNode ne document.body) then
                     // A stale twin from a lost placeholder would collide on the path: drop it first (defensive).
                     val stale = portalTwin(path)
-                    if stale != null && (stale ne el) then discard(document.body.removeChild(stale))
+                    if stale != null && (stale ne el) then
+                        DomReactiveRegions.forgetRangesUnder(stale)
+                        discard(document.body.removeChild(stale))
                     val slot =
                         if el.namespaceURI == SvgNs then document.createElementNS(SvgNs, "g")
                         else document.createElement("span")
@@ -1937,6 +1947,7 @@ private[kyo] object DomBackend:
             val p    = twin.getAttribute("data-kyo-path")
             if document.querySelector(s"""[data-kyo-portal-slot="$p"]""") == null then
                 val ghosts = prepareLeaveGhosts(twin, Set.empty)
+                DomReactiveRegions.forgetRangesUnder(twin)
                 discard(document.body.removeChild(twin))
                 spawnGhosts(ghosts)
             end if
