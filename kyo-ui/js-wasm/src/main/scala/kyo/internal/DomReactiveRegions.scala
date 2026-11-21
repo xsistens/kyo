@@ -17,6 +17,21 @@ final private[kyo] class DomReactiveRegions private (
     /** How many registry entries the replacements so far looked at to find the ranges they remove. */
     private var examinedEntries = 0L
 
+    /** The fingerprint of what each range was last painted with, filled only while a devtools sink observes (see
+      * `DomBackend.noteWasted`). Kept here because this is where a range's end is known: an entry leaves with its range.
+      */
+    private val fingerprints = mutable.HashMap.empty[String, Long]
+
+    /** The fingerprint of range `regionId`'s latest observed paint, if one is recorded. */
+    private[kyo] def fingerprint(regionId: String): Maybe[Long] = Maybe.fromOption(fingerprints.get(regionId))
+
+    private[kyo] def recordFingerprint(regionId: String, fingerprint: Long): Unit = fingerprints(regionId) = fingerprint
+
+    /** Forgets range `regionId`'s fingerprint after a change that painted no whole region (a list patch), so the next
+      * repaint is not compared against markup the range no longer shows.
+      */
+    private[kyo] def forgetFingerprint(regionId: String): Unit = discard(fingerprints.remove(regionId))
+
     def replace(regionId: String, html: String)(using Frame): Unit < Sync =
         replaceWith(regionId, html, keepCurrent = false)(_ => false)((_, _) => ())((_, _, _) => ())
 
@@ -191,6 +206,7 @@ final private[kyo] class DomReactiveRegions private (
             removed.foreach { id =>
                 ranges.remove(id)
                 discard(inserted.remove(id))
+                discard(fingerprints.remove(id))
             }
             val insertedRoots = (liveHost, incomingContent) match
                 case (
@@ -256,12 +272,56 @@ final private[kyo] class DomReactiveRegions private (
         incomingMarkup: Seq[(String, String)]
     ): Unit =
         removed.foreach(ranges.remove)
-        removed.foreach(id => if !live.contains(id) then discard(inserted.remove(id)))
+        removed.foreach { id =>
+            if !live.contains(id) then
+                discard(inserted.remove(id))
+                discard(fingerprints.remove(id))
+        }
         ranges.addAll(live)
         incomingMarkup.foreach { (id, markup) =>
             if live.contains(id) && (!removed.contains(id) || inserted.contains(id)) then inserted(id) = markup
         }
     end adoptLive
+
+    /** Runs `change`, which replaces or reconciles `subtree` outside any range patch, and brings the registry in line
+      * with what stands afterwards: the ranges registered under `subtree` are retired before it runs (a change may drop
+      * markers, and a dropped marker's id is unreadable afterwards), and the ranges under the node `change` answers
+      * are read off the DOM after it. A portal twin reconciled by the morph of the range around its slot, and an SVG
+      * region whose element is replaced, are such rewrites: neither lies between the anchors of a range, so no range
+      * patch accounts for the markers they drop and bring.
+      */
+    private[kyo] def rewrite[N <: dom.Node](subtree: dom.Node)(change: => Maybe[N])(using Frame): Maybe[N] =
+        if !open then change
+        else
+            val before = registeredUnder(subtree)
+            val after  = change
+            val live   =
+                after.map(DomReactiveRegions.scan(document, _)).getOrElse(mutable.HashMap.empty[String, DomReactiveRegions.Endpoints])
+            adoptLive(before, live, live.iterator.map((id, endpoints) => id -> serializeBetween(endpoints)).toSeq)
+            after
+    end rewrite
+
+    /** Drops the ranges registered under `node`, which is about to leave the document. */
+    private def forgetUnder(node: dom.Node): Unit =
+        if open then
+            registeredUnder(node).foreach { id =>
+                ranges.remove(id)
+                discard(inserted.remove(id))
+                discard(fingerprints.remove(id))
+            }
+
+    /** The ids of the registered ranges whose opening marker is `node` or lies under it. */
+    private def registeredUnder(node: dom.Node): Set[String] =
+        val found                        = Set.newBuilder[String]
+        def take(marker: dom.Node): Unit =
+            DomReactiveRegions.startMarkerId(marker).foreach { id =>
+                if ranges.get(id).exists(_.start eq marker) then found += id
+            }
+        take(node)
+        val walker = DomReactiveRegions.commentWalker(document, node)
+        while walker.nextNode() != null do take(walker.currentNode)
+        found.result()
+    end registeredUnder
 
     /** Write `value` as the whole content of the range that owns `path`; `false` when no range owns it.
       *
@@ -367,45 +427,6 @@ final private[kyo] class DomReactiveRegions private (
     private[kyo] def contains(regionId: String)(using Frame): Boolean < Sync =
         Sync.defer(ranges.contains(regionId))
 
-    /** Runs `change`, which replaces or reconciles `subtree` outside any range patch, and brings the registry in line
-      * with what stands afterwards: the ranges registered under `subtree` are retired before it runs (a change may drop
-      * markers, and a dropped marker's id is unreadable afterwards), and the ranges under the node `change` answers
-      * are read off the DOM after it. A portal twin reconciled by the morph of the range around its slot, and an SVG
-      * region whose element is replaced, are such rewrites: neither lies between the anchors of a range, so no range
-      * patch accounts for the markers they drop and bring.
-      */
-    private[kyo] def rewrite[N <: dom.Node](subtree: dom.Node)(change: => Maybe[N])(using Frame): Maybe[N] =
-        if !open then change
-        else
-            val before = registeredUnder(subtree)
-            val after  = change
-            val live   =
-                after.map(DomReactiveRegions.scan(document, _)).getOrElse(mutable.HashMap.empty[String, DomReactiveRegions.Endpoints])
-            adoptLive(before, live, live.iterator.map((id, endpoints) => id -> serializeBetween(endpoints)).toSeq)
-            after
-    end rewrite
-
-    /** Drops the ranges registered under `node`, which is about to leave the document. */
-    private def forgetUnder(node: dom.Node): Unit =
-        if open then
-            registeredUnder(node).foreach { id =>
-                discard(ranges.remove(id))
-                discard(inserted.remove(id))
-            }
-
-    /** The ids of the registered ranges whose opening marker is `node` or lies under it. */
-    private def registeredUnder(node: dom.Node): Set[String] =
-        val found                        = Set.newBuilder[String]
-        def take(marker: dom.Node): Unit =
-            DomReactiveRegions.startMarkerId(marker).foreach { id =>
-                if ranges.get(id).exists(_.start eq marker) then found += id
-            }
-        take(node)
-        val walker = DomReactiveRegions.commentWalker(document, node)
-        while walker.nextNode() != null do take(walker.currentNode)
-        found.result()
-    end registeredUnder
-
     private[kyo] def close(using Frame): Unit < Sync =
         Sync.defer {
             if open then
@@ -413,6 +434,7 @@ final private[kyo] class DomReactiveRegions private (
                 DomReactiveRegions.opened -= this
                 ranges.clear()
                 inserted.clear()
+                fingerprints.clear()
         }
 
     private def ensureOpen()(using Frame): Unit =
