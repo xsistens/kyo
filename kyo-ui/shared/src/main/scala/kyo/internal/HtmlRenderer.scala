@@ -680,6 +680,9 @@ private[kyo] object HtmlRenderer:
         // enter/leave transition class lists (read client-side by the patch-application code).
         attrs.enterTransition.foreach(c => w(sb, s""" data-kyo-enter="${esc(c)}""""))
         attrs.leaveTransition.foreach(c => w(sb, s""" data-kyo-leave="${esc(c)}""""))
+        // Portal marker (read client-side by the patch-application code): the client re-homes this element to
+        // document.body behind a data-kyo-portal-slot placeholder; SSR/SSG keep it inline.
+        attrs.portal.foreach(v => if v then w(sb, """ data-kyo-portal="1""""))
         val css = inlineCss(attrs.uiStyle, pseudoClass.nonEmpty, channelStyle)
         if css.nonEmpty then w(sb, s""" style="${esc(css)}"""")
         // A static value is left out where a channel of the same name is bound: the channel is the value (see
@@ -1260,7 +1263,7 @@ private[kyo] object HtmlRenderer:
           |// The morph lives in MorphScript: both clients run that one walk over their own hooks.
           |var __kyoMorph=(function(h){
           |""".stripMargin + MorphScript.js +
-            """})({syncField:__kyoSyncField,beginAnimations:ba,guardAttached:false});
+            """})({syncField:__kyoSyncField,beginAnimations:ba,guardAttached:false,portalTwin:__kyoPortalTwin});
           |var __kyoMorphRun=__kyoMorph.run,__kyoSpanId=__kyoMorph.spanId;
           |// Nested ranges reconcile as logical children, so a region containing another region morphs like any other;
           |// kyoRangeReplace re-reads the live markers afterwards and hands the registry what is actually there.
@@ -1287,6 +1290,19 @@ private[kyo] object HtmlRenderer:
           |  while(n&&n!==endpoints.end){var next=n.nextSibling;visit(n);n=next;}
           |  if(open.length)kyoRangeFail("start marker has no end after morphing "+id+": "+open[open.length-1].id);
           |  return found;
+          |}
+          |// The topmost node above this one: the Document for anything attached, the detached subtree's own root
+          |// otherwise. Two nodes share a tree exactly when this returns the same node for both. Twin of treeRoot
+          |// in DomReactiveRegions.
+          |function __kyoTreeRoot(node){var top=node;while(top.parentNode)top=top.parentNode;return top;}
+          |// Is this live marker sitting inside a portal twin, an element the sweep re-homed to <body>?
+          |// Twin of inPortalTwin in DomReactiveRegions.
+          |function __kyoInPortalTwin(node){
+          |  var el=node.parentNode;
+          |  while(el&&el.nodeType===1){
+          |    if(el.parentNode===document.body&&el.hasAttribute("data-kyo-portal"))return true;
+          |    el=el.parentNode;}
+          |  return false;
           |}
           |// A select chooses among the options it holds when its value is assigned, so a value assigned before its
           |// options arrived selects nothing: assign it again once options inside it were painted. applyJsProps calls
@@ -1331,8 +1347,26 @@ private[kyo] object HtmlRenderer:
           |  var parent=endpoints.start.parentNode,synthetic=parent.tagName==="TBODY"&&parent.getAttribute("data-kyo-range-host")===id;
           |  var parser=range;if(synthetic){parser=document.createRange();parser.selectNode(parent);}
           |  var fragment=parser.createContextualFragment(html),incoming=kyoRangeScan(fragment),removed=[];
-          |  __kyoRanges.forEach(function(pair,key){if(key!==id&&range.intersectsNode(pair.start))removed.push(key);});
-          |  incoming.forEach(function(pair,key){if(__kyoRanges.has(key)&&removed.indexOf(key)<0)kyoRangeFail("duplicate id: "+key);});
+          |  // Gone from the registry's point of view: inside the range about to be patched, or stranded in a tree
+          |  // this one no longer shares. The second case is a portal twin the sweep retired: its markers went with
+          |  // it into a detached subtree, and the sweep moves DOM without walking the registry, so the entry
+          |  // outlives the nodes it names. A dead entry is not a duplicate of the region coming back; it is the
+          |  // same region's corpse, and keeping it would refuse the live one.
+          |  //
+          |  // The test is "same tree", not "in the document": a live portal twin under <body> shares the document
+          |  // with the range being patched and therefore stays, which is what the twin check below relies on.
+          |  // Twin of the `removed` computation in DomReactiveRegions.
+          |  var liveRoot=__kyoTreeRoot(endpoints.start);
+          |  __kyoRanges.forEach(function(pair,key){
+          |    if(key!==id&&(range.intersectsNode(pair.start)||__kyoTreeRoot(pair.start)!==liveRoot))removed.push(key);});
+          |  // A region registered inside a portal twin is not a second copy of itself: the payload carries the portal
+          |  // element inline (the twin's inline original), and this patch either morphs the twin in place (markers,
+          |  // and so the registration, untouched) or replaces the range wholesale, in which case the incoming markers
+          |  // take the id over and the sweep retires the stale twin. It must not join `removed` either: nothing inside
+          |  // the live range re-registers it, so deleting it would leave the next write to that region unknown.
+          |  incoming.forEach(function(pair,key){
+          |    if(__kyoRanges.has(key)&&removed.indexOf(key)<0&&!__kyoInPortalTwin(__kyoRanges.get(key).start))
+          |      kyoRangeFail("duplicate id: "+key);});
           |  var oldRoots=kyoRangeRoots(endpoints.start,endpoints.end),newRoots=kyoRangeFragmentRoots(fragment),newSemanticRoots=kyoRangeSemanticRoots(newRoots,id),active=document.activeElement;
           |  var newHost=newRoots.length===1&&newRoots[0].tagName==="TBODY"&&newRoots[0].getAttribute("data-kyo-range-host")===id;
           |  // Compare synthetic table hosts separately from their semantic children. Keeping equivalent live nodes preserves a pressed click.
@@ -1342,7 +1376,7 @@ private[kyo] object HtmlRenderer:
           |    :!synthetic&&!newHost&&kyoRangeSameContent(endpoints.start,endpoints.end,fragment);
           |  // The pre-patch reads (focused node, enter and leave path sets, ghost clones of what is about to depart)
           |  // happen before either path touches the DOM, and the post-patch tail below runs for both: a morph is
-          |  // still a patch, and a leave transition has no business depending on which one painted.
+          |  // still a patch, and a leave transition or a portal re-home has no business depending on which one painted.
           |  var inside=active&&active!==document.body&&kyoRangeContains(oldRoots,active);
           |  var activeLocator=inside?kyoRangeFocusLocator(oldRoots,active):null;
           |  var ss=inside&&typeof active.selectionStart==="number"?active.selectionStart:null;
@@ -1370,7 +1404,12 @@ private[kyo] object HtmlRenderer:
           |  for(var i=0;i<finalRoots.length;i++){applyJsProps(finalRoots[i]);ba(finalRoots[i]);}
           |  }
           |  var restored=kyoRangeResolveFocus(finalRoots,activeLocator);if(restored){restored.focus({preventScroll:true});if(ss!==null)kyoSetCaret(restored,ss,se);}
-          |  kyoSeedEnterRoots(finalRoots,oldEnter);kyoSeedFocusRoots(finalRoots,oldFocus);kyoSpawnGhosts(ghosts);sweepFocusAuto();
+          |  kyoSeedEnterRoots(finalRoots,oldEnter);kyoSeedFocusRoots(finalRoots,oldFocus);kyoSpawnGhosts(ghosts);
+          |  // Portal upkeep over the roots this patch inserted, and retirement of a placeholder it removed
+          |  // (twin of adoptPortals and retireOrphanTwins in DomBackend.finishRangePatch).
+          |  for(var pi=0;pi<finalRoots.length;pi++)__kyoAdoptPortals(finalRoots[pi]);
+          |  __kyoRetireOrphanTwins();
+          |  sweepFocusAuto();
           |}
           |var __kyoRanges=kyoRangeScan(document.body);
           |window.addEventListener("pagehide",function(){if(__kyoRanges){__kyoRanges.clear();__kyoRanges=null;}});
@@ -1503,6 +1542,8 @@ private[kyo] object HtmlRenderer:
            |      // Seed after focus/caret restore so a newly appeared focus-auto element wins restore-to-trigger.
            |      if(nel){kyoEnterSeed(nel,__en);seedFocusAuto(nel,__fa);}
            |      kyoSpawnGhosts(__gh);
+           |      // Portal upkeep over what this replace inserted (twin of DomBackend.adoptPortals).
+           |      if(nel)__kyoAdoptPortals(nel);__kyoRetireOrphanTwins();
            |    }
            |    sweepFocusAuto();
            |  }else if(op.Remove){
@@ -1511,6 +1552,8 @@ private[kyo] object HtmlRenderer:
            |    var __rgh=el?kyoLeavePrepare(el,{}):[];
            |    if(el)el.remove();
            |    kyoSpawnGhosts(__rgh);
+           |    // The removed subtree may have held portal placeholders: retire their body twins.
+           |    __kyoRetireOrphanTwins();
            |    sweepFocusAuto();
            |  }else if(op.InjectCss){
            |    var s=document.createElement("style");
@@ -1608,7 +1651,14 @@ private[kyo] object HtmlRenderer:
            |  while(n&&n!==document.body){
            |    var ev=n.getAttribute&&n.getAttribute("data-kyo-ev");
            |    if(ev&&ev.split(",").indexOf(t)>=0)return true;
-           |    n=n.parentElement;
+           |    // Portal hop: a re-homed element's DOM parent is <body>; continue the walk at its LOGICAL parent (its
+           |    // placeholder slot's parent) so handlers declared on logical ancestors still forward. The server
+           |    // dispatch bubbles over the logical tree anyway. Twin of DomBackend.declaredInChain.
+           |    if(n.hasAttribute&&n.hasAttribute("data-kyo-portal")&&n.parentNode===document.body){
+           |      var pp=n.getAttribute("data-kyo-path");
+           |      var sl=pp!==null?document.querySelector('[data-kyo-portal-slot="'+pp+'"]'):null;
+           |      n=sl?sl.parentElement:null;
+           |    }else n=n.parentElement;
            |  }
            |  return false;
            |}
@@ -1709,6 +1759,10 @@ private[kyo] object HtmlRenderer:
            |    var g=node.cloneNode(true);kyoStrip(g);
            |    g.style.position="fixed";g.style.left=rect.left+"px";g.style.top=rect.top+"px";
            |    g.style.width=rect.width+"px";g.style.height=rect.height+"px";g.style.margin="0";g.style.pointerEvents="none";
+           |    // At <body> a class's percentage min-size resolves against the viewport and beats the inline size (a dropdown's
+           |    // min-width:100% stretched the ghost to the window edge). Only the minimum is reset: max-* stays with the
+           |    // classes, so a leave that collapses through max-height still can.
+           |    g.style.boxSizing="border-box";g.style.minWidth="0";g.style.minHeight="0";
            |    g.setAttribute("data-kyo-ghost","1");
            |    ghosts.push({src:node,node:g,leave:leave});
            |  }
@@ -1730,6 +1784,64 @@ private[kyo] object HtmlRenderer:
            |    g.addEventListener("transitionend",cleanup);g.addEventListener("animationend",cleanup);
            |    setTimeout(cleanup,1000);
            |  })(ghosts[i]);}
+           |}
+           |// Portal upkeep after a patch (twin of DomBackend.adoptPortals; keep the two in lockstep).
+           |// Adopt: every data-kyo-portal element still sitting inline under root (root included; freshly inserted by
+           |// this patch) is re-homed to document.body behind an inert data-kyo-portal-slot placeholder at its logical
+           |// position. Must run after focus and enter seeding, both of which are subtree-scoped. Reparenting drops DOM
+           |// focus, so focus and caret held inside the moved subtree are re-applied after the move; the enter
+           |// transition is unaffected, since its from-state classes release on the next frame.
+           |// Orphans: a body twin whose placeholder is gone (its slot was removed or replaced) left with its region:
+           |// prepare its leave ghost, remove it, then spawn, since kyoSpawnGhosts drops ghosts whose source is still
+           |// connected. Document-wide by necessity: the twin sits outside every region subtree, so the regular leave
+           |// sweep cannot see it.
+           |// Twin of DomBackend.portalTwin: the (unique) re-homed body child carrying the path.
+           |function __kyoPortalTwin(p){return document.querySelector('body > '+__kyoPathSel(p)+'[data-kyo-portal]');}
+           |// Re-homes the portal elements under root to document.body behind a placeholder. Twin of DomBackend.adoptPortals.
+           |var __kyoPortaled=false;
+           |function __kyoAdoptPortals(root){
+           |  if(root&&root.querySelectorAll){
+           |    var cand=[];
+           |    if(root.hasAttribute&&root.hasAttribute("data-kyo-portal"))cand.push(root);
+           |    var els=root.querySelectorAll("[data-kyo-portal]");
+           |    for(var i=0;i<els.length;i++)cand.push(els[i]);
+           |    for(var j=0;j<cand.length;j++){
+           |      var el=cand[j];
+           |      var p=el.getAttribute("data-kyo-path");
+           |      // Only path-carrying elements can portal (the placeholder must key the slot); the parent check keeps
+           |      // the sweep idempotent, since an adopted twin is a direct body child and never under a region again.
+           |      if(p!==null&&el.parentNode&&el.parentNode!==document.body){
+           |        var stale=__kyoPortalTwin(p);
+           |        if(stale&&stale!==el)document.body.removeChild(stale);
+           |        var svgNs="http://www.w3.org/2000/svg";
+           |        var slot=(el.namespaceURI===svgNs)?document.createElementNS(svgNs,"g"):document.createElement("span");
+           |        slot.setAttribute("data-kyo-portal-slot",p);
+           |        slot.setAttribute("hidden","");
+           |        var ae=document.activeElement;
+           |        var had=ae&&ae!==document.body&&(el===ae||el.contains(ae));
+           |        var ss=(had&&typeof ae.selectionStart==='number')?ae.selectionStart:null;
+           |        var se=(had&&typeof ae.selectionEnd==='number')?ae.selectionEnd:null;
+           |        el.parentNode.insertBefore(slot,el);
+           |        document.body.appendChild(el);__kyoPortaled=true;
+           |        if(had){ae.focus({preventScroll:true});if(ss!==null&&typeof ae.setSelectionRange==='function'){try{ae.setSelectionRange(ss,se);}catch(e){if(e.name!=='InvalidStateError')throw e;}}}
+           |      }
+           |    }
+           |  }
+           |}
+           |// Retires every body twin whose placeholder is gone; once per patch, and only once something was ever adopted, since
+           |// a twin exists only after an adoption. Twin of DomBackend.retireOrphanTwins.
+           |function __kyoRetireOrphanTwins(){
+           |  if(!__kyoPortaled)return;
+           |    var twins=document.querySelectorAll('body > [data-kyo-portal][data-kyo-path]');
+           |    for(var t=0;t<twins.length;t++){
+           |      var tw=twins[t];
+           |      var tp=tw.getAttribute("data-kyo-path");
+           |      if(!document.querySelector('[data-kyo-portal-slot="'+tp+'"]')){
+           |        var tg=kyoLeavePrepare(tw,{});
+           |        document.body.removeChild(tw);
+           |        kyoSpawnGhosts(tg);
+           |      }
+           |    }
            |}
            |// Focus seeding/restore for [data-kyo-focus-auto]/[data-kyo-focus-restore]; __focusReturnStack stacks {fa, ret|null, restore}.
            |// Mirrors DomBackend.focusReturnStack for the SPA transport.
@@ -1782,6 +1894,8 @@ private[kyo] object HtmlRenderer:
            |kyoEnterSeed(document.body,{});
            |// Initial mount: everything server-rendered is new (empty old set), like native autofocus.
            |seedFocusAuto(document.body,{});
+           |// Portal adopt for the initial paint: a portal element present at load re-homes immediately.
+           |__kyoAdoptPortals(document.body);__kyoRetireOrphanTwins();
            |// Dropdown helpers: close all dropdowns except the given id
            |function kyoCloseDropdown(exceptId){
            |  var all=document.querySelectorAll('[data-kyo-dropdown-options]');
