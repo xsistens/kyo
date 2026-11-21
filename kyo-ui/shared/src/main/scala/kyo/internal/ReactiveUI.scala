@@ -28,19 +28,30 @@ private[kyo] case class ReactiveUI(
     deepRows: List[Int] = Nil,
     // Reactive channels carried from the element's Attrs; subscribeScoped forks the in-place-patch observers
     // (empty for non-element / attribute-less nodes).
-    reactiveAttrs: Map[String, Signal[String]] = Map.empty,
-    reactiveBoolAttrs: Map[String, Signal[Boolean]] = Map.empty,
-    reactiveClasses: Map[String, Signal[Boolean]] = Map.empty,
-    reactiveStyle: Maybe[Signal[Style]] = Absent,
-    // Render-time snapshots: the values the enclosing paint already put into the DOM. Subscribe skips an observer's first
+    channels: Channels = Channels.empty,
+    // Render-time snapshot: the value the enclosing paint already put into the DOM. Subscribe skips an observer's first
     // emission while it still equals its snapshot, so a fresh paint is not patched again.
     renderedValue: Maybe[UI] = Absent,
-    renderedAttrValues: Map[String, String] = Map.empty,
-    renderedBoolAttrValues: Map[String, Boolean] = Map.empty,
-    renderedClassValues: Map[String, Boolean] = Map.empty,
-    // The inline-style channel's declarations at render (see UI.Element.inlineStyle): what the first patch diffs against.
-    renderedStyleValue: Maybe[Seq[(String, String)]] = Absent
+    renderedChannels: RenderedChannels = RenderedChannels.empty,
+    // Present on Foreach regions: carries the AST node (signal, key, render) and the normalize-time items
+    // snapshot so subscribe can run the per-row reuse path instead of the whole-region re-render loop.
+    foreachSpec: Maybe[ForeachSpec] = Absent
 )
+
+/** Normalization-time companion of a [[kyo.UI.Ast.Foreach]] node: keeps the typed machinery (item signal, key
+  * function, row render) reachable at subscribe time, plus the items snapshot matching the walked children.
+  * `reusable` gates the per-row registry path: keys must exist (positional rows shift paths on removal) and the
+  * render must not bake the index into row content. `rows` is the region's row registry, created at normalize
+  * time so the node's event handler and the subscribe loop share it: dispatch resolves the target row from the
+  * live registry instead of re-rendering and re-walking the whole list per event.
+  */
+final private[kyo] case class ForeachSpec(
+    node: UI.Ast.Foreach[?, ?],
+    renderedItems: Maybe[Chunk[?]],
+    rows: RowRegistry
+):
+    def reusable: Boolean = node.key.nonEmpty && !node.indexed
+end ForeachSpec
 
 private[kyo] object ReactiveUI:
 
@@ -113,11 +124,9 @@ private[kyo] object ReactiveUI:
     def unpainted(rui: ReactiveUI): ReactiveUI =
         rui.copy(
             children = rui.children.map(unpainted),
+            foreachSpec = rui.foreachSpec.map(_.copy(renderedItems = Absent)),
             renderedValue = Absent,
-            renderedAttrValues = Map.empty,
-            renderedBoolAttrValues = Map.empty,
-            renderedClassValues = Map.empty,
-            renderedStyleValue = Absent
+            renderedChannels = RenderedChannels.empty
         )
 
     /* Normalization and the tree walk carry, for the mounted nodes and regions they meet, the session's dispatch table and which
@@ -178,42 +187,84 @@ private[kyo] object ReactiveUI:
                 end for
 
             case ui: Foreach[?, ?] @unchecked =>
-                val contentContext = regionIdentity
-                val sig            =
-                    ui.signal.map { items =>
-                        val arr = items.toSeq.zipWithIndex.map { (item, i) =>
-                            val key = if ui.key.nonEmpty then ui.key.get(item) else i.toString
-                            KeyedChild[UI](key, ui.render(i, item))
-                        }
-                        Fragment[UI](Chunk.from(arr)): UI
-                    }
-                for
-                    current <- sig.current
-                    contentParentContext = nestedParentContext(parentContext, current)
-                    (kids, _) <- walkStatic(current, path, svg, contentContext, contentParentContext, cells, rows = 0L, deepRows = Nil)
-                yield init(
-                    path,
-                    sig,
-                    isConst = false,
-                    kids,
-                    svg,
-                    regionIdentity,
-                    contentContext,
-                    parentContext,
-                    Present(ui.frame),
-                    rows,
-                    deepRows
-                ) {
-                    (targetPath, event) =>
+                ui.applyTyped {
+                    [T] => (itemSignal, keyFn, renderFn) =>
+                        val sig            = itemSignal.map(items => foreachFragment(keyFn, renderFn, items))
+                        val contentContext = regionIdentity
                         for
-                            currentUI <- sig.current
-                            contentParentContext = nestedParentContext(parentContext, currentUI)
-                            (_, freshHdl) <-
-                                walkStatic(currentUI, path, svg, contentContext, contentParentContext, cells, rows = 0L, deepRows = Nil)
-                            result <- freshHdl(targetPath, event)
-                        yield result
-                }.copy(renderedValue = Present(current))
-                end for
+                            registry <- RowRegistry.init
+                            items0   <- itemSignal.current
+                            current              = foreachFragment(keyFn, renderFn, items0)
+                            contentParentContext = nestedParentContext(parentContext, current)
+                            (kids, _) <-
+                                walkStatic(current, path, svg, contentContext, contentParentContext, cells, rows = 0L, deepRows = Nil)
+                        yield
+                            // Fallback dispatch: re-render the whole list from the current value and route
+                            // through the fresh fragment handler. Used whenever the row registry cannot
+                            // resolve the target (region not subscribed on the reuse path, row painted but
+                            // not yet registered, or an event addressed to the region node itself).
+                            val fullWalk: Handler = (targetPath, event) =>
+                                for
+                                    currentUI <- sig.current
+                                    freshParentContext = nestedParentContext(parentContext, currentUI)
+                                    (_, freshHdl) <-
+                                        walkStatic(
+                                            currentUI,
+                                            path,
+                                            svg,
+                                            contentContext,
+                                            freshParentContext,
+                                            cells,
+                                            rows = 0L,
+                                            deepRows = Nil
+                                        )
+                                    result <- freshHdl(targetPath, event)
+                                yield result
+                            init(
+                                path,
+                                sig,
+                                isConst = false,
+                                kids,
+                                svg,
+                                regionIdentity,
+                                contentContext,
+                                parentContext,
+                                Present(ui.frame),
+                                rows,
+                                deepRows
+                            ) {
+                                (targetPath, event) =>
+                                    // Row-registry fast path: the segment after the region path is the row
+                                    // key, so the live RowInstance resolves the target directly. Its cached
+                                    // handler is as fresh as a re-derived one: the registry retains a row
+                                    // only while its item value is unchanged (a changed item rebuilds the
+                                    // row, and with it the handler), which is the same purity assumption
+                                    // the paint reuse already makes. A seeded row has no cached handler
+                                    // yet; its cached rowUI is walked on demand (one row, not the list).
+                                    if targetPath.size > path.size then
+                                        registry.snapshot.map { live =>
+                                            live.find(_.key == targetPath(path.size)) match
+                                                case Some(inst) =>
+                                                    inst.handler match
+                                                        case Present(h) => h(targetPath, event)
+                                                        case Absent     =>
+                                                            walkRow(
+                                                                inst.rowUI,
+                                                                path :+ inst.key,
+                                                                svg,
+                                                                contentContext.child(inst.key),
+                                                                nestedParentContext(parentContext, inst.rowUI),
+                                                                cells
+                                                            ).map(_._2(targetPath, event))
+                                                case None => fullWalk(targetPath, event)
+                                        }
+                                    else fullWalk(targetPath, event)
+                            }.copy(
+                                renderedValue = Present(current),
+                                foreachSpec = Present(ForeachSpec(ui, Present(items0), registry))
+                            )
+                        end for
+                }
 
             case ui: Element =>
                 // An element with a SignalRef-bound attribute (`.value(ref)` xor `.checked(ref)`; an element binds at most
@@ -241,10 +292,8 @@ private[kyo] object ReactiveUI:
                         contentDeepRows,
                         discoverRootBound = false
                     )
-                    attrSnap  <- Kyo.foreach(ui.attrs.reactiveAttrs.toSeq)((n, s) => s.current.map(v => n -> v))
-                    boolSnap  <- Kyo.foreach(ui.attrs.reactiveBoolAttrs.toSeq)((n, s) => s.current.map(v => n -> v))
-                    classSnap <- Kyo.foreach(ui.attrs.reactiveClasses.toSeq)((n, s) => s.current.map(v => n -> v))
-                    styleSnap <- Kyo.foreach(ui.attrs.reactiveStyle.toList)(s => s.current.map(CssStyleRenderer.declarations))
+                    channels = Channels.of(ui)
+                    snapshot <- channels.rendered
                 yield ReactiveUI(
                     path,
                     elementSignal,
@@ -258,14 +307,8 @@ private[kyo] object ReactiveUI:
                     origin = Present(ui.frame),
                     rows = rows,
                     deepRows = deepRows,
-                    reactiveAttrs = ui.attrs.reactiveAttrs,
-                    reactiveBoolAttrs = ui.attrs.reactiveBoolAttrs,
-                    reactiveClasses = ui.attrs.reactiveClasses,
-                    reactiveStyle = ui.attrs.reactiveStyle,
-                    renderedAttrValues = attrSnap.toMap,
-                    renderedBoolAttrValues = boolSnap.toMap,
-                    renderedClassValues = classSnap.toMap,
-                    renderedStyleValue = Maybe.fromOption(styleSnap.headOption)
+                    channels = channels,
+                    renderedChannels = snapshot
                 )
                 end for
 
@@ -360,9 +403,40 @@ private[kyo] object ReactiveUI:
     private def needsOwnNode(ui: UI): Boolean = ui match
         case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted => true
         case el: Element                                    =>
-            collectSignalRef(el).nonEmpty || el.attrs.reactiveAttrs.nonEmpty
-            || el.attrs.reactiveBoolAttrs.nonEmpty || el.attrs.reactiveClasses.nonEmpty || el.attrs.reactiveStyle.nonEmpty
+            collectSignalRef(el).nonEmpty || el.attrs.hasChannels
         case _ => false
+
+    /** The Fragment a Foreach paints for `items`: one KeyedChild per element, keyed by the key function (or
+      * the index when unkeyed). Single source of truth for the mapped region signal, the normalize-time
+      * snapshot, and the reuse path's per-row rebuilds.
+      */
+    private def foreachFragment[A](keyFn: Maybe[A => String], renderFn: (Int, A) => UI, items: Chunk[A])(using Frame): UI =
+        val arr = items.toSeq.zipWithIndex.map { (item, i) =>
+            val key = if keyFn.nonEmpty then keyFn.get(item) else i.toString
+            KeyedChild[UI](key, renderFn(i, item))
+        }
+        Fragment[UI](Chunk.from(arr)): UI
+    end foreachFragment
+
+    /** Walk one reusable Foreach row at `rowPath`, whose last segment is the row's key. A row root carrying a binding channel (or
+      * being itself reactive) is promoted to its own ReactiveUI node, exactly like a fragment child in walkStatic. Returns the walked
+      * reactive kids plus the row's dispatch handler (cached on the RowInstance for registry-first dispatch).
+      */
+    private[internal] def walkRow(
+        rowUI: UI,
+        rowPath: Seq[String],
+        svg: Boolean,
+        context: ReactiveRegion.RegionIdentity,
+        parentContext: ReactiveRegion.ParentContext,
+        cells: MountDispatch
+    )(using Frame): (Seq[ReactiveUI], Handler) < Sync =
+        val depth    = rowPath.size - 1
+        val rows     = if depth < 63 then 1L << depth else 0L
+        val deepRows = if depth < 63 then Nil else List(depth)
+        if needsOwnNode(rowUI) then
+            normalizeAt(rowUI, rowPath, svg, context, parentContext, cells, rows, deepRows).map(rui => (Seq(rui), rui.handle))
+        else walkStatic(rowUI, rowPath, svg, context, parentContext, cells, rows, deepRows)
+    end walkRow
 
     /** Walk a static UI tree. Collect reactive children, build handle. */
     private[internal] def walkStatic(
@@ -656,23 +730,16 @@ private[kyo] object ReactiveUI:
         // Start the scoped in-place-patch observers for this node's reactive channels. Runs unconditionally: a
         // no-op for attribute-less nodes, but an element carrying ONLY reactive attrs is `isConst = true` and
         // would otherwise fork no observer of its own.
-        forkChannelObservers(
-            rui.path,
-            rui.reactiveAttrs,
-            rui.reactiveBoolAttrs,
-            rui.reactiveClasses,
-            exchange,
-            rui.renderedAttrValues,
-            rui.renderedBoolAttrValues,
-            rui.renderedClassValues,
-            rui.reactiveStyle,
-            rui.renderedStyleValue
-        ).andThen {
+        forkChannelObservers(rui.path, rui.channels, rui.renderedChannels, exchange).andThen {
             if rui.mounted.nonEmpty then
                 subscribeMounted(rui, rui.mounted.get, exchange, signalChangeTime, mounts, dispatch)
             else if rui.isConst then
                 // A constant node belongs to the enclosing region's pass, which already counts its children.
                 Kyo.foreachDiscard(rui.children)(subscribeScoped(_, exchange, signalChangeTime, mounts, dispatch, pass))
+            else if rui.foreachSpec.exists(_.reusable) then
+                // Unsafe: the list region's reference is made before its loop is forked, where no proof is at hand, as for a region below.
+                val listMounts = mounts.child(pass, rui)(using AllowUnsafe.embrace.danger)
+                RowRegions.subscribeForeachRegion(rui, rui.foreachSpec.get, exchange, signalChangeTime, listMounts, dispatch)
             else
                 // The tree this region last rendered, so the exchange can send only what moved instead of the
                 // whole region.
@@ -749,30 +816,15 @@ private[kyo] object ReactiveUI:
       */
     private[internal] def forkRootChannels(path: Seq[String], content: UI, exchange: UIExchange)(using Frame): Unit < (Async & Scope) =
         content match
-            case el: Element
-                if el.attrs.reactiveAttrs.nonEmpty || el.attrs.reactiveBoolAttrs.nonEmpty || el.attrs.reactiveClasses.nonEmpty
-                    || el.attrs.reactiveStyle.nonEmpty =>
-                forkChannelObservers(
-                    path,
-                    el.attrs.reactiveAttrs,
-                    el.attrs.reactiveBoolAttrs,
-                    el.attrs.reactiveClasses,
-                    exchange,
-                    style = el.attrs.reactiveStyle
-                )
+            case el: Element if el.attrs.hasChannels =>
+                forkChannelObservers(path, Channels.of(el), RenderedChannels.empty, exchange)
             case _ => Kyo.unit
 
     private def forkChannelObservers(
         path: Seq[String],
-        attrs: Map[String, Signal[String]],
-        boolAttrs: Map[String, Signal[Boolean]],
-        classes: Map[String, Signal[Boolean]],
-        exchange: UIExchange,
-        renderedAttrs: Map[String, String] = Map.empty,
-        renderedBools: Map[String, Boolean] = Map.empty,
-        renderedClasses: Map[String, Boolean] = Map.empty,
-        style: Maybe[Signal[Style]] = Absent,
-        renderedStyle: Maybe[Seq[(String, String)]] = Absent
+        channels: Channels,
+        rendered: RenderedChannels,
+        exchange: UIExchange
     )(using Frame): Unit < (Async & Scope) =
         // A channel's handler is one attribute write, so where the exchange offers a synchronous sink the
         // channel binds through `Signal.onChange`: for a signal rooted in a SignalRef the patch runs inside the
@@ -782,24 +834,24 @@ private[kyo] object ReactiveUI:
         // already shows it, while a change landing between render and subscribe differs from it and still fires.
         def bindAll[A](
             signals: Map[String, Signal[A]],
-            rendered: Map[String, A],
+            seen: Map[String, A],
             patcher: Maybe[(Seq[String], String, A) => Unit],
             slow: (String, A) => Unit < Async
         )(using CanEqual[A, A]): Unit < (Async & Scope) =
             if signals.isEmpty then Kyo.unit
             else
                 Kyo.foreachDiscard(signals.toSeq) { (name, sig) =>
-                    val baseline = Maybe.fromOption(rendered.get(name))
+                    val baseline = Maybe.fromOption(seen.get(name))
                     patcher match
                         case Present(patch) => bindChannel(sig, baseline, (v: A) => patch(path, name, v))
                         case Absent         => Fiber.init(sig.observe(baseline, Signal.defaultRepairInterval)(slow(name, _))).unit
                 }
         end bindAll
 
-        bindAll(attrs, renderedAttrs, exchange.attrPatcherNow, exchange.onAttrPatch(path, _, _))
-            .andThen(bindAll(boolAttrs, renderedBools, exchange.boolAttrPatcherNow, exchange.onBoolAttrPatch(path, _, _)))
-            .andThen(bindAll(classes, renderedClasses, exchange.classPatcherNow, exchange.onClassPatch(path, _, _)))
-            .andThen(style.fold(Kyo.unit: Unit < (Async & Scope))(bindStyle(path, _, renderedStyle, exchange)))
+        bindAll(channels.attrs, rendered.attrs, exchange.attrPatcherNow, exchange.onAttrPatch(path, _, _))
+            .andThen(bindAll(channels.bools, rendered.bools, exchange.boolAttrPatcherNow, exchange.onBoolAttrPatch(path, _, _)))
+            .andThen(bindAll(channels.classes, rendered.classes, exchange.classPatcherNow, exchange.onClassPatch(path, _, _)))
+            .andThen(channels.style.fold(Kyo.unit: Unit < (Async & Scope))(bindStyle(path, _, rendered.style, exchange)))
     end forkChannelObservers
 
     /** The inline-style channel. A value is its declarations, and a patch sets them and removes the properties the previous value had

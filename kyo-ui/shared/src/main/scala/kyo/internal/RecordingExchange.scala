@@ -11,11 +11,15 @@ import scala.annotation.tailrec
   * @param synchronous
   *   offers the `*Now` sinks, as the DOM backend does, so a channel patches on the writer's stack. Otherwise the channels go through their
   *   fibers, as on the server transport
+  * @param keepsRows
+  *   answers a list patch the way the DOM backend does: recorded as one [[RecordingExchange.Op.List]], the kept rows left in place. Otherwise
+  *   it goes through `onChange` as a whole fragment, as on the server transport
   * @param beforePaint
   *   runs before a paint is recorded, and may suspend it there, as a slow transport would
   */
 private[kyo] class RecordingExchange(
     synchronous: Boolean = false,
+    keepsRows: Boolean = false,
     beforePaint: (Seq[String], UI) => Unit < Async = (_, _) => ()
 ) extends UIExchange:
     import RecordingExchange.*
@@ -50,6 +54,17 @@ private[kyo] class RecordingExchange(
         ui: UI
     )(using Frame): Unit < Async =
         beforePaint(path, ui).andThen(recording(Op.Paint(path, previous, ui)))
+
+    override def onListPatch(
+        region: ReactiveRegion,
+        path: Seq[String],
+        contentContext: ReactiveRegion.RegionIdentity,
+        parentContext: ReactiveRegion.ParentContext,
+        previous: Maybe[UI],
+        rows: Seq[ListRow]
+    )(using Frame): Boolean < Async =
+        if keepsRows then recording(Op.List(path, rows)).andThen(true)
+        else super.onListPatch(region, path, contentContext, parentContext, previous, rows)
 
     override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
         recording(Op.Attr(path, name, value, Sink.Fiber))
@@ -88,6 +103,7 @@ private[kyo] class RecordingExchange(
         log.get()(using AllowUnsafe.embrace.danger)
 
     def paints(using Frame): Chunk[Op.Paint] < Sync         = ops.map(_.collect { case op: Op.Paint => op })
+    def listPatches(using Frame): Chunk[Op.List] < Sync     = ops.map(_.collect { case op: Op.List => op })
     def attrPatches(using Frame): Chunk[Op.Attr] < Sync     = ops.map(_.collect { case op: Op.Attr => op })
     def boolPatches(using Frame): Chunk[Op.BoolAttr] < Sync = ops.map(_.collect { case op: Op.BoolAttr => op })
     def classPatches(using Frame): Chunk[Op.Class] < Sync   = ops.map(_.collect { case op: Op.Class => op })
@@ -111,6 +127,7 @@ private[kyo] object RecordingExchange:
 
     enum Op derives CanEqual:
         case Paint(path: Seq[String], previous: Maybe[UI], ui: UI)
+        case List(path: Seq[String], rows: Seq[ListRow])
         case Attr(path: Seq[String], name: String, value: String, sink: Sink)
         case BoolAttr(path: Seq[String], name: String, value: Boolean, sink: Sink)
         case Class(path: Seq[String], name: String, on: Boolean, sink: Sink)
