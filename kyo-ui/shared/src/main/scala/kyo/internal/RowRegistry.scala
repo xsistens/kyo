@@ -19,8 +19,34 @@ final private[kyo] class RowInstance(
     val rowUI: UI,
     val kids: Seq[ReactiveUI],
     val handler: Maybe[Handler],
-    val finalizer: Scope.Finalizer
+    val scope: RowScope
 )
+
+/** What keeps one keyed row's subscriptions open, closed by the registry when the row is evicted.
+  *
+  * A plain keyed row binds a class channel and a text: two callbacks on their signals' promises, each released by one call. On a
+  * Scope finalizer each would be an effect of its own, an `Abort` handler around a deferred call, run by the finalizer's close and
+  * await. So bare releases collect here and run in one pass; the finalizer keeps only what is not a bare release (a nested
+  * region's fiber, a mount), which for a plain row is nothing.
+  */
+final private[kyo] class RowScope(val finalizer: Scope.Finalizer):
+    private var releases: List[() => Unit] = Nil
+
+    def add(release: () => Unit)(using AllowUnsafe): Unit = releases = release :: releases
+
+    /** Runs every release, newest first, and reports the first failure instead of stopping at it. */
+    def releaseAll()(using AllowUnsafe): Maybe[Throwable] =
+        var failed: Maybe[Throwable] = Absent
+        var rest                     = releases
+        while rest.nonEmpty do
+            try rest.head()
+            catch case t if scala.util.control.NonFatal(t) => if failed.isEmpty then failed = Present(t)
+            rest = rest.tail
+        end while
+        releases = Nil
+        failed
+    end releaseAll
+end RowScope
 
 /** Per-region ownership of reusable Foreach rows, in list order, plus the same rows by key. Mutation
   * happens only from the owning region's sequential observe loop, so plain get/set on the refs suffices.
@@ -34,7 +60,7 @@ final private[kyo] class RowInstance(
 final private[kyo] class RowRegistry(
     rows: AtomicRef[Vector[RowInstance]],
     index: AtomicRef[Map[String, RowInstance]],
-    building: AtomicRef[List[Scope.Finalizer]]
+    building: AtomicRef[List[RowScope]]
 ):
     def snapshot(using Frame): Vector[RowInstance] < Sync = rows.get
 
@@ -53,7 +79,7 @@ final private[kyo] class RowRegistry(
         )
 
     /** Take a row that is about to subscribe; [[replaceAll]] installs it, or [[evictAll]] closes it. */
-    def track(fin: Scope.Finalizer)(using Frame): Unit < Sync = building.getAndUpdate(fin :: _).unit
+    def track(scope: RowScope)(using Frame): Unit < Sync = building.getAndUpdate(scope :: _).unit
 
     /** Close-and-await every row whose key `keep` rejects: run before the new value paints, so a
       * vanished or changed row's observers are fully released while the old content is still on screen
@@ -68,22 +94,30 @@ final private[kyo] class RowRegistry(
                 // A cleared list drops the whole index at once rather than one key at a time.
                 else if gone.size == old.size then index.set(Map.empty)
                 else index.getAndUpdate(_ -- gone.map(_.key)).unit
-            _ <- Kyo.foreachDiscard(gone)(r => r.finalizer.close(Absent).andThen(r.finalizer.await))
+            // The channel releases of every evicted row in one pass, then the finalizers, which for a plain row hold
+            // nothing and complete without suspending (initInline).
+            _ <- release(gone.map(_.scope))
+        yield ()
+
+    private def release(scopes: Seq[RowScope])(using Frame): Unit < Async =
+        for
+            failures <- Sync.Unsafe.defer(scopes.flatMap(_.releaseAll().toList))
+            _        <- Kyo.foreachDiscard(failures)(t => Log.error("kyo-ui: a row's release failed", t))
+            _        <- Kyo.foreachDiscard(scopes)(s => s.finalizer.close(Absent).andThen(s.finalizer.await))
         yield ()
 
     def evictAll(using Frame): Unit < Async =
-        evictExcept(_ => false).andThen(
-            building.getAndSet(Nil).map(fins => Kyo.foreachDiscard(fins)(fin => fin.close(Absent).andThen(fin.await)))
-        )
+        evictExcept(_ => false).andThen(building.getAndSet(Nil).map(release))
 end RowRegistry
 
 private[kyo] object RowRegistry:
-    def init(using Frame): RowRegistry < Sync =
-        for
-            rows     <- AtomicRef.init(Vector.empty[RowInstance])
-            index    <- AtomicRef.init(Map.empty[String, RowInstance])
-            building <- AtomicRef.init(List.empty[Scope.Finalizer])
-        yield new RowRegistry(rows, index, building)
+    /** The registry for a pass that already holds the thread (see [[SignalNow]]). */
+    def initNow()(using AllowUnsafe): RowRegistry =
+        new RowRegistry(
+            AtomicRef.Unsafe.init(Vector.empty[RowInstance]).safe,
+            AtomicRef.Unsafe.init(Map.empty[String, RowInstance]).safe,
+            AtomicRef.Unsafe.init(List.empty[RowScope]).safe
+        )
 end RowRegistry
 
 /** What one list emission changes (see [[RowPlan.decide]]).
@@ -250,19 +284,23 @@ private[kyo] object RowRegions:
                         // registered on it. Subscribing inline rather than on a forked fiber makes a row that
                         // suspends finish before the emission does; the paint is already out by then.
                         // The registry always closes and awaits a row, so its finalizers run on the evicting
-                        // fiber (initInline) instead of a fiber per row.
-                        def rowRunner(kids: Seq[ReactiveUI], pass: RegionKeys): Scope.Finalizer < Async =
+                        // fiber (initInline) instead of a fiber per row, and its channel releases collect in the
+                        // row's scope, which the eviction runs in one pass.
+                        def rowRunner(kids: Seq[ReactiveUI], pass: RegionKeys): RowScope < Async =
                             Sync.Unsafe.defer {
-                                val fin = Scope.Finalizer.Unsafe.initInline()
+                                val fin   = Scope.Finalizer.Unsafe.initInline()
+                                val scope = new RowScope(fin)
                                 // A root, as `Scope.runUnowned`'s is: the registry owns the row, not the enclosing scope.
-                                rows.track(fin).andThen(ContextEffect.handle[Scope.Finalizer, Scope, Unit, Async](
+                                rows.track(scope).andThen(ContextEffect.handle[Scope.Finalizer, Scope, Unit, Async](
                                     Tag[Scope],
                                     derive = (_: Maybe[Scope.Finalizer]) => fin,
                                     fork = (parent: Scope.Finalizer) => parent.forked,
                                     join = (parent: Scope.Finalizer, _: Scope.Finalizer, _: Scope.Finalizer) => parent
                                 ) {
-                                    Kyo.foreachDiscard(kids)(subscribeScoped(_, exchange, signalChangeTime, regionMounts, dispatch, pass))
-                                }).andThen(fin)
+                                    Kyo.foreachDiscard(kids)(
+                                        subscribeScoped(_, exchange, signalChangeTime, regionMounts, dispatch, pass, Present(scope))
+                                    )
+                                }).andThen(scope)
                             }
 
                         def distinctKeys(items: Chunk[T]): Boolean =
@@ -279,7 +317,7 @@ private[kyo] object RowRegions:
                                 built <- Kyo.foreach(Chunk.from(items.toSeq.zipWithIndex)) { (item, i) =>
                                     val key  = keyFn(item)
                                     val kids = grouped.getOrElse(key, Seq.empty)
-                                    rowRunner(kids, pass).map(fin => new RowInstance(key, item, renderFn(i, item), kids, Absent, fin))
+                                    rowRunner(kids, pass).map(scope => new RowInstance(key, item, renderFn(i, item), kids, Absent, scope))
                                 }
                                 _ <- regionMounts.endWalk
                                 // No paint here: the enclosing render already put exactly this fragment in the
@@ -308,20 +346,23 @@ private[kyo] object RowRegions:
                                         )
                                     else Kyo.unit
                                 _ <- rows.evictExcept(plan.isRetained) // removed and changed rows close before the paint
-                                // Only the rebuilt rows are rendered and walked; a retained row keeps the instance `decide` put in place.
-                                _ <- Kyo.foreachDiscard(plan.rebuilt) { i =>
-                                    val key   = plan.keys(i)
-                                    val item  = plan.items(i)
-                                    val rowUI = renderFn(i, item)
-                                    walkRow(
-                                        rowUI,
-                                        path :+ key,
-                                        svg,
-                                        rui.contentContext.child(key),
-                                        nestedParentContext(rui.parentContext, rowUI),
-                                        dispatch
-                                    ).map((kids, hdl) => plan.built(i) = new RowPlan.Built(key, item, rowUI, kids, Present(hdl), Absent))
-                                }
+                                // One synchronous pass over the rebuilt rows (see SignalNow), not an effect loop that suspends per row.
+                                _ <- SignalNow.Locals.take(Sync.Unsafe.defer {
+                                    plan.rebuilt.foreach { i =>
+                                        val key         = plan.keys(i)
+                                        val item        = plan.items(i)
+                                        val rowUI       = renderFn(i, item)
+                                        val (kids, hdl) = walkRow(
+                                            rowUI,
+                                            path :+ key,
+                                            svg,
+                                            rui.contentContext.child(key),
+                                            nestedParentContext(rui.parentContext, rowUI),
+                                            dispatch
+                                        )
+                                        plan.built(i) = new RowPlan.Built(key, item, rowUI, kids, Present(hdl), Absent)
+                                    }
+                                })
                                 pass = RegionKeys(plan.allKids)
                                 _ <- regionMounts.beginWalk(plan.allKids, pass)
                                 fragment = Fragment[UI](plan.fragmentChildren)
@@ -357,8 +398,8 @@ private[kyo] object RowRegions:
                                     else rows.evictAll.andThen(Sync.defer(plan.rebuildAll()))
                                 _ <- Kyo.foreachDiscard(plan.rebuilt) { i =>
                                     val b = plan.built(i)
-                                    rowRunner(b.kids, pass).map(fin =>
-                                        plan.finalRows(i) = new RowInstance(b.key, b.item, b.rowUI, b.kids, b.handler, fin)
+                                    rowRunner(b.kids, pass).map(scope =>
+                                        plan.finalRows(i) = new RowInstance(b.key, b.item, b.rowUI, b.kids, b.handler, scope)
                                     )
                                 }
                                 _ <- regionMounts.endWalk

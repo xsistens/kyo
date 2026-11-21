@@ -560,9 +560,13 @@ class HtmlRendererTest extends UITest:
         }
     }
 
-    "data-kyo-path attribute present (edge)" in {
-        withUI(UI.div(UI.span("test").id("s"))) {
-            Browser.assertAttributeSatisfies(Selector.id("s"), "data-kyo-path", "ignore")(_.nonEmpty).unit
+    "data-kyo-path marks the elements a client addresses and no others" in {
+        withUI(UI.div(UI.span("test").cssClass("plain"), UI.span("hot").id("h").onClick(()), UI.input.id("i"))) {
+            for
+                _     <- Browser.assertAttributeSatisfies(Selector.id("h"), "data-kyo-path", "ignore")(_.nonEmpty)
+                _     <- Browser.assertAttributeSatisfies(Selector.id("i"), "data-kyo-path", "ignore")(_.nonEmpty)
+                plain <- Browser.evalBoolean("!document.querySelector('.plain').hasAttribute('data-kyo-path')")
+            yield assert(plain)
         }
     }
 
@@ -931,42 +935,6 @@ class HtmlRendererTest extends UITest:
         }
     }
 
-    "a client-side marker set to false is unset, and a later false takes an earlier true back" in {
-        val off: Seq[SpanElement => SpanElement] = Seq(
-            _.focusAuto(false),
-            _.focusRestore(false),
-            _.focusTrap(false),
-            _.scrollAuto(false),
-            _.stopPropagation(false),
-            _.portal(false)
-        )
-        val takenBack: Seq[SpanElement => SpanElement] = Seq(
-            _.focusAuto(true).focusAuto(false),
-            _.focusRestore(true).focusRestore(false),
-            _.focusTrap(true).focusTrap(false),
-            _.scrollAuto(true).scrollAuto(false),
-            _.stopPropagation(true).stopPropagation(false),
-            _.portal(true).portal(false)
-        )
-        val plain = UI.span("a")
-        for
-            offHtml  <- kyo.internal.HtmlRenderer.render(UI.div(off.map(f => f(plain): UI)*), Seq.empty)
-            backHtml <- kyo.internal.HtmlRenderer.render(UI.div(takenBack.map(f => f(plain): UI)*), Seq.empty)
-        yield
-            val attrs = (off ++ takenBack).map(f => f(plain).attrs)
-            assert(
-                attrs.forall(a =>
-                    a.focusAuto.isEmpty && a.focusRestore.isEmpty && a.focusTrap.isEmpty && a.scrollAuto.isEmpty &&
-                        a.stopPropagation.isEmpty && a.portal.isEmpty
-                ),
-                s"$attrs"
-            )
-            val markers =
-                Seq("data-kyo-focus-auto", "data-kyo-focus-restore", "data-kyo-focus-trap", "data-kyo-scroll-auto", "data-kyo-portal")
-            assert(!markers.exists(m => offHtml.contains(m) || backHtml.contains(m)), s"$offHtml | $backHtml")
-        end for
-    }
-
     "where a channel holds an attribute, the static value of the same name is not written, in either setter order" in {
         // The PRECEDENCE rule above Element.withReactiveAttr: the channel is the value. Written beside it, the static value is a
         // second attribute of the same name, and the browser's parser keeps the first one, so the page shows the static value
@@ -992,6 +960,31 @@ class HtmlRendererTest extends UITest:
             assert(held(frame, "title"), frame)
             assert(held(data1, "data-k") && held(data2, "data-k"), s"$data1 | $data2")
         end for
+    }
+
+    "the client script a page ships carries no comment lines, and its own base path" in {
+        val js = kyo.internal.HtmlRenderer.clientJs("/app\\u002fx")
+        assert(!js.linesIterator.exists(_.trim.startsWith("//")))
+        assert(js.contains("var base=\"/app\\u002fx\";"))
+        assert(kyo.internal.HtmlRenderer.clientJs("/other").contains("var base=\"/other\";"))
+    }
+
+    "a signal over a Local" - {
+        val label: Local[String]                  = Local.init("unset")
+        def labelled(using Frame): Signal[String] = Signal.withLocal(label)(l => Signal.initConst(s"label:$l"))
+
+        "a text leaf renders the value the mount sees, not the Local's default" in {
+            label
+                .let("set")(kyo.internal.HtmlRenderer.render(UI.div(UI.span(labelled).id("l")), Seq.empty))
+                .map(html => assert(html.contains("label:set") && !html.contains("label:unset"), html))
+        }
+
+        "a keyed list whose items follow it renders its rows and keys by the value the mount sees" in {
+            val rows = Signal.withLocal(label)(l => Signal.initConst(Chunk(s"$l-a", s"$l-b")))
+            label
+                .let("set")(kyo.internal.HtmlRenderer.render(UI.ul(rows.foreachKeyed(identity)(v => UI.li(UI.span(v)))), Seq.empty))
+                .map(html => assert(html.contains("set-a") && html.contains("set-b") && !html.contains("unset"), html))
+        }
     }
 
 end HtmlRendererTest

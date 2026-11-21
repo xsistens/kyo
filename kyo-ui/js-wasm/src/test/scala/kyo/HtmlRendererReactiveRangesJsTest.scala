@@ -42,13 +42,13 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
     "embedded unchanged content retains its nodes and nested anchors" in {
         Sync.defer {
             install(
-                "<!--kyo-rs:r--><section id='same'><span><!--kyo-rs:r000000010031-->text<!--kyo-re:r000000010031--></span></section><!--kyo-re:r-->"
+                "<!--kyo-rs:r--><section id='same'><span><!--kyo-rs:r.0-->text<!--kyo-re:r.0--></span></section><!--kyo-re:r-->"
             )
             val result = evalString("""(() => {
                 const before = document.getElementById('same');
                 kyoRangeReplace('r', before.outerHTML);
                 const same = before === document.getElementById('same');
-                kyoRangeReplace('r000000010031', 'updated');
+                kyoRangeReplace('r.0', 'updated');
                 return [same, __kyoRanges.size, document.getElementById('same').textContent].join('|');
             })()""")
             assert(result == "true|2|updated")
@@ -57,7 +57,7 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
 
     "embedded unchanged synthetic table content retains rows but applies changed host attributes" in {
         Sync.defer {
-            val id = "r000000010031"
+            val id = "r.0"
             install(s"<table><tbody data-kyo-range-host='$id' class='rows'><!--kyo-rs:$id-->" +
                 s"<tr id='same-row'><td>row</td></tr><!--kyo-re:$id--></tbody></table>")
             val result = evalString(s"""(() => {
@@ -77,13 +77,11 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
     // of the region around it morphs the mount's content back to the placeholder the region rendered.
     "embedded mount in content left unchanged keeps its content through the next repaint of the region around it" in {
         Sync.defer {
-            install(
-                "<!--kyo-rs:r--><section id='frame'><!--kyo-rs:r000000010031 s-->placeholder<!--kyo-re:r000000010031--></section><!--kyo-re:r-->"
-            )
+            install("<!--kyo-rs:r--><section id='frame'><!--kyo-rs:r.0 s-->placeholder<!--kyo-re:r.0--></section><!--kyo-re:r-->")
             val result = evalString("""(() => {
-                const markup = '<section id="frame"><!--kyo-rs:r000000010031 s-->placeholder<!--kyo-re:r000000010031--></section>';
+                const markup = '<section id="frame"><!--kyo-rs:r.0 s-->placeholder<!--kyo-re:r.0--></section>';
                 kyoRangeReplace('r', markup);
-                kyoRangeReplace('r000000010031', 'mounted');
+                kyoRangeReplace('r.0', 'mounted');
                 kyoRangeReplace('r', markup.replace('id="frame"', 'id="frame" class="next"'));
                 const frame = document.getElementById('frame');
                 return [frame.className, frame.textContent].join('|');
@@ -128,7 +126,7 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
     }
 
     "embedded registry preserves authored tbody attributes across row category transitions" in {
-        val id = "r000000010031"
+        val id = "r.1"
         install(
             s"<table><tbody data-kyo-range-host='$id'><!--kyo-rs:$id--><tr><td>row</td></tr><!--kyo-re:$id--></tbody></table>"
         )
@@ -153,7 +151,7 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
     }
 
     "embedded registry moves table anchors around multiple authored sections and back" in {
-        val id = "r000000010031"
+        val id = "r.1"
         install(
             s"<table><tbody data-kyo-range-host='$id'><!--kyo-rs:$id--><tr><td>row</td></tr><!--kyo-re:$id--></tbody></table>"
         )
@@ -173,16 +171,16 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
         val before    = dom.document.body.innerHTML
         val malformed = evalString("try{kyoRangeReplace('r1','changed');'no error'}catch(e){e.message}")
         val unknown   = evalString(
-            "try{kyoRangeReplace('r000000010078','changed');'no error'}catch(e){e.message}"
+            "try{kyoRangeReplace('r.x','changed');'no error'}catch(e){e.message}"
         )
         assert(malformed == "kyo-ui reactive range: malformed replacement id: r1")
-        assert(unknown == "kyo-ui reactive range: unknown id: r000000010078")
+        assert(unknown == "kyo-ui reactive range: unknown id: r.x")
         assert(dom.document.body.innerHTML == before)
     }
 
     "embedded registry rejects a malformed incoming fragment without mutation" in {
-        val id     = "r000000010031"
-        val nested = "r000000010032"
+        val id     = "r.1"
+        val nested = "r.2"
         install(s"<!--kyo-rs:$id--><span id='kept-fragment'>kept</span><!--kyo-re:$id-->")
         val before = dom.document.body.innerHTML
         val error  = evalString(
@@ -194,9 +192,9 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
     }
 
     "embedded registry rejects corrupted live anchors without mutation" in {
-        val id = "r000000010031"
+        val id = "r.1"
         install(s"<!--kyo-rs:$id--><span id='kept'>kept</span><!--kyo-re:$id-->")
-        discard(scalajs.Dynamic.global.eval(s"__kyoRanges.get('$id').end.data='kyo-re:r000000010032'"))
+        discard(scalajs.Dynamic.global.eval(s"__kyoRanges.get('$id').end.data='kyo-re:r.2'"))
         val before = dom.document.body.innerHTML
         val error  = evalString(s"try{kyoRangeReplace('$id','changed');'no error'}catch(e){e.message}")
         assert(error.contains("markers are corrupted"))
@@ -204,7 +202,7 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
     }
 
     "embedded range replacement restores raw focus and caret without a data path" in {
-        val id = "r000000010031"
+        val id = "r.1"
         install(s"<!--kyo-rs:$id--><div><input id='raw' value='one'></div><!--kyo-re:$id-->")
         discard(scalajs.Dynamic.global.eval("document.getElementById('raw').focus();document.getElementById('raw').setSelectionRange(1,1)"))
         discard(scalajs.Dynamic.global.eval(
@@ -215,7 +213,7 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
     }
 
     "embedded table range restores raw focus relative to the reactive rows" in {
-        val id = "r000000010031"
+        val id = "r.1"
         install(
             s"<table><tbody data-kyo-range-host='$id'><!--kyo-rs:$id--><tr><td><input id='raw-table' value='one'></td></tr><!--kyo-re:$id--></tbody></table>"
         )
@@ -313,7 +311,7 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
     }
 
     "embedded range replacement applies JS properties to a top-level element" in {
-        val id = "r000000010031"
+        val id = "r.1"
         install(s"<!--kyo-rs:$id--><!--kyo-re:$id-->")
         discard(scalajs.Dynamic.global.eval(
             s"kyoRangeReplace('$id',\"<input id='property' type='checkbox' data-kyo-prop-indeterminate='true'>\")"
@@ -324,7 +322,7 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
     }
 
     "embedded range replacement applies JS properties to nested elements" in {
-        val id = "r000000010031"
+        val id = "r.1"
         install(s"<!--kyo-rs:$id--><!--kyo-re:$id-->")
         discard(scalajs.Dynamic.global.eval(
             s"kyoRangeReplace('$id',\"<section><div><input id='nested-property' type='checkbox' data-kyo-prop-indeterminate='true'></div></section>\")"
@@ -335,12 +333,12 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
     }
 
     "embedded registry preserves every exposed restricted parent and keyed range" in {
-        val row    = "r000000010031"
-        val cell   = "r000000010032"
-        val list   = "r000000010033"
-        val order  = "r000000010034"
-        val option = "r000000010035"
-        val keyed  = "r000000010036"
+        val row    = "r.1"
+        val cell   = "r.2"
+        val list   = "r.3"
+        val order  = "r.4"
+        val option = "r.5"
+        val keyed  = "r.6"
         install(
             s"<table><tbody><!--kyo-rs:$row--><tr id='old-row'><td>old</td></tr><!--kyo-re:$row-->" +
                 s"<tr><!--kyo-rs:$cell--><td id='old-cell'>old</td><!--kyo-re:$cell--></tr></tbody></table>" +
@@ -365,7 +363,7 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
     }
 
     "embedded synthetic host transition treats an authored tbody as the semantic lifecycle root" in {
-        val id = "r000000010031"
+        val id = "r.1"
         install(
             s"<table><tbody data-kyo-range-host='$id'><!--kyo-rs:$id--><tr id='old-row'><td>row</td></tr><!--kyo-re:$id--></tbody></table>"
         )

@@ -2,7 +2,7 @@ package kyo.internal
 
 import kyo.*
 
-/** [[HtmlRenderer.paintsAsKeyedRoot]] against what [[HtmlRenderer.render]] actually emits.
+/** [[HtmlRenderer.paintsAsKeyedRoot]] against what [[HtmlRenderer.renderRowWithCss]] actually emits for a keyed row.
   *
   * The predicate answers a question about the renderer without going through it, which is the only way a
   * transport can decide before sending whether a keyed frame can describe an emission at all. That makes it a
@@ -35,8 +35,13 @@ class KeyedRootParityTest extends kyo.test.Test[Any]:
     private def check(name: String, ui: UI < Sync)(using Frame) =
         name in {
             for
-                node <- ui
-                html <- HtmlRenderer.render(node, path)
+                node      <- ui
+                (html, _) <- HtmlRenderer.renderRowWithCss(
+                    node,
+                    path,
+                    ReactiveRegion.RegionIdentity.root(path),
+                    ReactiveRegion.RenderHost.HtmlComments(ReactiveRegion.htmlId(path), ReactiveRegion.ParentContext.Other)
+                )
             yield
                 val predicted = HtmlRenderer.paintsAsKeyedRoot(node)
                 assert(

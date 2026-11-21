@@ -19,13 +19,13 @@ final private[kyo] case class Channels(
     def nonEmpty: Boolean = !isEmpty
 
     /** The values the channels hold now, which the enclosing paint is about to put into the DOM. */
-    def rendered(using Frame): RenderedChannels < Sync =
-        for
-            attrValues  <- Channels.currentValues(attrs)
-            boolValues  <- Channels.currentValues(bools)
-            classValues <- Channels.currentValues(classes)
-            styleValue  <- Kyo.foreach(style.toList)(s => s.current.map(CssStyleRenderer.declarations))
-        yield RenderedChannels(attrValues, boolValues, classValues, Maybe.fromOption(styleValue.headOption))
+    def rendered(using AllowUnsafe, Frame, SignalNow.Locals): RenderedChannels =
+        RenderedChannels(
+            Channels.currentValues(attrs),
+            Channels.currentValues(bools),
+            Channels.currentValues(classes),
+            style.map(s => CssStyleRenderer.declarations(SignalNow(s)))
+        )
 end Channels
 
 private[kyo] object Channels:
@@ -38,9 +38,12 @@ private[kyo] object Channels:
     /** The current value of every bound signal in `channels`, by name. Most elements bind none, so an empty
       * map answers without a loop.
       */
-    private def currentValues[A](channels: Map[String, Signal[A]])(using Frame): Map[String, A] < Sync =
+    private def currentValues[A](channels: Map[String, Signal[A]])(using AllowUnsafe, Frame, SignalNow.Locals): Map[String, A] =
         if channels.isEmpty then Map.empty[String, A]
-        else Kyo.foreach(channels.toSeq)((n, s) => s.current.map(v => n -> v)).map(_.toMap)
+        else
+            val b = Map.newBuilder[String, A]
+            channels.foreach((n, s) => b += n -> SignalNow(s))
+            b.result()
 end Channels
 
 /** Render-time snapshots of an element's [[Channels]]: the values the enclosing paint already put into the DOM. Subscribe skips an
