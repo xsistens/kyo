@@ -44,6 +44,16 @@ private[kyo] object DomBackend:
       */
     private var focusReturnStack: Chunk[FocusSeed] = Chunk.empty
 
+    /** What a list patch read before anything moved, handed through [[MorphScript]] and back. */
+    final private class ListState(
+        val locator: Maybe[RangeFocus],
+        val selectionStart: Maybe[Int],
+        val selectionEnd: Maybe[Int],
+        val oldEnter: Set[String],
+        val oldFocusAuto: Set[String],
+        val ghosts: Seq[(dom.Element, dom.Element, String)]
+    )
+
     /** [[MorphScript]] over this client's hooks, built once for the page. Reconciling a re-rendered region against its live nodes instead of
       * replacing them is what keeps node identity across a paint: focus, caret, scroll position, an imperatively bound attribute, anything a
       * DOM-local expando holds. Replacing the range is always correct and always loses all of it, so it stays the fallback.
@@ -51,7 +61,8 @@ private[kyo] object DomBackend:
       * A host whose `Content-Security-Policy` lacks `unsafe-eval` fails here, at mount, loudly (see `mountInto`).
       */
     private[kyo] lazy val morphScript: js.Dynamic =
-        val hooks = js.Dynamic.literal(
+        def elements(nodes: js.Array[dom.Node]): Seq[dom.Element] = nodes.toSeq.collect { case e: dom.Element => e }
+        val hooks                                                 = js.Dynamic.literal(
             syncField = js.Any.fromFunction3((el: dom.Element, name: String, value: String) => syncFieldProperty(el, name, value)),
             portalTwin = js.Any.fromFunction1((path: String) => portalTwin(path)),
             beginAnimations = js.Any.fromFunction1((node: dom.Node) =>
@@ -60,7 +71,14 @@ private[kyo] object DomBackend:
                     case _                    => ()
             ),
             // An onAttached hook may have put content of its own inside an element; the server-push client has no such hook.
-            guardAttached = true
+            guardAttached = true,
+            listBefore = js.Any.fromFunction3((target: js.Dynamic, disturbed: js.Array[dom.Node], repainted: js.Array[dom.Node]) =>
+                listBefore(target.scalaTarget.asInstanceOf[DomReactiveRegions.MorphTarget], elements(disturbed), elements(repainted))
+                    .asInstanceOf[js.Any]
+            ),
+            listAfter = js.Any.fromFunction3((state: js.Any, target: js.Dynamic, touched: js.Array[dom.Node]) =>
+                listAfter(state.asInstanceOf[ListState], target.scalaTarget.asInstanceOf[DomReactiveRegions.MorphTarget], elements(touched))
+            )
         )
         js.Dynamic.newInstance(js.Dynamic.global.Function)("h", MorphScript.js).asInstanceOf[js.Function1[js.Any, js.Dynamic]](hooks)
     end morphScript
@@ -102,6 +120,84 @@ private[kyo] object DomBackend:
         )
         true
     end tryMorphRange
+
+    /** Reconcile a list region against a row order rather than a rendered document. The payload holds only the rows that changed; every other
+      * row is named by key and stays where it is. Answers `false`, having changed nothing, when the rows are not individually addressable;
+      * the caller then repaints the whole list.
+      */
+    private[kyo] def listPatch(
+        target: DomReactiveRegions.MorphTarget,
+        scope: DomReactiveRegions.PatchScope,
+        path: Seq[String],
+        rows: Seq[ListRow]
+    ): Boolean =
+        val pathAttr = path.mkString(".")
+        val keys     = js.Array[String]()
+        val changed  = js.Array[Boolean]()
+        rows.foreach { row =>
+            discard(keys.push(if pathAttr.isEmpty then row.key else s"$pathAttr.${row.key}"))
+            discard(changed.push(row.changed))
+        }
+        val scriptTarget = js.Dynamic.literal(
+            parent = target.parent,
+            start = target.start,
+            end = target.end,
+            fragment = target.fragment,
+            scalaTarget = target.asInstanceOf[js.Any]
+        )
+        val scriptScope = js.Dynamic.literal(
+            retire = js.Any.fromFunction1((first: dom.Node) => scope.retire(first)),
+            placed = js.Any.fromFunction2((first: dom.Node, until: dom.Node) => scope.placed(first, until))
+        )
+        morphScript.applyList(scriptTarget, scriptScope, keys, changed).asInstanceOf[Boolean]
+    end listPatch
+
+    /** What a list patch reads before anything moves. Focus spans the whole region, not just the disturbed rows: a retained row keeps its DOM,
+      * but moving it is a remove and an insert, which blurs whatever it holds, so a pure reorder is the case that would drop the caret.
+      */
+    private def listBefore(target: DomReactiveRegions.MorphTarget, disturbed: Seq[dom.Element], repainted: Seq[dom.Element]): ListState =
+        val active = Maybe(document.activeElement).filter(el => (el ne document.body) && containsAny(target.oldElements, el))
+        val (selectionStart, selectionEnd) = active.map(readSelection).getOrElse((Absent, Absent))
+        new ListState(
+            active.flatMap(focusLocator(target.oldElements, _)),
+            selectionStart,
+            selectionEnd,
+            enterPaths(repainted),
+            focusAutoPaths(repainted),
+            prepareLeaveGhosts(disturbed, leavePaths(target.newElements))
+        )
+    end listBefore
+
+    /** What a list patch does once the rows stand: the properties, focus and caret, enter and focus seeds, portals, ghosts, sweeps. */
+    private def listAfter(state: ListState, target: DomReactiveRegions.MorphTarget, touched: Seq[dom.Element]): Unit =
+        val live = elementsBetweenLive(target)
+        live.foreach(applyJsPropsSync)
+        state.locator.flatMap(resolveFocus(live, _)).foreach { element =>
+            focusNoScroll(element)
+            (state.selectionStart, state.selectionEnd) match
+                case (Present(start), Present(end)) => setSelection(element, start, end)
+                case _                              => ()
+        }
+        seedEnter(touched, state.oldEnter)
+        seedFocusAuto(touched, state.oldFocusAuto)
+        touched.foreach(adoptPortals)
+        retireOrphanTwins()
+        spawnGhosts(state.ghosts)
+        sweepFocusAuto()
+        sweepScrollAuto()
+    end listAfter
+
+    private def elementsBetweenLive(target: DomReactiveRegions.MorphTarget): Seq[dom.Element] =
+        val out            = scala.collection.mutable.ArrayBuffer.empty[dom.Element]
+        var node: dom.Node = target.start.nextSibling
+        while node != null && !(node eq target.end) do
+            node match
+                case element: dom.Element => out += element
+                case _                    => ()
+            node = node.nextSibling
+        end while
+        out.toSeq
+    end elementsBetweenLive
 
     /** What one browser mount owns, so that tearing one mount down leaves another one on the page delivering.
       *
@@ -599,6 +695,47 @@ private[kyo] object DomBackend:
                     }
             }
         end onChange
+
+        /** Render only the rows that changed, and as one payload rather than one parse per row: a full replacement
+          * must not lose the single bulk parse it has today just because a one-row removal wants to skip it.
+          *
+          * Rows that turn out not to be addressable one-to-one leave the DOM untouched and fall through to the
+          * inherited whole-list repaint, which needs no per-row structure at all.
+          */
+        override def onListPatch(
+            region: ReactiveRegion,
+            path: Seq[String],
+            contentContext: ReactiveRegion.RegionIdentity,
+            parentContext: ReactiveRegion.ParentContext,
+            previous: Maybe[UI],
+            rows: Seq[ListRow]
+        )(using Frame): Boolean < Async =
+            def repaint: Boolean < Async = super.onListPatch(region, path, contentContext, parentContext, previous, rows)
+            region match
+                case ReactiveRegion.HtmlRange(regionId) =>
+                    val host = ReactiveRegion.renderHost(
+                        region,
+                        parentContext,
+                        ReactiveRegion.tableContent(rows.iterator.map(_.ui))
+                    )
+                    Kyo.foreach(Chunk.from(rows.filter(_.changed))) { row =>
+                        HtmlRenderer.renderRow(row.ui, path :+ row.key, contentContext.child(row.key), host)
+                    }.map(_.mkString).flatMap { changed =>
+                        Sync.defer(open).flatMap { isOpen =>
+                            // A closed backend paints nothing, so there is nothing to subscribe again.
+                            if !isOpen then true
+                            else
+                                regions.withRegionFragment(regionId, changed)(listPatch(_, _, path, rows)).flatMap { applied =>
+                                    // A row the patch inserted may carry an attach hook, as a repainted region's content may.
+                                    if applied then Sync.defer(attachments.sweep()).andThen(true)
+                                    else repaint
+                                }
+                        }
+                    }
+                // An SVG region replaces its own group element; there is no row range to address.
+                case _: ReactiveRegion.SvgElement => repaint
+            end match
+        end onListPatch
 
         // Each channel patches in place. Unlike the id-addressed channels it does NOT mark the attribute owned: the
         // render writes a path channel's value into the HTML, so a morph that repaints the element carries the value

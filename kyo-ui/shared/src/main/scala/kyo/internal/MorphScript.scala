@@ -1,12 +1,12 @@
 package kyo.internal
 
-/** The one implementation of the range morph, as JavaScript text both clients run.
+/** The one implementation of the range morph and the list patch, as JavaScript text both clients run.
   *
   * A morph is a walk over the DOM with its decisions in the walk, so it cannot be data, and no translation from Scala to JavaScript exists in
   * this build. The text is the single source: the body of a factory over `h`, the client's hooks, which answers what a
   * client calls. The server-push page installs it in its script; the browser mount builds it with `Function`. What differs between the
-  * clients is only behind `h`: how a field's property is written, where a portal's twin is, how an animation starts and whether an
-  * element's content can be an attach hook's. The hooks are written where their client lives, in [[HtmlRenderer]] and `DomBackend`.
+  * clients is only behind `h`: how a field's property is written, where a portal's twin is, how an animation starts, whether an element's
+  * content can be an attach hook's, and what a list patch reads before it moves anything and does after. The hooks are written where their client lives, in [[HtmlRenderer]] and `DomBackend`.
   *
   * `DomBackendMorphParityTest` holds a table of cases to the answers both clients have to give.
   */
@@ -256,7 +256,85 @@ private[kyo] object MorphScript:
           |  }
           |  while(curFrom&&curFrom!==fromEnd){var fn=__kyoLogicalNext(curFrom);__kyoRemoveLogical(parent,curFrom);curFrom=fn;}
           |}
-          |return {run:__kyoMorphRun,adoptSlots:__kyoAdoptSlots,spanId:__kyoSpanId};
+          |// The elements of a set of logical children, each span contributing the elements it brackets.
+          |function __kyoLogicalElements(nodes){
+          |  var out=[];
+          |  for(var i=0;i<nodes.length;i++)__kyoEachSpanNode(nodes[i],function(n){if(n.nodeType===1)out.push(n);});
+          |  return out;
+          |}
+          |// Reconcile a list region against a row order rather than a rendered document: the payload holds only the rows that changed, every other
+          |// row is named by key and stays where it is. The walk is the same two-ended keyed pass __kyoMorphRun uses, with the order standing in for
+          |// the to side. target holds parent, start, end and the parsed fragment; scope retires ranges and reads the ones placed; keys are the rows'
+          |// full keys in their new order; changed says which of them the fragment repaints, or is null where the fragment alone says so. Answers
+          |// false, having changed nothing, when the rows are not individually addressable: a row painting as several roots or as none has no single
+          |// key naming its DOM, and a live range that disagrees about which rows are on screen cannot be matched either.
+          |function __kyoApplyListTo(target,scope,keys,changed){
+          |  var parent=target.parent,fragment=target.fragment,i;
+          |  var hasOwn=Object.prototype.hasOwnProperty;
+          |  var parsedKeyed={},parsedCount=0,parsedSize=0,parsed=fragment?fragment.firstChild:null;
+          |  while(parsed){var pk=__kyoLogicalKey(parsed);if(pk!==null){if(!hasOwn.call(parsedKeyed,pk))parsedSize++;parsedKeyed[pk]=parsed;}parsedCount++;parsed=__kyoLogicalNext(parsed);}
+          |  var fromNodes=[],fromKeys=[];
+          |  __kyoCollectLogical(target.start.nextSibling,target.end,fromNodes,fromKeys);
+          |  var fromKeyed={};
+          |  for(i=0;i<fromKeys.length;i++)if(fromKeys[i]!==null)fromKeyed[fromKeys[i]]=fromNodes[i];
+          |  var toKeys=keys,toNodes=[],targetKeys={},addressable=true;
+          |  if(changed){var changedCount=0;for(i=0;i<changed.length;i++)if(changed[i])changedCount++;addressable=parsedCount===changedCount&&parsedSize===changedCount;}
+          |  for(i=0;addressable&&i<keys.length;i++){
+          |    var key=keys[i],rendered=hasOwn.call(parsedKeyed,key)?parsedKeyed[key]:null,node=(!changed||changed[i])?rendered:null;
+          |    addressable=changed?(changed[i]?node!==null:hasOwn.call(fromKeyed,key)):(node!==null||hasOwn.call(fromKeyed,key));
+          |    targetKeys[key]=true;toNodes.push(node);
+          |  }
+          |  if(!addressable)return false;
+          |  var disturbed=[],repainted=[];
+          |  for(i=0;i<fromKeys.length;i++){
+          |    var fk=fromKeys[i];
+          |    if(fk===null||!hasOwn.call(targetKeys,fk))disturbed.push(fromNodes[i]);
+          |  }
+          |  for(i=0;i<toKeys.length;i++)if(toNodes[i]&&hasOwn.call(fromKeyed,toKeys[i])){var lv=fromKeyed[toKeys[i]];repainted.push(lv);disturbed.push(lv);}
+          |  // Told before anything moves: the morph may drop markers, and a dropped marker's id is unreadable afterwards.
+          |  for(i=0;i<disturbed.length;i++)scope.retire(disturbed[i]);
+          |  var state=h.listBefore(target,__kyoLogicalElements(disturbed),__kyoLogicalElements(repainted));
+          |  var touched=[];
+          |  // Patches a row in place or replaces it, and answers the node that now starts it.
+          |  function place(from,ti){var to=toNodes[ti];if(!to)return from;
+          |    var before=from.previousSibling,until=__kyoLogicalNext(from),at=__kyoPatchLogical(parent,from,to);
+          |    scope.placed(before?before.nextSibling:parent.firstChild,until);
+          |    if(at!==from){var els=__kyoLogicalElements([at]);for(var q=0;q<els.length;q++)touched.push(els[q]);}
+          |    else if(from.nodeType===1)touched.push(from);
+          |    return at;}
+          |  var head=0,tail=fromNodes.length-1,toHead=0,toTail=toKeys.length-1,tailBoundary=target.end,scanning=true;
+          |  while(scanning&&head<=tail&&toHead<=toTail){
+          |    if(fromKeys[head]===null||fromKeys[tail]===null)scanning=false;
+          |    else if(fromKeys[head]===toKeys[toHead]){place(fromNodes[head],toHead);head++;toHead++;}
+          |    else if(fromKeys[tail]===toKeys[toTail]){tailBoundary=place(fromNodes[tail],toTail);tail--;toTail--;}
+          |    else if(fromKeys[head]===toKeys[toTail]){
+          |      if(head!==tail)__kyoMoveLogicalBefore(parent,fromNodes[head],tailBoundary);
+          |      tailBoundary=place(fromNodes[head],toTail);head++;toTail--;}
+          |    else if(fromKeys[tail]===toKeys[toHead]){
+          |      if(tail!==head)__kyoMoveLogicalBefore(parent,fromNodes[tail],fromNodes[head]);
+          |      place(fromNodes[tail],toHead);tail--;toHead++;}
+          |    else scanning=false;
+          |  }
+          |  var cursor=head<=tail?fromNodes[head]:tailBoundary;
+          |  for(i=toHead;i<=toTail;i++){
+          |    var rk=toKeys[i],live2=hasOwn.call(fromKeyed,rk)?fromKeyed[rk]:null;
+          |    if(live2){if(live2!==cursor)__kyoMoveLogicalBefore(parent,live2,cursor);else cursor=__kyoLogicalNext(cursor);
+          |      place(live2,i);}
+          |    else if(toNodes[i]){
+          |      var prior=cursor.previousSibling;
+          |      var ins=__kyoLogicalElements([__kyoInsertLogicalClone(parent,toNodes[i],cursor)]);for(var q=0;q<ins.length;q++)touched.push(ins[q]);
+          |      scope.placed(prior?prior.nextSibling:parent.firstChild,cursor);}
+          |  }
+          |  for(i=0;i<fromKeys.length;i++){
+          |    var lk=fromKeys[i];
+          |    if((lk===null||!hasOwn.call(targetKeys,lk))&&document.contains(fromNodes[i]))
+          |      __kyoRemoveLogical(parent,fromNodes[i]);
+          |  }
+          |  if(scope.finish)scope.finish();
+          |  h.listAfter(state,target,touched);
+          |  return true;
+          |}
+          |return {run:__kyoMorphRun,adoptSlots:__kyoAdoptSlots,applyList:__kyoApplyListTo,spanId:__kyoSpanId,logicalNext:__kyoLogicalNext,eachSpanNode:__kyoEachSpanNode};
 """.stripMargin
 
 end MorphScript

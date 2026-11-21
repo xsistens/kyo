@@ -261,21 +261,20 @@ private[kyo] object ReactiveUI:
                                     // the paint reuse already makes. A seeded row has no cached handler
                                     // yet; its cached rowUI is walked on demand (one row, not the list).
                                     if targetPath.size > path.size then
-                                        registry.snapshot.map { live =>
-                                            live.find(_.key == targetPath(path.size)) match
-                                                case Some(inst) =>
-                                                    inst.handler match
-                                                        case Present(h) => h(targetPath, event)
-                                                        case Absent     =>
-                                                            walkRow(
-                                                                inst.rowUI,
-                                                                path :+ inst.key,
-                                                                svg,
-                                                                contentContext.child(inst.key),
-                                                                nestedParentContext(parentContext, inst.rowUI),
-                                                                cells
-                                                            ).map(_._2(targetPath, event))
-                                                case None => fullWalk(targetPath, event)
+                                        registry.find(targetPath(path.size)).map {
+                                            case Present(inst) =>
+                                                inst.handler match
+                                                    case Present(h) => h(targetPath, event)
+                                                    case Absent     =>
+                                                        walkRow(
+                                                            inst.rowUI,
+                                                            path :+ inst.key,
+                                                            svg,
+                                                            contentContext.child(inst.key),
+                                                            nestedParentContext(parentContext, inst.rowUI),
+                                                            cells
+                                                        ).map(_._2(targetPath, event))
+                                            case Absent => fullWalk(targetPath, event)
                                         }
                                     else fullWalk(targetPath, event)
                             }.copy(

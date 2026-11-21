@@ -1,7 +1,11 @@
 package kyo
 
+import kyo.UI.foreachKeyed
 import kyo.internal.DomBackend
+import kyo.internal.DomReactiveRegions
 import kyo.internal.HtmlRenderer
+import kyo.internal.ListRow
+import kyo.internal.ReactiveRegion
 import org.scalajs.dom
 import scala.scalajs.js as scalajs
 
@@ -41,6 +45,18 @@ class DomBackendMorphParityTest extends kyo.test.Test[Any]:
           |function __kyoPortalTwin(p){return document.querySelector('body > '+__kyoPathSel(p)+'[data-kyo-portal]');}
           |function __kyoAdoptPortals(){}
           |function __kyoRetireOrphanTwins(){}
+          |function __kyoRangeIdPath(id){
+          |  if(!id||id.charAt(0)!=="r")return null;
+          |  var end=id.indexOf("n",1);if(end<0)end=id.length;
+          |  var i=1,segs=[];
+          |  while(i<end){
+          |    if(i+8>end)return null;
+          |    var len=parseInt(id.substring(i,i+8),16);i+=8;
+          |    var s="";
+          |    for(var k=0;k<len;k++){if(i+4>end)return null;s+=String.fromCharCode(parseInt(id.substring(i,i+4),16));i+=4;}
+          |    segs.push(s);
+          |  }
+          |  return segs.join(".");}
           |function __kyoSyncField(el,name,value){
           |  if(name==="value"&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&el.value!==value)el.value=value;
           |  else if(name==="value"&&el.tagName==="SELECT"&&el.value!==value)el.value=value;}
@@ -240,26 +256,114 @@ class DomBackendMorphParityTest extends kyo.test.Test[Any]:
             discard(body.appendChild(twin))
     )(o => o.retained.contains("twin") && o.html.contains(">b</span>") && o.html.contains("data-kyo-portal-slot"))
 
-    "a repaint of a mounted page goes through the script" in {
+    // ---- list patch ----
+
+    /** Live rows under the range of path `0`, each `<li>` at path `0.<key>`, and rows `(key, html)` to bring: empty html for one kept as it is. */
+    private def rowHtml(key: String, text: String): String = s"""<li id="$key" data-kyo-path="0.$key">$text</li>"""
+
+    private val listId    = ReactiveRegion.htmlId(Seq("0"))
+    private val rowId     = ReactiveRegion.htmlId(Seq("0", "a", "0"))
+    private val listStart = s"<!--kyo-rs:$listId-->"
+    private val listEnd   = s"<!--kyo-re:$listId-->"
+
+    private def listThroughScala(live: String, rows: Seq[(String, String)], prepare: Prepare)(using Frame): Outcome < (Sync & Scope) =
+        Sync.defer(setUp(live, prepare)).andThen(DomReactiveRegions.init(host)).map { regions =>
+            val changed = rows.map(_._2).mkString
+            regions.withRegionFragment(listId, changed) { (target, scope) =>
+                DomBackend.listPatch(target, scope, Seq("0"), rows.map((k, h) => ListRow(k, UI.empty, h.nonEmpty)))
+            }.andThen(regions.entries).map(entries => outcome(entries.keySet.toSet))
+        }
+
+    private def listThroughScript(live: String, rows: Seq[(String, String)], prepare: Prepare): Outcome =
+        setUp(live, prepare)
+        discard(scalajs.Dynamic.global.eval(hooks + "\n" + HtmlRenderer.reactiveRangesJs))
+        discard(scalajs.Dynamic.global.__kyoApplyList(listId, scalajs.Array(rows.map(_._1)*), rows.map(_._2).mkString))
+        val ids = scalajs.Dynamic.global.eval("Array.from(__kyoRanges.keys())").asInstanceOf[scalajs.Array[String]]
+        outcome(ids.toSet)
+    end listThroughScript
+
+    private def list(
+        name: String,
+        live: String,
+        rows: Seq[(String, String)],
+        prepare: Prepare = _ => ()
+    )(expect: Outcome => Boolean): Unit =
+        name in {
+            Scope.run(listThroughScala(live, rows, prepare)).map { viaScala =>
+                val viaScript = listThroughScript(live, rows, prepare)
+                assert(viaScala == viaScript, s"the clients disagree:\nScala:  $viaScala\nscript: $viaScript")
+                assert(expect(viaScala), s"not the stated answer: $viaScala")
+            }
+        }
+
+    private val threeRows = listStart + rowHtml("a", "a") + rowHtml("b", "b") + rowHtml("c", "c") + listEnd
+
+    list("a pure reorder repaints nothing and keeps every row", threeRows, Seq("c" -> "", "a" -> "", "b" -> ""))(o =>
+        o.retained == Set("host", "a", "b", "c") && o.html.indexOf("""id="c"""") < o.html.indexOf("""id="a"""")
+    )
+    list("one changed row takes its new content in place", threeRows, Seq("a" -> "", "b" -> rowHtml("b", "B"), "c" -> ""))(o =>
+        o.retained == Set("host", "a", "b", "c") && o.html.contains(">B</li>")
+    )
+    list("a removal leaves the rest", threeRows, Seq("a" -> "", "c" -> ""))(o =>
+        o.retained == Set("host", "a", "c") && !o.html.contains("""id="b"""")
+    )
+    list("a new row lands in its place", threeRows, Seq("a" -> "", "n" -> rowHtml("n", "n"), "b" -> "", "c" -> ""))(o =>
+        o.html.indexOf("""id="a"""") < o.html.indexOf("""id="n"""") && o.html.indexOf("""id="n"""") < o.html.indexOf("""id="b"""")
+    )
+    list(
+        "a row holding a nested range keeps the registry true",
+        listStart + s"""<li id="a" data-kyo-path="0.a"><!--kyo-rs:$rowId--><span id="s">x</span><!--kyo-re:$rowId--></li>""" +
+            rowHtml("b", "b") + listEnd,
+        Seq(
+            "b" -> "",
+            "a" -> s"""<li id="a" data-kyo-path="0.a"><!--kyo-rs:$rowId--><span id="s">y</span><!--kyo-re:$rowId--></li>"""
+        )
+    )(o => o.ranges == Set(listId, rowId) && o.html.contains(">y</span>") && o.retained.contains("s"))
+    list(
+        "a reorder keeps focus and caret in a row",
+        listStart + """<li id="a" data-kyo-path="0.a"><input id="f" data-kyo-path="0.a.0" value="abc"></li>""" + rowHtml("b", "b") +
+            listEnd,
+        Seq("b" -> "", "a" -> ""),
+        _ => discard(el("f").focus())
+    )(o => o.active == "f" && o.retained.contains("f"))
+
+    "a repaint and a list patch of a mounted page go through the script" in {
         val script = DomBackend.morphScript
         val run    = script.run
+        val apply  = script.applyList
         var runs   = 0
+        var lists  = 0
         script.run = scalajs.Any.fromFunction5((a: scalajs.Any, b: scalajs.Any, c: scalajs.Any, d: scalajs.Any, e: scalajs.Any) =>
             runs += 1
             run(a, b, c, d, e)
         )
+        script.applyList = scalajs.Any.fromFunction4((a: scalajs.Any, b: scalajs.Any, c: scalajs.Any, d: scalajs.Any) =>
+            lists += 1
+            apply(a, b, c, d)
+        )
         val ready = new DomTestEnv.MountReady
         for
             tick <- Signal.initRef(0)
-            ui = UI.div(UI.div.id("sp-tick")(tick.map(n => UI.span(s"t:$n"): UI)))
+            rows <- Signal.initRef(Chunk("a", "b"))
+            ui = UI.div(
+                UI.div.id("sp-tick")(tick.map(n => UI.span(s"t:$n"): UI)),
+                UI.ul(rows.foreachKeyed(identity)(k => UI.li(k).id(s"sp-$k"))).id("sp-list")
+            )
             fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
             _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("sp-tick") != null))
             _     <- tick.set(1)
             _     <- assertEventually(Sync.defer(dom.document.getElementById("sp-tick").textContent == "t:1"))
+            _     <- rows.set(Chunk("b", "a"))
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("sp-list").textContent == "ba"))
             _     <- fiber.interrupt
             _     <- fiber.getResult
-            _     <- Sync.defer(script.run = run)
-        yield assert(runs >= 1, "the repaint did not go through the script")
+            _     <- Sync.defer {
+                script.run = run
+                script.applyList = apply
+            }
+        yield
+            assert(runs >= 1, "the repaint did not go through the script")
+            assert(lists >= 1, "the list patch did not go through the script")
         end for
     }
 
