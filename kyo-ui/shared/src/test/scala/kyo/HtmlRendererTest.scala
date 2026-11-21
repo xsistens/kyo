@@ -936,13 +936,15 @@ class HtmlRendererTest extends UITest:
             _.focusAuto(false),
             _.focusRestore(false),
             _.focusTrap(false),
-            _.stopPropagation(false)
+            _.stopPropagation(false),
+            _.portal(false)
         )
         val takenBack: Seq[SpanElement => SpanElement] = Seq(
             _.focusAuto(true).focusAuto(false),
             _.focusRestore(true).focusRestore(false),
             _.focusTrap(true).focusTrap(false),
-            _.stopPropagation(true).stopPropagation(false)
+            _.stopPropagation(true).stopPropagation(false),
+            _.portal(true).portal(false)
         )
         val plain = UI.span("a")
         for
@@ -951,10 +953,12 @@ class HtmlRendererTest extends UITest:
         yield
             val attrs = (off ++ takenBack).map(f => f(plain).attrs)
             assert(
-                attrs.forall(a => a.focusAuto.isEmpty && a.focusRestore.isEmpty && a.focusTrap.isEmpty && a.stopPropagation.isEmpty),
+                attrs.forall(a =>
+                    a.focusAuto.isEmpty && a.focusRestore.isEmpty && a.focusTrap.isEmpty && a.stopPropagation.isEmpty && a.portal.isEmpty
+                ),
                 s"$attrs"
             )
-            val markers = Seq("data-kyo-focus-auto", "data-kyo-focus-restore", "data-kyo-focus-trap")
+            val markers = Seq("data-kyo-focus-auto", "data-kyo-focus-restore", "data-kyo-focus-trap", "data-kyo-portal")
             assert(!markers.exists(m => offHtml.contains(m) || backHtml.contains(m)), s"$offHtml | $backHtml")
         end for
     }

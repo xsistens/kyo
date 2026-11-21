@@ -36,6 +36,10 @@ class DomBackendMorphParityTest extends kyo.test.Test[Any]:
           |function ba(){}
           |function kyoSpawnGhosts(){}
           |function sweepFocusAuto(){}
+          |function __kyoPathSel(p){return '[data-kyo-path="'+p+'"]';}
+          |function __kyoPortalTwin(p){return document.querySelector('body > '+__kyoPathSel(p)+'[data-kyo-portal]');}
+          |function __kyoAdoptPortals(){}
+          |function __kyoRetireOrphanTwins(){}
           |function __kyoSyncField(el,name,value){
           |  if(name==="value"&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&el.value!==value)el.value=value;
           |  else if(name==="value"&&el.tagName==="SELECT"&&el.value!==value)el.value=value;}
@@ -222,6 +226,18 @@ class DomBackendMorphParityTest extends kyo.test.Test[Any]:
         o.html.contains("<p ") && !o.retained.contains("n")
     )
     morph("text takes the new text and stays one node", "a<b id=\"n\">x</b>", "b<b id=\"n\">x</b>")(_.html.contains("b<b"))
+    morph(
+        "a portal pair reconciles the twin under body and leaves the slot where it is",
+        """<div data-kyo-portal-slot="0.p"></div>""",
+        """<div id="twin" data-kyo-path="0.p" data-kyo-portal="true"><span id="tc">b</span></div>""",
+        body =>
+            val twin = dom.document.createElement("div")
+            twin.setAttribute("id", "twin")
+            twin.setAttribute("data-kyo-path", "0.p")
+            twin.setAttribute("data-kyo-portal", "true")
+            twin.innerHTML = """<span id="tc">a</span>"""
+            discard(body.appendChild(twin))
+    )(o => o.retained.contains("twin") && o.html.contains(">b</span>") && o.html.contains("data-kyo-portal-slot"))
 
     "a repaint of a mounted page goes through the script" in {
         val script = DomBackend.morphScript

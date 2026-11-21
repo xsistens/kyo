@@ -44,15 +44,19 @@ class UIAttachedTest extends kyo.test.Test[Any]:
         clicks.get.map(before => click("barrier").andThen(assertEventually(clicks.get.map(_ > before))))
 
     private def mount(ui: UI)(using Frame, kyo.test.AssertScope): DomTestEnv.MountReady < (Async & Scope) =
+        mountWith(ui, Absent)
+
+    /** Mounts into `#<container>`, a child of the body, where one is given: an application's mount, whose container is not the body. */
+    private def mountWith(ui: UI, container: Maybe[String])(using Frame, kyo.test.AssertScope): DomTestEnv.MountReady < (Async & Scope) =
         val ready = new DomTestEnv.MountReady
         for
-            _     <- Sync.defer(dom.document.body.innerHTML = "")
-            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- Sync.defer(dom.document.body.innerHTML = container.fold("")(id => s"""<div id="$id"></div>"""))
+            fiber <- Fiber.initUnscoped(Scope.run(container.fold(DomBackend.mount(ui, ready))(id => DomBackend.mount(ui, s"#$id", ready))))
             _     <- Scope.ensure(fiber.interrupt.andThen(fiber.getResult).unit)
             _     <- assertEventually(Sync.defer(ready.installed))
         yield ready
         end for
-    end mount
+    end mountWith
 
     "the hook gets its element, in the document, on the first paint" in {
         val log = recorder()
@@ -84,6 +88,27 @@ class UIAttachedTest extends kyo.test.Test[Any]:
             yield
                 assert(before.isEmpty, s"the hook started while the content was held back: $before")
                 assert(log.toSeq == Seq("start:held:true"), log.mkString(", "))
+        }
+    }
+
+    "inside a portal under the body, an element a later patch brings starts its hook" in {
+        // A portal leaves the mount's container for document.body, so a sweep over the container alone never meets what a patch
+        // brings into it afterwards. The mount has a container of its own: on one into the body itself, the body holds the portal.
+        val log = recorder()
+        Scope.run {
+            for
+                clicks <- AtomicInt.init
+                page   <- Signal.initRef("a")
+                ui = UI.div(barrier(clicks), UI.div(page.render(p => tracked(s"ported-$p", log))).id("portal-host").portal(true))
+                _      <- mountWith(ui, Present("app"))
+                _      <- assertEventually(Sync.defer(log.contains("start:ported-a:true")))
+                parent <- Sync.defer(dom.document.getElementById("portal-host").parentNode eq dom.document.body)
+                _      <- page.set("b")
+                _      <- assertEventually(Sync.defer(log.contains("start:ported-b:true")))
+                _      <- drained(clicks)
+            yield
+                assert(parent, "the portal was not moved to the body, so this does not test a portaled element")
+                assert(log.toSeq == Seq("start:ported-a:true", "release:ported-a", "start:ported-b:true"), log.mkString(", "))
         }
     }
 

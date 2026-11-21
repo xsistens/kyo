@@ -5,8 +5,8 @@ package kyo.internal
   * A morph is a walk over the DOM with its decisions in the walk, so it cannot be data, and no translation from Scala to JavaScript exists in
   * this build. The text is the single source: the body of a factory over `h`, the client's hooks, which answers what a
   * client calls. The server-push page installs it in its script; the browser mount builds it with `Function`. What differs between the
-  * clients is only behind `h`: how a field's property is written, how an animation starts and whether an element's content can be an
-  * attach hook's. The hooks are written where their client lives, in [[HtmlRenderer]] and `DomBackend`.
+  * clients is only behind `h`: how a field's property is written, where a portal's twin is, how an animation starts and whether an
+  * element's content can be an attach hook's. The hooks are written where their client lives, in [[HtmlRenderer]] and `DomBackend`.
   *
   * `DomBackendMorphParityTest` holds a table of cases to the answers both clients have to give.
   */
@@ -81,6 +81,17 @@ private[kyo] object MorphScript:
           |// Reconcile the live sibling run of `parent` from `fromStart` up to (not including) `fromEnd`, null meaning
           |// the end of the parent, toward the run starting at `toStart` inside a detached fragment. Positional, pair
           |// by pair: what did not move keeps its identity; reordering a keyed list is the two-ended pass's business.
+          |// A portal element does not live in the range: the first sweep moved it under <body> and left an inert slot
+          |// behind. The payload still carries it inline, so reconcile the twin where it actually lives and step over
+          |// the live slot. Re-inserting it here would hand __kyoAdoptPortals a second copy, which retires the twin and
+          |// takes everything hanging off it along.
+          |function __kyoMorphPortalPair(from,to){
+          |  if(from.nodeType!==1||to.nodeType!==1)return false;
+          |  var p=to.getAttribute("data-kyo-path");
+          |  if(p===null||!to.hasAttribute("data-kyo-portal")||from.getAttribute("data-kyo-portal-slot")!==p)return false;
+          |  var twin=h.portalTwin(p);if(!twin)return false;
+          |  __kyoMorphNode(twin,to);return true;
+          |}
           |// ---- logical children ----
           |// A nested range is opened and closed by comments that are siblings of its content, so to a naive sibling
           |// walk it looks like several unrelated children. It is one: the markers carry the identity the registry is
@@ -150,6 +161,7 @@ private[kyo] object MorphScript:
           |    __kyoMorphRun(parent,fromNode.nextSibling,fclose,toNode.nextSibling,tclose);
           |    if(slot){var k=__kyoFlagKey(tf);fromNode.data="kyo-rs:"+fid+(k===null?" m":" m k="+k);}
           |    return fromNode;}
+          |  if(!fclose&&!tclose&&__kyoMorphPortalPair(fromNode,toNode))return fromNode;
           |  if(!fclose&&!tclose&&__kyoMorphCompatible(fromNode,toNode)){__kyoMorphNode(fromNode,toNode);return fromNode;}
           |  var first=__kyoInsertLogicalClone(parent,toNode,fromNode);
           |  __kyoRemoveLogical(parent,fromNode);
@@ -180,8 +192,9 @@ private[kyo] object MorphScript:
           |  var scan=start;
           |  while(scan&&scan!==end){nodes.push(scan);keys.push(__kyoLogicalKey(scan));scan=__kyoLogicalNext(scan);}
           |}
+          |// A portal slot carries no path of its own and is keyed by the path of the element it stands in for.
           |function __kyoLogicalKey(node){
-          |  if(node.nodeType===1)return node.getAttribute("data-kyo-path");
+          |  if(node.nodeType===1){var p=node.getAttribute("data-kyo-path");return p!==null?p:node.getAttribute("data-kyo-portal-slot");}
           |  var id=__kyoSpanId(node);
           |  return (id!==null&&__kyoSpanClose(node,id))?id:null;
           |}
@@ -219,8 +232,7 @@ private[kyo] object MorphScript:
           |function __kyoMorphCursor(parent,fromStart,fromEnd,toStart,toEnd,fromKeyed,toKeyed){
           |  var curFrom=fromStart,curTo=toStart;
           |  while(curTo&&curTo!==toEnd){
-          |    var toNext=__kyoLogicalNext(curTo);
-          |    var toKey=__kyoLogicalKey(curTo);
+          |    var toNext=__kyoLogicalNext(curTo),toKey=__kyoLogicalKey(curTo);
           |    if(toKey!==null){
           |      var m=fromKeyed?fromKeyed[toKey]:undefined;
           |      if(m){if(m!==curFrom)__kyoMoveLogicalBefore(parent,m,curFrom);else curFrom=__kyoLogicalNext(curFrom);
