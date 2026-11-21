@@ -3,16 +3,19 @@ package kyo.internal
 import kyo.*
 import org.scalajs.dom
 import scala.collection.mutable
-import scala.scalajs.js
 
 /** Mount-scoped registry of live HTML reactive range anchors. */
 final private[kyo] class DomReactiveRegions private (
     private val document: dom.Document,
+    private val root: dom.Node,
     private val ranges: mutable.HashMap[String, DomReactiveRegions.Endpoints],
     private val inserted: mutable.HashMap[String, String]
 ):
 
     private var open = true
+
+    /** How many registry entries the replacements so far looked at to find the ranges they remove. */
+    private var examinedEntries = 0L
 
     def replace(regionId: String, html: String)(using Frame): Unit < Sync =
         replaceWith(regionId, html, keepCurrent = false)(_ => false)((_, _) => ())((_, _, _) => ())
@@ -118,20 +121,19 @@ final private[kyo] class DomReactiveRegions private (
     )(using Frame, AllowUnsafe): Unit =
         val incoming = DomReactiveRegions.scan(document, fragment)
         // Gone from the registry's point of view: inside the range about to be patched, or stranded in a tree
-        // this one no longer shares. The second case is a portal twin the sweep retired: its markers went with
-        // it into a detached subtree, and the sweep moves DOM without walking the registry, so the entry
-        // outlives the nodes it names. A dead entry is not a duplicate of the region coming back; it is the same
-        // region's corpse, and keeping it would refuse the live one.
+        // this one no longer shares. Every change that takes registered markers out of the document outside a
+        // range patch drops their entries as it does it (a retired portal twin through forgetRangesUnder, a
+        // rewritten twin or SVG region through rewrite), so a stranded entry is not expected; the test stays as the
+        // net for one that slipped through. A dead entry is not a duplicate of the region coming back; it is the
+        // same region's corpse, and keeping it would refuse the live one.
         //
         // The test is "same tree", not "in the document": a whole mount can legitimately be patched while it is
         // still detached, and a live portal twin under `<body>` shares the document with the range being
-        // patched, so both stay.
-        val liveRoot = treeRoot(endpoints.start)
-        val removed  = ranges.iterator.collect {
-            case (id, nested)
-                if id != regionId && (intersects(range, nested.start) || !(treeRoot(nested.start) eq liveRoot)) =>
-                id
-        }.toSet
+        // patched, so both stay. It is asked only of the ids the payload brings back, since only those can be
+        // refused, so a patch pays for its own range and its own payload, never for the rest of the registry.
+        val inside        = nestedIn(endpoints)
+        lazy val liveRoot = treeRoot(endpoints.start)
+        val stranded      = Set.newBuilder[String]
 
         // A region registered inside a portal twin is not a second copy of itself: the payload carries the portal
         // element inline (the twin's inline original), and this patch either morphs the twin in place (markers,
@@ -140,9 +142,13 @@ final private[kyo] class DomReactiveRegions private (
         // nothing inside the live range re-registers it, so dropping it would leave the next write to that region
         // with an unknown id.
         incoming.keysIterator.foreach { id =>
-            if ranges.contains(id) && !removed.contains(id) && !inPortalTwin(ranges(id).start) then
-                fail(s"Duplicate reactive range id: $id")
+            ranges.get(id).foreach { live =>
+                if !inside.contains(id) then
+                    if !(treeRoot(live.start) eq liveRoot) then stranded += id
+                    else if !inPortalTwin(live.start) then fail(s"Duplicate reactive range id: $id")
+            }
         }
+        val removed = inside ++ stranded.result()
 
         val oldElements                                        = elementsBetween(endpoints)
         val newElements                                        = incomingContent.semanticRoots
@@ -318,13 +324,57 @@ final private[kyo] class DomReactiveRegions private (
     private[kyo] def entries(using Frame): Map[String, DomReactiveRegions.Endpoints] < Sync =
         Sync.defer(ranges.iterator.toMap)
 
+    /** How many registry entries the replacements so far looked at to find the ranges they remove. */
+    private[kyo] def examined(using Frame): Long < Sync =
+        Sync.defer(examinedEntries)
+
     private[kyo] def contains(regionId: String)(using Frame): Boolean < Sync =
         Sync.defer(ranges.contains(regionId))
+
+    /** Runs `change`, which replaces or reconciles `subtree` outside any range patch, and brings the registry in line
+      * with what stands afterwards: the ranges registered under `subtree` are retired before it runs (a change may drop
+      * markers, and a dropped marker's id is unreadable afterwards), and the ranges under the node `change` answers
+      * are read off the DOM after it. A portal twin reconciled by the morph of the range around its slot, and an SVG
+      * region whose element is replaced, are such rewrites: neither lies between the anchors of a range, so no range
+      * patch accounts for the markers they drop and bring.
+      */
+    private[kyo] def rewrite[N <: dom.Node](subtree: dom.Node)(change: => Maybe[N])(using Frame): Maybe[N] =
+        if !open then change
+        else
+            val before = registeredUnder(subtree)
+            val after  = change
+            val live   =
+                after.map(DomReactiveRegions.scan(document, _)).getOrElse(mutable.HashMap.empty[String, DomReactiveRegions.Endpoints])
+            adoptLive(before, live, live.iterator.map((id, endpoints) => id -> serializeBetween(endpoints)).toSeq)
+            after
+    end rewrite
+
+    /** Drops the ranges registered under `node`, which is about to leave the document. */
+    private def forgetUnder(node: dom.Node): Unit =
+        if open then
+            registeredUnder(node).foreach { id =>
+                discard(ranges.remove(id))
+                discard(inserted.remove(id))
+            }
+
+    /** The ids of the registered ranges whose opening marker is `node` or lies under it. */
+    private def registeredUnder(node: dom.Node): Set[String] =
+        val found                        = Set.newBuilder[String]
+        def take(marker: dom.Node): Unit =
+            DomReactiveRegions.startMarkerId(marker).foreach { id =>
+                if ranges.get(id).exists(_.start eq marker) then found += id
+            }
+        take(node)
+        val walker = DomReactiveRegions.commentWalker(document, node)
+        while walker.nextNode() != null do take(walker.currentNode)
+        found.result()
+    end registeredUnder
 
     private[kyo] def close(using Frame): Unit < Sync =
         Sync.defer {
             if open then
                 open = false
+                DomReactiveRegions.opened -= this
                 ranges.clear()
                 inserted.clear()
         }
@@ -417,8 +467,29 @@ final private[kyo] class DomReactiveRegions private (
     private def fail(message: String)(using Frame): Nothing =
         throw UIException(message)
 
-    private def intersects(range: dom.Range, node: dom.Node): Boolean =
-        range.asInstanceOf[js.Dynamic].intersectsNode(node).asInstanceOf[Boolean]
+    /** The ids of the registered ranges inside the range `endpoints` delimits, nested at any depth.
+      *
+      * Ranges nest properly, so a range lies inside exactly when its opening marker does, and the opening markers
+      * inside are the comments between the two anchors in document order. Reading them off the DOM costs the size
+      * of the range rather than the size of the registry: a row patch in a list of a thousand rows no longer looks
+      * at every other row's entries. An id counts only when the registry's entry for it opens at the very marker
+      * found, so a marker the registry does not name (a portal twin's inline original, a stale copy) is not taken
+      * for the range it names, and a region registered inside a portal twin under `<body>` stays out.
+      */
+    private def nestedIn(endpoints: DomReactiveRegions.Endpoints): Set[String] =
+        val found  = Set.newBuilder[String]
+        val walker = DomReactiveRegions.commentWalker(document, endpoints.start.parentNode)
+        walker.currentNode = endpoints.start
+        var node = walker.nextNode()
+        while node != null && (node ne endpoints.end) do
+            DomReactiveRegions.startMarkerId(node).foreach { id =>
+                examinedEntries += 1
+                if ranges.get(id).exists(_.start eq node) then found += id
+            }
+            node = walker.nextNode()
+        end while
+        found.result()
+    end nestedIn
 
     /** The topmost node above this one: the Document for anything attached, the detached subtree's own root
       * otherwise. Two nodes share a tree exactly when this returns the same node for both.
@@ -634,12 +705,41 @@ private[kyo] object DomReactiveRegions:
             case Synthetic(_, roots) => roots
     end IncomingContent
 
+    /** The registries of the mounts open right now. A portal twin lives under `<body>`, outside the mount whose region
+      * put it there, so a rewrite of one is matched to its registry by the slot it stands in for. JavaScript runs one
+      * thread, and every change happens inside a mount's init or close.
+      */
+    private val opened = mutable.ArrayBuffer.empty[DomReactiveRegions]
+
+    /** Whether `registry` is among the open ones. For tests. */
+    private[kyo] def isOpen(registry: DomReactiveRegions): Boolean = opened.exists(_ eq registry)
+
+    /** Runs `change` over `subtree` and keeps the registry of the mount holding `owner` true to what it leaves (see
+      * [[DomReactiveRegions.rewrite]]). Without an open registry holding `owner` it only runs `change`.
+      *
+      * The newest registry that holds it: a mount writes its container's whole content, so what stands there is the last one's. An older
+      * registry over the same container can still be open, since a mount's result comes before the last finalizers of its scope.
+      */
+    private[kyo] def rewriting[N <: dom.Node](owner: dom.Node, subtree: dom.Node)(change: => Maybe[N])(using Frame): Maybe[N] =
+        opened.findLast(registry => registry.root.contains(owner)) match
+            case Some(registry) => registry.rewrite(subtree)(change)
+            case None           => change
+
+    /** Drops, from every open registry, the ranges whose opening marker is `node` or lies under it, for a node about to
+      * leave the document outside any range patch: a portal twin the sweep retires. Each registry keeps only entries
+      * whose markers stand in its mount's tree, so nothing has to find and drop a dead entry later. Only an entry whose
+      * opening marker IS the node found goes, so a marker the registry does not name leaves its id's entry alone.
+      */
+    private[kyo] def forgetRangesUnder(node: dom.Node): Unit =
+        opened.foreach(_.forgetUnder(node))
+
     def init(root: dom.Element)(using Frame): DomReactiveRegions < (Sync & Scope) =
         for
             registry <- Sync.defer {
                 val document = ownerDocument(root)
-                val registry = new DomReactiveRegions(document, scan(document, root), mutable.HashMap.empty)
+                val registry = new DomReactiveRegions(document, root, scan(document, root), mutable.HashMap.empty)
                 registry.recordInserted()
+                opened += registry
                 registry
             }
             _ <- Scope.ensure(registry.close)

@@ -5,7 +5,8 @@ package kyo.internal
   * A morph is a walk over the DOM with its decisions in the walk, so it cannot be data, and no translation from Scala to JavaScript exists in
   * this build. The text is the single source: the body of a factory over `h`, the client's hooks, which answers what a
   * client calls. The server-push page installs it in its script; the browser mount builds it with `Function`. What differs between the
-  * clients is only behind `h`: how a field's property is written, where a portal's twin is, how an animation starts, whether an element's
+  * clients is only behind `h`: how a field's property is written, where a portal's twin is, how a rewrite tells the registry, how an
+  * animation starts, whether an element's
   * content can be an attach hook's, and what a list patch reads before it moves anything and does after. The hooks are written where their client lives, in [[HtmlRenderer]] and `DomBackend`.
   *
   * `DomBackendMorphParityTest` holds a table of cases to the answers both clients have to give.
@@ -90,7 +91,8 @@ private[kyo] object MorphScript:
           |  var p=to.getAttribute("data-kyo-path");
           |  if(p===null||!to.hasAttribute("data-kyo-portal")||from.getAttribute("data-kyo-portal-slot")!==p)return false;
           |  var twin=h.portalTwin(p);if(!twin)return false;
-          |  __kyoMorphNode(twin,to);return true;
+          |  // The twin sits outside the range being patched, so the registry follows its reconciliation as a rewrite.
+          |  h.rewrite(from,twin,function(){__kyoMorphNode(twin,to);return twin;});return true;
           |}
           |// ---- logical children ----
           |// A nested range is opened and closed by comments that are siblings of its content, so to a naive sibling
