@@ -267,6 +267,63 @@ class EventHandlerTest extends UITest:
         }
     }
 
+    "onKeyDownSelf on parent - a key in a child input does NOT trigger it, while onKeyDown still hears it" in {
+        val app: UI < Async =
+            for
+                selfKey <- Signal.initRef("")
+                anyKey  <- Signal.initRef("")
+            yield UI.div(
+                UI.div.id("parent").tabIndex(0)
+                    .onKeyDownSelf(ke => selfKey.set(ke.key.toString))
+                    .onKeyDown(ke => anyKey.set(ke.key.toString))(
+                        UI.input.id("child")
+                    ),
+                selfKey.map(v => UI.span(s"self:$v").id("sv")),
+                anyKey.map(v => UI.span(s"any:$v").id("av"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.press(Selector.id("child"), Key.Enter)
+                _ <- Browser.assertText(Selector.id("av"), "any:Enter")
+                _ <- Browser.assertText(Selector.id("sv"), "self:")
+            yield ()
+        }
+    }
+
+    "onKeyDownSelf on target - a key on the element itself DOES trigger it" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef("")
+            yield UI.div(
+                UI.div.id("target").tabIndex(0).onKeyDownSelf(ke => ref.set(ke.key.toString))("press here"),
+                ref.map(v => UI.span(v).id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.press(Selector.id("target"), Key.Enter)
+                _ <- Browser.assertText(Selector.id("v"), "Enter")
+            yield ()
+        }
+    }
+
+    "a role=button wrapper with onKeyDownSelf: Enter on a button inside it activates once, as that button's click" in {
+        val app: UI < Async =
+            for count <- Signal.initRef(0)
+            yield UI.div(
+                UI.div.id("wrapper").role("button").tabIndex(0)
+                    .onClick(count.updateAndGet(_ + 1).unit)
+                    .onKeyDownSelf(ke => if ke.key == UI.Keyboard.Enter then count.updateAndGet(_ + 1).unit else Kyo.unit)(
+                        UI.button("inner").id("inner")
+                    ),
+                count.map(n => UI.span(n.toString).id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.press(Selector.id("inner"), Key.Enter)
+                _ <- Browser.assertText(Selector.id("v"), "1")
+            yield ()
+        }
+    }
+
     "keyUp on input - parent onKeyUp fires (bubbling)" in {
         val app: UI < Async =
             for ref <- Signal.initRef("")

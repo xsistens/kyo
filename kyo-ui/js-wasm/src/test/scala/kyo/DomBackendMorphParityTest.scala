@@ -36,6 +36,7 @@ class DomBackendMorphParityTest extends kyo.test.Test[Any]:
           |function ba(){}
           |function kyoSpawnGhosts(){}
           |function sweepFocusAuto(){}
+          |function sweepScrollAuto(){}
           |function __kyoPathSel(p){return '[data-kyo-path="'+p+'"]';}
           |function __kyoPortalTwin(p){return document.querySelector('body > '+__kyoPathSel(p)+'[data-kyo-portal]');}
           |function __kyoAdoptPortals(){}

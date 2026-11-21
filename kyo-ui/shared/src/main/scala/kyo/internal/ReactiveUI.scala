@@ -566,7 +566,13 @@ private[kyo] object ReactiveUI:
             _ <- Scope.ensure(rootMounts.evictAll)
             _ <- subscribeScoped(rui, exchange, signalChangeTime, rootMounts, dispatch, RegionKeys(Seq(rui)))
             _ <- rootMounts.endWalk
-            validatedHandle = dragHandle(rui.handle, dragSessions, dragMutex, expiryWake, dragLimits)
+            // Keyboard activation is synthesized at the bottom, on the tree's own handler, because the
+            // two transports enter at different heights: the browser mount goes through `handle`, and
+            // the server-push session through `handleValidated` (UIServer). Wrapping either one alone
+            // suppresses the browser's activation on both while replacing it on only one, which is a
+            // button that stops working rather than one that works twice.
+            activating      = activatingHandle(rui.handle)
+            validatedHandle = dragHandle(activating, dragSessions, dragMutex, expiryWake, dragLimits)
         yield Subscription(
             (path, event) =>
                 DragProtocol.validateEventAndDomain(event, DragProtocol.Limits.default) match
@@ -599,6 +605,40 @@ private[kyo] object ReactiveUI:
         dispatch: MountDispatch
     )(using Frame): Unit < (Async & Scope) =
         Kyo.foreachDiscard(kids)(subscribeScoped(_, exchange, signalChangeTime, table, dispatch, keys)).andThen(table.endWalk)
+
+    /** Turns a keydown's recorded activation into the click it stands for.
+      *
+      * A browser answers Enter or Space on a button by firing a click at it, and Enter in a field by
+      * firing one at the form's default button; the form submit is that click's activation behaviour,
+      * never the key's. This is where kyo does the same: the keydown bubbles first, recording at most
+      * one path in [[activationTarget]], and the click is dispatched at that path afterwards, through
+      * the whole chain, so ancestors see it exactly as they see a mouse click.
+      *
+      * Dispatching it after the keydown has finished is what keeps the order the platform has, with the
+      * element's own `onKeyDown` running before its activation. Only a keydown records, so the click
+      * this dispatches cannot record another: there is no recursion here.
+      */
+    private def activatingHandle(handle: Handler)(using Frame): Handler =
+        (path, event) =>
+            event match
+                // Only these keys record an activation (a button's Enter or Space, a form's implicit submission on Enter), so
+                // every other keydown, every letter typed into a field among them, goes straight through.
+                case kd: UIEvent.KeyDown if KeyPolicy.mayActivate(kd.keyboard.key) =>
+                    for
+                        recorded <- AtomicRef.init(Maybe.empty[Seq[String]])
+                        keep     <- activationTarget.let(Present(recorded))(handle(path, kd))
+                        target   <- recorded.get
+                        _        <- target.fold(Kyo.lift(())) { clickPath =>
+                            handle(
+                                clickPath,
+                                UIEvent.Click(
+                                    clickPath,
+                                    MouseEventData(modifiers = kd.keyboard.modifiers, targetId = kd.keyboard.targetId)
+                                )
+                            ).unit
+                        }
+                    yield keep
+                case _ => handle(path, event)
 
     // Each reactive region starts an observer fiber as one scoped resource. Its finalizer interrupts the observer and
     // awaits the fiber's terminal result. Signal.observe runs each value in a fresh Scope; each value renders, re-walks,
