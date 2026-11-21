@@ -35,7 +35,11 @@ private[kyo] case class ReactiveUI(
     renderedChannels: RenderedChannels = RenderedChannels.empty,
     // Present on Foreach regions: carries the AST node (signal, key, render) and the normalize-time items
     // snapshot so subscribe can run the per-row reuse path instead of the whole-region re-render loop.
-    foreachSpec: Maybe[ForeachSpec] = Absent
+    foreachSpec: Maybe[ForeachSpec] = Absent,
+    // Present on a region whose node kept the signal before its projection to UI (UI.Ast.Reactive.source). Subscribe observes
+    // that, so an emission whose value is unchanged never re-renders a subtree that can only be compared as UI; a source lifted
+    // from a Signal[String] is bound straight to the backend's text write instead (see bindTextRegion).
+    source: Maybe[UI.Ast.Reactive.Source[?]] = Absent
 )
 
 /** Normalization-time companion of a [[kyo.UI.Ast.Foreach]] node: keeps the typed machinery (item signal, key
@@ -193,7 +197,7 @@ private[kyo] object ReactiveUI:
                                 )
                             result <- freshHdl(targetPath, event)
                         yield result
-                }.copy(renderedValue = Present(current))
+                }.copy(renderedValue = Present(current), source = ui.source)
                 end for
 
             case ui: Foreach[?, ?] @unchecked =>
@@ -759,75 +763,61 @@ private[kyo] object ReactiveUI:
                 val listMounts = mounts.child(pass, rui)(using AllowUnsafe.embrace.danger)
                 RowRegions.subscribeForeachRegion(rui, rui.foreachSpec.get, exchange, signalChangeTime, listMounts, dispatch)
             else
-                // The tree this region last rendered, so the exchange can send only what moved instead of the
-                // whole region.
-                // Unsafe: region-scoped, single-writer state created before the observe loop is forked, where no
-                // effect context exists to supply AllowUnsafe; only this region's own loop reads or writes it.
-                val rendered = AtomicRef.Unsafe.init(Maybe.empty[UI])(using AllowUnsafe.embrace.danger)
-                // Unsafe: as for `rendered`, the region's reference is made before its loop is forked, where no proof is at hand.
-                val regionMounts                                                 = mounts.child(pass, rui)(using AllowUnsafe.embrace.danger)
-                def subscribeKids(kids: Seq[ReactiveUI]): Unit < (Async & Scope) =
-                    val keys = RegionKeys(kids)
-                    regionMounts.beginWalk(kids, keys)
-                        .andThen(subscribeWalked(kids, keys, regionMounts, exchange, signalChangeTime, dispatch))
-                end subscribeKids
-                // Per-value setup, run inside each value's fresh Scope: render the region and fork its children into
-                // that scope, so the next value (or an interrupt) tears them down by cascade.
-                def renderValue(current: UI): Unit < (Async & Scope) =
-                    for
-                        now      <- Clock.now
-                        _        <- signalChangeTime.set(now)
-                        previous <- Sync.Unsafe.defer(rendered.getAndSet(Present(current)))
-                        _        <- exchange.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, current)
-                        svgContext = rui.region match
-                            case _: ReactiveRegion.HtmlRange  => false
-                            case _: ReactiveRegion.SvgElement => true
-                        contentParentContext = nestedParentContext(rui.parentContext, current)
-                        (newKids, _) <- walkStatic(
-                            current,
-                            rui.path,
-                            svgContext,
-                            rui.contentContext,
-                            contentParentContext,
-                            dispatch,
-                            rows = 0L,
-                            deepRows = Chunk.empty,
-                            discoverRootBound = rui.discoverContentRootBound
+                bindTextRegion(rui, exchange).map { bound =>
+                    if bound then Kyo.unit
+                    else
+                        // Unsafe: the region's reference is made before its loop is forked, where no proof is at hand.
+                        subscribeRegion(
+                            rui,
+                            exchange,
+                            signalChangeTime,
+                            mounts.child(pass, rui)(using AllowUnsafe.embrace.danger),
+                            dispatch
                         )
-                        _ <- forkRootChannels(rui.path, current, exchange)
-                        _ <- subscribeKids(newKids)
-                    yield ()
-
-                startOwnedFiber {
-                    Abort.run[Throwable] {
-                        var first = true
-                        rui.signal.observe { current =>
-                            val isFirst = first
-                            first = false
-                            if isFirst && rui.renderedValue.exists(_.equals(current)) then
-                                // The enclosing render already painted exactly this value: skip the repaint and the
-                                // re-walk, but still subscribe the already-walked children, exactly as renderValue
-                                // would have. The value is recorded as this region's last render, so the NEXT emission
-                                // diffs against it rather than re-sending the whole region.
-                                Sync.Unsafe.defer(rendered.set(Present(current)))
-                                    .andThen(forkRootChannels(rui.path, current, exchange))
-                                    .andThen(subscribeKids(rui.children))
-                            else renderValue(current)
-                            end if
-                        }
-                    }.map { result =>
-                        result.fold(
-                            _ => (),
-                            err => Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", err),
-                            panic =>
-                                if panic.isInstanceOf[Interrupted] then ()
-                                else Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", panic)
-                        )
-                    }
                 }
             end if
         }
     end subscribeScoped
+
+    /** Bind a lone-text region straight to the backend's text write, skipping the region fiber; `false` means the
+      * caller must subscribe it as a normal region.
+      *
+      * A region lifted from a `Signal[String]` paints one text node and nothing else. The region path runs the
+      * full apparatus for it (a fiber, a per-value Scope with its finalizer queue, a re-walk and an HTML render)
+      * to arrive at a single `Text.data` write. Binding is the same trade the attribute channels already
+      * make (see forkChannelObservers), and for the same reason: the handler is one DOM write that cannot suspend.
+      *
+      * Three conditions, all necessary:
+      *
+      *   - the region carries its string signal, so its content is statically one text node;
+      *   - the backend offers a synchronous text write (the server transport does not, and stays on the region
+      *     path, since its repaint is the equivalent patch);
+      *   - the walk found no reactive children under it. A `Text` value cannot produce any, so this is a
+      *     guard against a future lift that fills `text` on a region whose content is not only text.
+      *
+      * The baseline is the render-time string, so an unchanged first emission is dropped before the write, and a
+      * change that landed between render and subscribe still fires (`Signal.Unsafe.subscribe` delivers the
+      * current value on registration). Release is registered on the current Scope, the scope that would have
+      * owned the fiber, because the next-promise is masked and nothing interrupts it.
+      */
+    private def bindTextRegion(rui: ReactiveUI, exchange: UIExchange)(using Frame): Boolean < (Sync & Scope) =
+        (rui.source, exchange.textPatcherNow) match
+            case (Present(UI.Ast.Reactive.Source.Lifted(sig)), Present(patch)) if rui.children.isEmpty =>
+                val rendered = rui.renderedValue match
+                    case Present(t: Text) => Present(t.value)
+                    case _                => Absent
+                Log.use { log =>
+                    Sync.Unsafe.defer {
+                        // A failing write is logged to the Log bound here: the write runs inside the writer's `set`.
+                        val report: Throwable => Unit =
+                            ex => log.unsafe.error(s"kyo-ui: text binding failed at path=${rui.path.mkString(".")}", ex)
+                        sig.unsafeObserveProjected[String](identity, rendered, v => patch(rui.path, v), report) match
+                            case Absent           => Kyo.lift(false)
+                            case Present(release) => Scope.ensure(Sync.defer(release())).andThen(true)
+                    }
+                }
+            case _ => false
+    end bindTextRegion
 
     /** Starts the channel observers of the element a region paints as its root. A walk only gives the root's children nodes of their
       * own, so the root's channels at `path` are started here, in the current scope like the children's subscriptions.
@@ -838,6 +828,10 @@ private[kyo] object ReactiveUI:
                 forkChannelObservers(path, Channels.of(el), RenderedChannels.empty, exchange)
             case _ => Kyo.unit
 
+    /** Fork the scoped in-place-patch observers for one node's reactive attr/bool-attr/class channels at
+      * `path`. Shared by subscribeScoped (walked nodes) and by forkRootChannels (the painted ROOT element,
+      * which is absent from the walk's kids), so the two sites cannot drift apart.
+      */
     private def forkChannelObservers(
         path: Seq[String],
         channels: Channels,
@@ -871,6 +865,89 @@ private[kyo] object ReactiveUI:
             .andThen(bindAll(channels.classes, rendered.classes, exchange.classPatcherNow, exchange.onClassPatch(path, _, _)))
             .andThen(channels.style.fold(Kyo.unit: Unit < (Async & Scope))(bindStyle(path, _, rendered.style, exchange)))
     end forkChannelObservers
+
+    /** Starts the fiber of a region over a `Signal[UI]`, with a fresh Scope per value: each value is painted, walked, and its
+      * reactive children subscribed in that Scope, so the next value or an interrupt tears them down by cascade. `regionMounts` is the
+      * region's mount table, which outlives the subscription (see [[MountTableRef]]).
+      */
+    private def subscribeRegion(
+        rui: ReactiveUI,
+        exchange: UIExchange,
+        signalChangeTime: AtomicRef[Instant],
+        regionMounts: MountTableRef,
+        dispatch: MountDispatch
+    )(using Frame): Unit < (Async & Scope) =
+        // The tree this region last rendered, so the exchange can send only what moved instead of the whole region.
+        // Unsafe: region-scoped, single-writer state created before the observe loop is forked, where no effect context
+        // exists to supply AllowUnsafe; only this region's own loop reads or writes it.
+        val rendered = AtomicRef.Unsafe.init(Maybe.empty[UI])(using AllowUnsafe.embrace.danger)
+        def subscribeKids(kids: Seq[ReactiveUI]): Unit < (Async & Scope) =
+            val keys = RegionKeys(kids)
+            regionMounts.beginWalk(kids, keys)
+                .andThen(subscribeWalked(kids, keys, regionMounts, exchange, signalChangeTime, dispatch))
+        end subscribeKids
+        // Per-value setup, run inside each value's fresh Scope: render the region and fork its children into that scope, so the next
+        // value (or an interrupt) tears them down by cascade.
+        def renderValue(current: UI): Unit < (Async & Scope) =
+            for
+                now      <- Clock.now
+                _        <- signalChangeTime.set(now)
+                previous <- Sync.Unsafe.defer(rendered.getAndSet(Present(current)))
+                _        <- exchange.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, current)
+                svgContext = rui.region match
+                    case _: ReactiveRegion.HtmlRange  => false
+                    case _: ReactiveRegion.SvgElement => true
+                (newKids, _) <- walkStatic(
+                    current,
+                    rui.path,
+                    svgContext,
+                    rui.contentContext,
+                    nestedParentContext(rui.parentContext, current),
+                    dispatch,
+                    rows = 0L,
+                    deepRows = Chunk.empty,
+                    discoverRootBound = rui.discoverContentRootBound
+                )
+                _ <- forkRootChannels(rui.path, current, exchange)
+                _ <- subscribeKids(newKids)
+            yield ()
+
+        // What the region's fiber listens to. With a source present that is value space: `observe` drops an emission whose
+        // value equals the last delivered one, so a record that ticks once a second stops reaching the regions drawing the
+        // slices of it that did not move. Without a source (a lifted `Signal[UI]`, where no value exists before the UI) it
+        // stays the projected signal and the only available comparison is the UI itself.
+        def observed(paint: UI => Unit < (Async & Scope)): Unit < Async =
+            rui.source match
+                case Present(src) => src.observe(paint)
+                case Absent       => rui.signal.observe(paint)
+
+        startOwnedFiber {
+            Abort.run[Throwable] {
+                var first = true
+                observed { current =>
+                    val isFirst = first
+                    first = false
+                    if isFirst && rui.renderedValue.exists(_.equals(current)) then
+                        // The enclosing render already painted exactly this value: skip the repaint and the re-walk, but
+                        // still subscribe what renderValue would have. The value is recorded as this region's last render,
+                        // so the NEXT emission diffs against it rather than re-sending the whole region.
+                        Sync.Unsafe.defer(rendered.set(Present(current)))
+                            .andThen(forkRootChannels(rui.path, current, exchange))
+                            .andThen(subscribeKids(rui.children))
+                    else renderValue(current)
+                    end if
+                }
+            }.map { result =>
+                result.fold(
+                    _ => (),
+                    err => Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", err),
+                    panic =>
+                        if panic.isInstanceOf[Interrupted] then ()
+                        else Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", panic)
+                )
+            }
+        }
+    end subscribeRegion
 
     /** The inline-style channel. A value is its declarations, and a patch sets them and removes the properties the previous value had
       * and this one lacks: the previous value is what this observer last wrote, seeded with what the render wrote, which only the

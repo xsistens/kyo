@@ -794,10 +794,17 @@ private[kyo] object DomBackend:
         ): Unit < Async =
             Sync.defer(stylePatchNow(path, set, removed))
 
+        // A bound text region: the value goes into the text node as-is. It receives the string itself, not rendered html,
+        // and a text node holds literal characters, so every string is writable here with no escaping and no parser. An
+        // unpainted path is a silent no-op, exactly as for the attribute patches above.
+        private def textPatchNow(path: Seq[String], value: String): Unit =
+            discard(regions.setTextAt(path, value))
+
         override val attrPatcherNow: Maybe[(Seq[String], String, String) => Unit]                      = Present(attrPatchNow)
         override val boolAttrPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]                 = Present(boolAttrPatchNow)
         override val classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]                    = Present(classPatchNow)
         override val stylePatcherNow: Maybe[(Seq[String], Seq[(String, String)], Seq[String]) => Unit] = Present(stylePatchNow)
+        override val textPatcherNow: Maybe[(Seq[String], String) => Unit]                              = Present(textPatchNow)
 
         private def prepareRangePatch(oldElements: Seq[dom.Element], newElements: Seq[dom.Element]): RangePatchState =
             val active = Maybe(document.activeElement).filter(el => (el ne document.body) && containsAny(oldElements, el))
