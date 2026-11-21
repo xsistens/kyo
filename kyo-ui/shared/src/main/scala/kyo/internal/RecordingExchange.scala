@@ -10,7 +10,7 @@ import scala.annotation.tailrec
   *
   * @param synchronous
   *   offers the `*Now` sinks, as the DOM backend does, so a channel patches on the writer's stack. Otherwise the channels go through their
-  *   fibers, as on the server transport
+  *   fibers, as on the server transport, and a lone-text region repaints
   * @param keepsRows
   *   answers a list patch the way the DOM backend does: recorded as one [[RecordingExchange.Op.List]], the kept rows left in place. Otherwise
   *   it goes through `onChange` as a whole fragment, as on the server transport
@@ -78,7 +78,7 @@ private[kyo] class RecordingExchange(
     override def onStylePatch(path: Seq[String], set: Seq[(String, String)], removed: Seq[String])(using Frame): Unit < Async =
         recording(Op.Style(path, set, removed, Sink.Fiber))
 
-    // Unsafe: each of these four sinks is called on the writer's stack, inside its `set`, where no effect context exists.
+    // Unsafe: each of these five sinks is called on the writer's stack, inside its `set`, where no effect context exists.
     override val attrPatcherNow: Maybe[(Seq[String], String, String) => Unit] =
         if synchronous then Present((path, name, value) => record(Op.Attr(path, name, value, Sink.Now))(using AllowUnsafe.embrace.danger))
         else Absent
@@ -92,6 +92,10 @@ private[kyo] class RecordingExchange(
     override val stylePatcherNow: Maybe[(Seq[String], Seq[(String, String)], Seq[String]) => Unit] =
         if synchronous then
             Present((path, set, removed) => record(Op.Style(path, set, removed, Sink.Now))(using AllowUnsafe.embrace.danger))
+        else Absent
+
+    override val textPatcherNow: Maybe[(Seq[String], String) => Unit] =
+        if synchronous then Present((path, value) => record(Op.Text(path, value))(using AllowUnsafe.embrace.danger))
         else Absent
 
     /** Everything recorded so far, oldest first. */
@@ -108,6 +112,7 @@ private[kyo] class RecordingExchange(
     def boolPatches(using Frame): Chunk[Op.BoolAttr] < Sync = ops.map(_.collect { case op: Op.BoolAttr => op })
     def classPatches(using Frame): Chunk[Op.Class] < Sync   = ops.map(_.collect { case op: Op.Class => op })
     def stylePatches(using Frame): Chunk[Op.Style] < Sync   = ops.map(_.collect { case op: Op.Style => op })
+    def textPatches(using Frame): Chunk[Op.Text] < Sync     = ops.map(_.collect { case op: Op.Text => op })
 
     /** Waits until an op that `pred` accepts has been recorded, whether already or later. */
     def awaitOp(pred: Op => Boolean)(using Frame): Unit < Async =
@@ -132,5 +137,6 @@ private[kyo] object RecordingExchange:
         case BoolAttr(path: Seq[String], name: String, value: Boolean, sink: Sink)
         case Class(path: Seq[String], name: String, on: Boolean, sink: Sink)
         case Style(path: Seq[String], set: Seq[(String, String)], removed: Seq[String], sink: Sink)
+        case Text(path: Seq[String], value: String)
     end Op
 end RecordingExchange

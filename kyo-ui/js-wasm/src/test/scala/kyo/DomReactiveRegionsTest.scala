@@ -549,6 +549,9 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
                 assert(afterRepaint == expectRepaint)
                 assert(afterRepaint.contains(idOf("l", "5", "b")) && !afterRepaint.contains(idOf("l", "5", "a")))
                 assert(afterInsert == expectInsert && afterInsert.size == 51)
+                assert(regions.setTextAt(Seq("l", "48", "a"), "moved"))
+                assert(!regions.setTextAt(Seq("l", "10", "a"), "gone"))
+                assert(regions.setTextAt(Seq("l", "77", "c"), "new"))
         }
     }
 
