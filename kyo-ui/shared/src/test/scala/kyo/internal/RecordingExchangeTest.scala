@@ -81,6 +81,24 @@ class RecordingExchangeTest extends kyo.test.Test[Any]:
         end for
     }
 
+    "a tree's list patch keeps its rows only when asked" in {
+        val rows                                       = Seq(ListRow("a", UI.empty, true))
+        def patch(rec: RecordingExchange)(using Frame) =
+            rec.onListPatch(ReactiveRegion.HtmlRange("r"), Seq("l"), context, ReactiveRegion.ParentContext.Other, Absent, rows)
+        val keeping = new RecordingExchange(keepsRows = true)
+        val whole   = new RecordingExchange
+        for
+            kept    <- patch(keeping)
+            lists   <- keeping.listPatches
+            repaint <- patch(whole)
+            paints  <- whole.paints
+            none    <- whole.listPatches
+        yield
+            assert(kept && lists.map(_.rows.map(_.key)) == Chunk(Seq("a")))
+            assert(!repaint && paints.map(_.path) == Chunk(Seq("l")) && none.isEmpty)
+        end for
+    }
+
     "awaitOp is released by an op already recorded" in {
         val rec = new RecordingExchange
         for
