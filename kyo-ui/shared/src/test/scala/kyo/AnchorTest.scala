@@ -4,6 +4,7 @@ import kyo.Browser.*
 import kyo.Length.*
 import kyo.UI.*
 import kyo.UI.Ast.*
+import kyo.internal.HtmlRenderer
 
 class AnchorTest extends UITest:
 
@@ -185,6 +186,86 @@ class AnchorTest extends UITest:
             for
                 prevented <- Browser.evalBoolean(clickPrevented)
                 _         <- Browser.assertText(Selector.id("n"), "1")
+            yield assert(!prevented)
+        }
+    }
+
+    "a blocked anchor declines the browser's default for a plain, modified and middle click" in {
+        // Button draws a loading or inert link as an anchor marked aria-disabled, with a click handler that answers nothing. The
+        // browser must not follow its href for any click: a plain click, a modified one (ctrl, meta, shift, alt) or a middle click
+        // (auxclick, button 1, which is not a click event).
+        val app: UI < Async =
+            for clicks <- Signal.initRef(0)
+            yield UI.div(
+                UI.a.href(Href.Path("/elsewhere")).id("a").aria("disabled", "true").blocked(true)
+                    .onClick(clicks.getAndUpdate(_ + 1).unit)("Link"),
+                clicks.map(n => UI.span(n.toString).id("n"))
+            )
+        def prevented(eventType: String, init: String): String =
+            s"""(function(){var seen=null;function f(e){seen=e.defaultPrevented;e.preventDefault();}
+               |window.addEventListener('$eventType',f);
+               |document.getElementById('a').dispatchEvent(new MouseEvent('$eventType',{bubbles:true,cancelable:true,$init}));
+               |window.removeEventListener('$eventType',f);return seen;})()""".stripMargin
+        withUI(app) {
+            for
+                plain  <- Browser.evalBoolean(prevented("click", ""))
+                ctrl   <- Browser.evalBoolean(prevented("click", "ctrlKey:true"))
+                meta   <- Browser.evalBoolean(prevented("click", "metaKey:true"))
+                shift  <- Browser.evalBoolean(prevented("click", "shiftKey:true"))
+                alt    <- Browser.evalBoolean(prevented("click", "altKey:true"))
+                middle <- Browser.evalBoolean(prevented("auxclick", "button:1"))
+            yield
+                assert(plain)
+                assert(ctrl)
+                assert(meta)
+                assert(shift)
+                assert(alt)
+                assert(middle)
+        }
+    }
+
+    "blocked(true) renders data-kyo-blocked, and blocked(false) renders nothing" in {
+        for
+            marked <- HtmlRenderer.render(UI.a.href(Href.Path("/elsewhere")).id("a").blocked(true)("Link"), Seq.empty)
+            plain  <- HtmlRenderer.render(UI.a.href(Href.Path("/elsewhere")).id("a").blocked(false)("Link"), Seq.empty)
+        yield
+            assert(marked.contains("""data-kyo-blocked="1""""), marked)
+            assert(!plain.contains("data-kyo-blocked"), plain)
+    }
+
+    "blocked is a link setter: the link builder takes it, a non-link element builder does not" in {
+        // Compile-time check: blocked marks a link only, so a div or a button must not accept it.
+        val onLink   = scala.compiletime.testing.typeCheckErrors("""{ given kyo.Frame = kyo.Frame.internal; kyo.UI.a.blocked(true) }""")
+        val onDiv    = scala.compiletime.testing.typeCheckErrors("""{ given kyo.Frame = kyo.Frame.internal; kyo.UI.div.blocked(true) }""")
+        val onButton =
+            scala.compiletime.testing.typeCheckErrors("""{ given kyo.Frame = kyo.Frame.internal; kyo.UI.button.blocked(true) }""")
+        assert(onLink.isEmpty, s"the link builder must take blocked: ${onLink.map(_.message)}")
+        assert(onDiv.nonEmpty, "a div accepted blocked: the generic element builder still carries the setter")
+        assert(onButton.nonEmpty, "a button accepted blocked: the generic element builder still carries the setter")
+    }
+
+    "an anchor that only says aria-disabled keeps the browser's default for a plain click" in {
+        // aria-disabled is a hint for assistive technology. Only the marker Button draws on a blocked link declines the click, so an
+        // anchor a caller marks aria-disabled still navigates.
+        withUI(UI.div(UI.a.href(Href.Path("/elsewhere")).id("a").aria("disabled", "true")("Link"))) {
+            val plainClick =
+                """(function(){var seen=null;function f(e){seen=e.defaultPrevented;e.preventDefault();}
+                  |window.addEventListener('click',f);
+                  |document.getElementById('a').dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}));
+                  |window.removeEventListener('click',f);return seen;})()""".stripMargin
+            for prevented <- Browser.evalBoolean(plainClick)
+            yield assert(!prevented)
+        }
+    }
+
+    "a middle click on an unblocked anchor keeps the browser's default" in {
+        withUI(UI.div(UI.a.href(Href.Path("/elsewhere")).id("a")("Link"))) {
+            val middleClick =
+                """(function(){var seen=null;function f(e){seen=e.defaultPrevented;e.preventDefault();}
+                  |window.addEventListener('auxclick',f);
+                  |document.getElementById('a').dispatchEvent(new MouseEvent('auxclick',{bubbles:true,cancelable:true,button:1}));
+                  |window.removeEventListener('auxclick',f);return seen;})()""".stripMargin
+            for prevented <- Browser.evalBoolean(middleClick)
             yield assert(!prevented)
         }
     }

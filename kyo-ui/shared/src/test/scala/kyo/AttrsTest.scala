@@ -385,4 +385,196 @@ class AttrsTest extends UITest:
         end for
     }
 
+    // ---- silent ----
+
+    private val clickEv    = """ data-kyo-ev="click""""
+    private val dropdownEv = """ data-kyo-ev="click,keydown,change""""
+
+    "a constantly silent or disabled element writes no data-kyo-ev: the bytes of the same element with no handler" in {
+        def html(ui: UI)(using Frame) = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
+        for
+            silentSpan   <- html(UI.span("x").onClick(Kyo.unit).silent(true))
+            plainSpan    <- html(UI.span("x"))
+            silentButton <- html(UI.button("Go").onClick(Kyo.unit).silent(true))
+            plainButton  <- html(UI.button("Go"))
+            offButton    <- html(UI.button("Go").onClick(Kyo.unit).disabled(true))
+            offPlain     <- html(UI.button("Go").disabled(true))
+            heard        <- html(UI.span("x").onClick(Kyo.unit).silent(false))
+            handler      <- html(UI.span("x").onClick(Kyo.unit))
+        yield
+            assert(silentSpan == plainSpan, s"$silentSpan / $plainSpan")
+            assert(silentButton == plainButton, s"$silentButton / $plainButton")
+            assert(offButton == offPlain, s"$offButton / $offPlain")
+            assert(heard == handler && heard.contains(clickEv), s"$heard / $handler")
+        end for
+    }
+
+    "a partly silent element writes data-kyo-ev with only the events it keeps, from a constant or a signal" in {
+        def html(ui: UI)(using Frame) = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
+        val button                    = UI.button("Go").onClick(Kyo.unit).onBlur(Kyo.unit)
+        for
+            on       <- Signal.initRef(true)
+            off      <- Signal.initRef(false)
+            heard    <- html(button.silentExcept(false, "blur"))
+            kept     <- html(button.silentExcept(true, "blur"))
+            muted    <- html(button.silentExcept(on: Signal[Boolean], "blur"))
+            unmuted  <- html(button.silentExcept(off: Signal[Boolean], "blur"))
+            nothing  <- html(button.silentExcept(true, "keyup"))
+            allQuiet <- html(button.silentExcept(true, "blur").silent(true))
+        yield
+            assert(heard.contains(""" data-kyo-ev="click,blur""""), s"not silent: $heard")
+            assert(kept.contains(""" data-kyo-ev="blur""""), s"constant partial: $kept")
+            assert(muted.contains(""" data-kyo-ev="blur""""), s"signal partial on: $muted")
+            assert(unmuted.contains(""" data-kyo-ev="click,blur""""), s"signal partial off: $unmuted")
+            assert(!nothing.contains("data-kyo-ev"), s"no kept event writes no attribute: $nothing")
+            assert(!allQuiet.contains("data-kyo-ev"), s"fully silent writes no attribute: $allQuiet")
+        end for
+    }
+
+    "a partly silent text field that keeps blur also keeps blurtext, so the blur still carries its text" in {
+        def html(ui: UI)(using Frame) = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
+        val field                     = UI.input.onBlur((_, _) => Kyo.unit)
+        for
+            heard <- html(field)
+            kept  <- html(field.silentExcept(true, "blur"))
+        yield
+            assert(heard.contains(""" data-kyo-ev="blur,blurtext""""), s"not silent: $heard")
+            assert(kept.contains(""" data-kyo-ev="blur,blurtext""""), s"partly silent drops blurtext: $kept")
+        end for
+    }
+
+    "silent or disabled from a signal writes data-kyo-ev for the current state, and the path either way" in {
+        def html(ui: UI)(using Frame) = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
+        for
+            on       <- Signal.initRef(true)
+            off      <- Signal.initRef(false)
+            handler  <- html(UI.span("x").onClick(Kyo.unit))
+            quiet    <- html(UI.span("x").onClick(Kyo.unit).silent(on: Signal[Boolean]))
+            heard    <- html(UI.span("x").onClick(Kyo.unit).silent(off: Signal[Boolean]))
+            disabled <- html(UI.button("Go").onClick(Kyo.unit).disabled(on: Signal[Boolean]))
+            enabled  <- html(UI.button("Go").onClick(Kyo.unit).disabled(off: Signal[Boolean]))
+            fixedOff <- html(UI.button("Go").onClick(Kyo.unit).silent(off: Signal[Boolean]).disabled(true))
+        yield
+            assert(handler.contains(clickEv) && handler.contains("data-kyo-path"), handler)
+            assert(quiet == handler.replace(clickEv, ""), s"$quiet / $handler")
+            assert(heard == handler, s"$heard / $handler")
+            assert(!disabled.contains("data-kyo-ev") && disabled.contains(" disabled"), disabled)
+            assert(enabled.contains(clickEv) && !enabled.contains(" disabled"), enabled)
+            assert(!fixedOff.contains("data-kyo-ev"), fixedOff)
+        end for
+    }
+
+    "a silent or disabled dropdown writes no data-kyo-ev on its wrapper, from a constant or a signal" in {
+        def html(ui: UI)(using Frame) = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
+        for
+            on       <- Signal.initRef(true)
+            off      <- Signal.initRef(false)
+            heard    <- html(UI.dropdown("A" -> "a").id("d"))
+            quiet    <- html(UI.dropdown("A" -> "a").id("d").silent(true))
+            follows  <- html(UI.dropdown("A" -> "a").id("d").silent(on: Signal[Boolean]))
+            listens  <- html(UI.dropdown("A" -> "a").id("d").silent(off: Signal[Boolean]))
+            disabled <- html(UI.dropdown("A" -> "a").id("d").disabled(true))
+        yield
+            assert(heard.contains(dropdownEv), heard)
+            assert(quiet == heard.replace(dropdownEv, ""), s"$quiet / $heard")
+            assert(follows == quiet, s"$follows / $quiet")
+            assert(listens == heard, s"$listens / $heard")
+            assert(!disabled.contains("data-kyo-ev") && !disabled.contains("data-kyo-disabled"), disabled)
+        end for
+    }
+
+    "a dropdown that turns silent while its list is open sends no option pick, by a click or by Enter, and a listening one's does" in {
+        // Every message the page sends over its socket, recorded, so what the client forwards is seen apart from what the server
+        // would do with it.
+        val record =
+            """window.__kyoSent=[];var __o=WebSocket.prototype.send;WebSocket.prototype.send=function(m){window.__kyoSent.push(String(m));return __o.apply(this,arguments);};"""
+        def changes(using Frame) = Browser.evalJson[Int]("""window.__kyoSent.filter(function(m){return m.indexOf("Change")>=0;}).length""")
+        val app: UI < Async      =
+            for
+                quiet <- Signal.initRef("a")
+                heard <- Signal.initRef("a")
+                mute  <- Signal.initRef(false)
+            yield UI.div(
+                // Silent through a signal that turns on once the list is open: a silent dropdown does not open, so this is the
+                // way a pick can still be made on one.
+                UI.dropdown("Alpha" -> "a", "Beta" -> "b").id("q").value(quiet).silent(mute: Signal[Boolean]),
+                UI.button("mute").id("m").onClick(mute.set(true)),
+                UI.button("unmute").id("u").onClick(mute.set(false)),
+                mute.map(v => UI.span(s"muted:$v").id("mv")),
+                UI.dropdown("Alpha" -> "a", "Beta" -> "b").id("h").value(heard),
+                heard.map(v => UI.span(s"heard:$v").id("hv"))
+            )
+        withUI(app) {
+            for
+                _      <- Browser.evalDiscard(record)
+                _      <- Browser.click(Selector.id("q-trigger"))
+                _      <- Browser.click(Selector.id("m"))
+                _      <- Browser.assertText(Selector.id("mv"), "muted:true")
+                _      <- Browser.click(Selector.css("#q-options [data-kyo-dropdown-opt='1']"))
+                _      <- Browser.click(Selector.id("u"))
+                _      <- Browser.assertText(Selector.id("mv"), "muted:false")
+                _      <- Browser.click(Selector.id("q-trigger"))
+                _      <- Browser.click(Selector.id("m"))
+                _      <- Browser.assertText(Selector.id("mv"), "muted:true")
+                muted  <- Browser.evalJson[Boolean]("""!document.getElementById("q").hasAttribute("data-kyo-ev")""")
+                _      <- Browser.press(Selector.id("q-trigger"), Key.ArrowDown)
+                _      <- Browser.press(Selector.id("q-trigger"), Key.Enter)
+                silent <- changes
+                _      <- Browser.click(Selector.id("h-trigger"))
+                _      <- Browser.click(Selector.css("#h-options [data-kyo-dropdown-opt='1']"))
+                _      <- Browser.assertText(Selector.id("hv"), "heard:b")
+                heard  <- changes
+            yield assert(
+                muted && silent == 0 && heard == 1,
+                s"muted wrapper lists no events: $muted; Change messages: silent dropdown $silent, listening one ${heard - silent}"
+            )
+        }
+    }
+
+    "a silent or disabled dropdown's list does not open, by a click or by Space, and a listening one's does" in {
+        def shown(id: String)(using Frame) =
+            Browser.evalJson[Boolean](s"""!document.getElementById("$id-options").hidden""")
+        val app: UI < Async =
+            for
+                quiet <- Signal.initRef("a")
+                heard <- Signal.initRef("a")
+                gate  <- Signal.initRef(true)
+            yield UI.div(
+                UI.dropdown("Alpha" -> "a", "Beta" -> "b").id("q").value(quiet).silent(true),
+                UI.dropdown("Alpha" -> "a", "Beta" -> "b").id("d").value(quiet).disabled(true),
+                UI.dropdown("Alpha" -> "a", "Beta" -> "b").id("s").value(quiet).silent(gate: Signal[Boolean]),
+                UI.dropdown("Alpha" -> "a", "Beta" -> "b").id("h").value(heard)
+            )
+        withUI(app) {
+            for
+                _      <- Browser.click(Selector.id("q-trigger"))
+                qClick <- shown("q")
+                _      <- Browser.press(Selector.id("q-trigger"), Key.Space)
+                qSpace <- shown("q")
+                _      <- Browser.click(Selector.id("d-trigger"))
+                dClick <- shown("d")
+                _      <- Browser.click(Selector.id("s-trigger"))
+                sClick <- shown("s")
+                _      <- Browser.click(Selector.id("h-trigger"))
+                hClick <- shown("h")
+            yield assert(
+                !qClick && !qSpace && !dClick && !sClick && hClick,
+                s"open after: silent click $qClick, silent Space $qSpace, disabled click $dClick, signal-silent click $sClick, listening click $hClick"
+            )
+        }
+    }
+
+    // ---- a button's form ----
+
+    "a button's form is the native form attribute, the id of the form it submits" in {
+        def html(ui: UI)(using Frame) = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
+        for
+            withForm <- html(UI.button("Save").form("profile"))
+            plain    <- html(UI.button("Save"))
+        yield
+            assert(withForm.contains(""" form="profile""""), withForm)
+            assert(!plain.contains(" form="), plain)
+        end for
+    }
+
 end AttrsTest

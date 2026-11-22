@@ -40,8 +40,56 @@ private[kyo] object Channels:
         val attrs = el.attrs
         val text  = followedValue(el).fold(attrs.reactiveAttrs)(v => attrs.reactiveAttrs.updated("value", v))
         val bools = followedChecked(el).fold(attrs.reactiveBoolAttrs)(c => attrs.reactiveBoolAttrs.updated("checked", c))
-        Channels(text, attrs.reactiveMaybeAttrs, bools, attrs.reactiveClasses, attrs.reactiveStyle)
+        val maybe = silencedEvents(el).fold(attrs.reactiveMaybeAttrs)(s => attrs.reactiveMaybeAttrs.updated("data-kyo-ev", s))
+        Channels(text, maybe, bools, attrs.reactiveClasses, attrs.reactiveStyle)
     end of
+
+    /** The `data-kyo-ev` channel of an element that is silent through a signal (see UI.Element.silent): the events it declares while it
+      * is not silent, none while it is. An element is silent while `disabled` (where it has it, the channel before the constant) or
+      * `silent` (likewise) holds, so a constant that holds settles it: the render then writes no attribute and there is nothing to
+      * patch. Absent too where the element declares no event, which has no attribute to take away.
+      */
+    private def silencedEvents(el: Element): Maybe[Signal[Maybe[String]]] =
+        given Frame                = el.frame
+        val attrs                  = el.attrs
+        val disabledSignal         = Maybe.fromOption(attrs.reactiveBoolAttrs.get("disabled"))
+        def disabledFixed: Boolean = el match
+            case hd: HasDisabled => hd.disabled.getOrElse(false)
+            case _               => false
+        val fixed                           = (disabledSignal.isEmpty && disabledFixed) || (attrs.silentSignal.isEmpty && attrs.silent)
+        val follows: Maybe[Signal[Boolean]] =
+            if fixed then Absent
+            else
+                disabledSignal match
+                    case Present(off) =>
+                        attrs.silentSignal match
+                            case Present(muted) =>
+                                given CanEqual[(Boolean, Boolean), (Boolean, Boolean)] = CanEqual.derived
+                                Present(off.combineLatest(muted).map(both => both._1 || both._2))
+                            case Absent => Present(off)
+                    case Absent => attrs.silentSignal
+        val events = HtmlRenderer.eventList(el)
+        if fixed || events.isEmpty then Absent
+        else
+            given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
+            // What the element lists while it is not silent: every event, or under UI.Element.silentExcept only the kept ones,
+            // which is nothing where none is kept (no attribute).
+            val kept                                   = events.split(',').filter(attrs.partialKeep.contains).mkString(",")
+            def listed(partly: Boolean): Maybe[String] =
+                if !partly then Present(events)
+                else if kept.isEmpty then Absent
+                else Present(kept)
+            attrs.partialSignal match
+                case Absent =>
+                    follows.map(quiet => quiet.map(silent => if silent then Absent else listed(attrs.partial)))
+                case Present(partSig) =>
+                    follows match
+                        case Absent         => Present(partSig.map(partly => listed(partly)))
+                        case Present(quiet) =>
+                            Present(quiet.combineLatest(partSig).map((silent, partly) => if silent then Absent else listed(partly)))
+            end match
+        end if
+    end silencedEvents
 
     /** What puts `el` back after the edit `event`, for an element that follows a signal: compares, once the event has finished bubbling, what
       * the signal holds with what the event carried, and sends the patch when they differ; when they are the same the owner took it. A commit

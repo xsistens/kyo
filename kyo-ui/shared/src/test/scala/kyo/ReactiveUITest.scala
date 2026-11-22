@@ -7,7 +7,6 @@ import kyo.internal.KeyboardEventData
 import kyo.internal.MouseEventData
 import kyo.internal.ReactiveUI
 import kyo.internal.UIEvent
-import kyo.internal.UIExchange
 
 class ReactiveUITest extends UITest:
 
@@ -251,7 +250,7 @@ class ReactiveUITest extends UITest:
     private def activations(target: AtomicInt => UI, key: String)(using Frame): Int < Async =
         for
             hits     <- AtomicInt.init(0)
-            dispatch <- ReactiveUI.subscribed(target(hits), UIExchange.noop)(_.handle)
+            dispatch <- ReactiveUI.subscribed(target(hits))(_.handle)
             _        <- dispatch(Seq.empty, UIEvent.KeyDown(Seq.empty, KeyboardEventData(key, UI.Modifiers.none, Absent)))
             count    <- hits.get
         yield count

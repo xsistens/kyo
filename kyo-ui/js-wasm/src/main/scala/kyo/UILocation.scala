@@ -50,6 +50,13 @@ object UILocation:
                         else Present(a.asInstanceOf[dom.html.Anchor])
                     case _ => Absent
                 anchorOpt.foreach { a =>
+                    // A blocked link (marked data-kyo-blocked by the blocked setter) is no navigation: the click is declined and the
+                    // route does not change, whatever the modifiers. The target's nearest blocked ancestor decides, as in DomBackend
+                    // and the page script, so a link nested in a blocked one is declined too.
+                    val blocked = me.target match
+                        case el: dom.Element => el.closest("a[data-kyo-blocked]") != null
+                        case _               => false
+                    if blocked then me.preventDefault()
                     val sameOrigin = a.host == dom.window.location.host
                     val noModifier = !me.ctrlKey && !me.metaKey && !me.shiftKey && !me.altKey && me.button == 0
                     val notBlank   = a.target != "_blank"
@@ -61,7 +68,7 @@ object UILocation:
                     // appear dead. Only same-origin cross-document navigations are routed client-side.
                     val sameDocument =
                         a.pathname == dom.window.location.pathname && a.search == dom.window.location.search
-                    if sameOrigin && noModifier && notBlank && notDownload && !sameDocument then
+                    if !blocked && sameOrigin && noModifier && notBlank && notDownload && !sameDocument then
                         me.preventDefault()
                         // Preserve the anchor's hash so a cross-document link that targets a heading
                         // (e.g. /docs/mod/#section from a search result) keeps the fragment in the URL.

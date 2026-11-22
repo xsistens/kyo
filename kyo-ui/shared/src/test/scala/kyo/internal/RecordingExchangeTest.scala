@@ -6,14 +6,12 @@ import kyo.internal.RecordingExchange.Sink
 
 class RecordingExchangeTest extends kyo.test.Test[Any]:
 
-    import UI.*
-
     private val context = ReactiveRegion.RegionIdentity(Seq.empty, 0)
 
     private def paint(rec: RecordingExchange, path: String*)(using Frame): Unit < Async =
         rec.onChange(ReactiveRegion.HtmlRange("r"), path, context, ReactiveRegion.ParentContext.Other, Absent, UI.empty)
 
-    "keeps every channel patch beside the paints, in the order it arrived" in {
+    "keeps every op in the order it arrived" in {
         val rec = new RecordingExchange
         for
             _   <- rec.onAttrPatch(Seq("a"), "title", "x")
@@ -21,17 +19,34 @@ class RecordingExchangeTest extends kyo.test.Test[Any]:
             _   <- rec.onClassPatch(Seq("c"), "hot", true)
             _   <- rec.onBoolAttrPatch(Seq("d"), "disabled", false)
             _   <- rec.onStylePatch(Seq("e"), Seq("color" -> "red"), Seq("width"))
+            _   <- rec.onHold(ReactiveRegion.HtmlRange("r"), true)
+            _   <- rec.onFreshInstance(ReactiveRegion.HtmlRange("r"))
             ops <- rec.ops
-            cls <- rec.classPatches
         yield
             assert(ops == Chunk[Op](
                 Op.Attr(Seq("a"), "title", "x", Sink.Fiber),
                 Op.Paint(Seq("b"), Absent, UI.empty),
                 Op.Class(Seq("c"), "hot", true, Sink.Fiber),
                 Op.BoolAttr(Seq("d"), "disabled", false, Sink.Fiber),
-                Op.Style(Seq("e"), Seq("color" -> "red"), Seq("width"), Sink.Fiber)
+                Op.Style(Seq("e"), Seq("color" -> "red"), Seq("width"), Sink.Fiber),
+                Op.Hold(ReactiveRegion.HtmlRange("r"), true),
+                Op.FreshInstance(ReactiveRegion.HtmlRange("r"))
             ))
-            assert(cls == Chunk(Op.Class(Seq("c"), "hot", true, Sink.Fiber)))
+            assert(rec.recorded == ops)
+        end for
+    }
+
+    "the queries answer with their own kind of op, oldest first" in {
+        val rec = new RecordingExchange
+        for
+            _     <- rec.onAttrPatch(Seq("a"), "title", "x")
+            _     <- paint(rec, "b")
+            _     <- rec.onAttrPatch(Seq("a"), "title", "y")
+            attrs <- rec.attrPatches
+            shown <- rec.paints
+        yield
+            assert(attrs.map(_.value) == Chunk("x", "y"))
+            assert(shown.map(_.path) == Chunk(Seq("b")))
         end for
     }
 
@@ -57,33 +72,6 @@ class RecordingExchangeTest extends kyo.test.Test[Any]:
         ))
     }
 
-    "keeps every paint in the order it arrived" in {
-        val rec = new RecordingExchange
-        for
-            _   <- paint(rec, "a")
-            _   <- paint(rec, "b")
-            _   <- paint(rec, "a", "0")
-            ops <- rec.ops
-        yield
-            assert(ops == Chunk[Op](
-                Op.Paint(Seq("a"), Absent, UI.empty),
-                Op.Paint(Seq("b"), Absent, UI.empty),
-                Op.Paint(Seq("a", "0"), Absent, UI.empty)
-            ))
-            assert(rec.recorded == ops)
-        end for
-    }
-
-    "paints answers with the paints, oldest first" in {
-        val rec = new RecordingExchange
-        for
-            _     <- paint(rec, "b")
-            _     <- paint(rec, "c")
-            shown <- rec.paints
-        yield assert(shown.map(_.path) == Chunk(Seq("b"), Seq("c")))
-        end for
-    }
-
     "a tree's list patch keeps its rows only when asked" in {
         val rows                                       = Seq(ListRow("a", UI.empty, true))
         def patch(rec: RecordingExchange)(using Frame) =
@@ -105,8 +93,8 @@ class RecordingExchangeTest extends kyo.test.Test[Any]:
     "awaitOp is released by an op already recorded" in {
         val rec = new RecordingExchange
         for
-            _ <- paint(rec, "a")
-            _ <- rec.awaitOp { case Op.Paint(path, _, _) => path == Seq("a"); case _ => false }
+            _ <- rec.onAttrPatch(Seq("a"), "title", "x")
+            _ <- rec.awaitOp { case Op.Attr(_, _, value, _) => value == "x"; case _ => false }
         yield succeed
         end for
     }
@@ -114,10 +102,10 @@ class RecordingExchangeTest extends kyo.test.Test[Any]:
     "awaitOp is released by a later op, and only by one its predicate takes" in {
         val rec = new RecordingExchange
         for
-            waiting <- Fiber.init(rec.awaitOp { case Op.Paint(path, _, _) => path == Seq("wanted"); case _ => false })
-            _       <- paint(rec, "other")
+            waiting <- Fiber.init(rec.awaitOp { case Op.Attr(_, _, value, _) => value == "wanted"; case _ => false })
+            _       <- rec.onAttrPatch(Seq("a"), "title", "other")
             early   <- waiting.done
-            _       <- paint(rec, "wanted")
+            _       <- rec.onAttrPatch(Seq("a"), "title", "wanted")
             _       <- waiting.get
         yield assert(!early)
         end for
@@ -140,16 +128,18 @@ class RecordingExchangeTest extends kyo.test.Test[Any]:
         end for
     }
 
-    "subscribed hands over the subscription of the tree it runs" in {
+    "subscribed hands over the subscription with the session's commands installed" in {
         val rec = new RecordingExchange
         for
             ref <- Signal.initRef("a")
-            ui = UI.div(ref.render(v => UI.span(v)))
-            _ <- ReactiveUI.subscribed(ui, rec) { _ =>
-                ref.set("b").andThen(rec.awaitOp { case Op.Paint(_, _, shown) => shown == UI.span("b"); case _ => false })
+            ui = UI.div(UI.span("x").title(ref: Signal[String]))
+            found <- ReactiveUI.subscribed(ui, rec) { _ =>
+                UICommands.commands.use(c => ref.set("b").andThen(rec.awaitOp(_ => true)).andThen(c.nonEmpty))
             }
-            paints <- rec.paints
-        yield assert(paints.map(_.path).distinct == Chunk(Seq("0")))
+            patches <- rec.attrPatches
+        yield
+            assert(found)
+            assert(patches.map(_.value) == Chunk("b"))
         end for
     }
 

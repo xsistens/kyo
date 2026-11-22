@@ -12,7 +12,6 @@ import kyo.internal.DragCommands
 import kyo.internal.DragProtocol
 import kyo.internal.ReactiveUI
 import kyo.internal.UIEvent
-import kyo.internal.UIExchange
 
 /** End-to-end drag scenarios against the real demo views.
   *
@@ -69,11 +68,10 @@ class DragScenarioItTest extends UITest:
                 state     <- Signal.initRef(initial)
                 selection <- Signal.initRef(selected)
                 decisions <- AtomicRef.init(Chunk.empty[Drag.Decision])
-                root      <- ReactiveUI.normalize(KanbanDemo.boardView(state, selection), Seq.empty)
                 result    <- DragCommands.resolveSink.let(
                     Present((_, decision) => decisions.getAndUpdate(_.append(decision)).unit)
                 ) {
-                    ReactiveUI.subscribe(root, UIExchange.noop).map(sub => f(state, sub.handle, decisions))
+                    ReactiveUI.subscribed(KanbanDemo.boardView(state, selection))(sub => f(state, sub.handle, decisions))
                 }
             yield result
         }
@@ -232,11 +230,10 @@ class DragScenarioItTest extends UITest:
                 state     <- Signal.initRef(initial)
                 selection <- Signal.initRef(selected)
                 decisions <- AtomicRef.init(Chunk.empty[Drag.Decision])
-                root      <- ReactiveUI.normalize(InventoryGridDemo.gridView(state, selection), Seq.empty)
                 result    <- DragCommands.resolveSink.let(
                     Present((_, decision) => decisions.getAndUpdate(_.append(decision)).unit)
                 ) {
-                    ReactiveUI.subscribe(root, UIExchange.noop).map(sub => f(state, sub.handle, decisions))
+                    ReactiveUI.subscribed(InventoryGridDemo.gridView(state, selection))(sub => f(state, sub.handle, decisions))
                 }
             yield result
         }
