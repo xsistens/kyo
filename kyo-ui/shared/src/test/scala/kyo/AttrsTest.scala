@@ -368,20 +368,20 @@ class AttrsTest extends UITest:
         end for
     }
 
-    // ---- aria flag ----
+    // ---- a Boolean aria value ----
 
-    "ariaFlag writes aria-<name>=\"true\" while on and no attribute while off, from a constant or a signal" in {
+    "a Boolean aria value writes \"true\" and \"false\", from a constant or a signal" in {
         def html(ui: UI)(using Frame) = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
         for
             on     <- Signal.initRef(true)
             off    <- Signal.initRef(false)
-            yes    <- html(UI.span.ariaFlag("disabled", true))
-            no     <- html(UI.span.ariaFlag("disabled", false))
-            sigYes <- html(UI.span.ariaFlag("disabled", on: Signal[Boolean]))
-            sigNo  <- html(UI.span.ariaFlag("disabled", off: Signal[Boolean]))
+            yes    <- html(UI.span.aria(Aria.disabled -> true))
+            no     <- html(UI.span.aria(Aria.disabled -> false))
+            sigYes <- html(UI.span.aria(Aria.disabled -> (on: Signal[Boolean])))
+            sigNo  <- html(UI.span.aria(Aria.disabled -> (off: Signal[Boolean])))
         yield
             assert(yes.contains("""aria-disabled="true"""") && sigYes.contains("""aria-disabled="true""""), s"$yes / $sigYes")
-            assert(!no.contains("aria-disabled") && !sigNo.contains("aria-disabled"), s"$no / $sigNo")
+            assert(no.contains("""aria-disabled="false"""") && sigNo.contains("""aria-disabled="false""""), s"$no / $sigNo")
         end for
     }
 
@@ -562,6 +562,26 @@ class AttrsTest extends UITest:
                 s"open after: silent click $qClick, silent Space $qSpace, disabled click $dClick, signal-silent click $sClick, listening click $hClick"
             )
         }
+    }
+
+    // ---- class name channel ----
+
+    "cssClass.matching over a signal of class names writes the class it holds, after the fixed ones, and none for Absent" in {
+        for
+            size <- Signal.initRef[Maybe[String]](Present("p-sm"))
+            none <- Signal.initRef[Maybe[String]](Absent)
+            held <- kyo.internal.HtmlRenderer.render(
+                UI.div(UI.span.cssClass("p-x").cssClass.matching(size: Signal[Maybe[String]])(identity)),
+                Seq.empty
+            )
+            empty <- kyo.internal.HtmlRenderer.render(
+                UI.div(UI.span.cssClass("p-x").cssClass.matching(none: Signal[Maybe[String]])(identity)),
+                Seq.empty
+            )
+        yield
+            assert(held.contains("""class="p-x p-sm""""), held)
+            assert(empty.contains("""class="p-x"""") && !empty.contains("p-sm"), empty)
+        end for
     }
 
     // ---- a button's form ----

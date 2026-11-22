@@ -958,7 +958,7 @@ private[kyo] object HtmlRenderer:
         end if
         // Skipped when a `.hidden(Signal)` channel owns the attribute; see renderElementAttrs on precedence.
         if !attrs.reactiveBoolAttrs.contains("hidden") then attrs.hidden.foreach(v => if v then w(sb, " hidden"))
-        attrs.tabIndex.foreach(n => w(sb, s""" tabindex="$n""""))
+        if !ownsAttr(attrs, "tabindex") then attrs.tabIndex.foreach(n => w(sb, s""" tabindex="$n""""))
         attrs.focusTrap.foreach(v => if v then w(sb, """ data-kyo-focus-trap="1""""))
         attrs.focusGroup.foreach(id => w(sb, s""" data-kyo-focus-group="${esc(id)}""""))
         attrs.focusAuto.foreach(v => if v then w(sb, """ data-kyo-focus-auto="1""""))
@@ -995,7 +995,7 @@ private[kyo] object HtmlRenderer:
         // Seq copy and a sort per element, and on a plain element every one of these maps is empty.
         // A static value is left out where a channel of the same name is bound: the channel is the value (see
         // renderElementAttrs on precedence). The name is only built when the element has a channel at all.
-        val channelled = attrs.reactiveAttrs.nonEmpty
+        val channelled = hasAttrChannel(attrs)
         if attrs.ariaAttrs.nonEmpty then
             attrs.ariaAttrs.toSeq.sortBy(_._1).foreach { case (name, value) =>
                 if !channelled || !ownsAttr(attrs, s"aria-$name") then w(sb, s""" aria-$name="${esc(value)}"""")
@@ -1015,6 +1015,9 @@ private[kyo] object HtmlRenderer:
             }
         end if
     end renderCommonAttrs
+
+    /** Whether an attribute channel (one that writes a whole attribute value) is bound on the element. */
+    private def hasAttrChannel(attrs: Attrs): Boolean = attrs.reactiveAttrs.nonEmpty || attrs.reactiveMaybeAttrs.nonEmpty
 
     /** Whether an attribute channel writes `name`, so that the static value of that name is not written. */
     private def ownsAttr(attrs: Attrs, name: String): Boolean =
@@ -1090,9 +1093,6 @@ private[kyo] object HtmlRenderer:
         end if
     end inlineCss
 
-    /** The reactive classes whose signal is currently true, for folding into the SSR class list; the client
-      * toggles them in place afterwards (HtmlOp.SetClassByPath). Empty (and cheap) when none are bound.
-      */
     /** The `filledClass` a text field carries on itself as first rendered: present while its starting text, as the field
       * shows it (masked), is not empty. The client keeps it right from there (`FilledClass`).
       */
@@ -1113,9 +1113,17 @@ private[kyo] object HtmlRenderer:
                     case None => Seq.empty
             case _ => Seq.empty
 
+    /** The reactive classes on now, for folding into the SSR class list: each toggled class whose signal is true (by name), then the
+      * name each class-name channel holds (in the order they were set). The client patches them in place afterwards
+      * (HtmlOp.SetClassByPath). Empty (and cheap) when none are bound.
+      */
     private def reactiveTrueClasses(attrs: Attrs)(using AllowUnsafe, Frame, SignalNow.Locals): Seq[String] =
-        if attrs.reactiveClasses.isEmpty then Seq.empty
-        else attrs.reactiveClasses.toSeq.sortBy(_._1).collect { case (name, sig) if SignalNow(sig) => name }
+        val toggled =
+            if attrs.reactiveClasses.isEmpty then Seq.empty
+            else attrs.reactiveClasses.toSeq.sortBy(_._1).collect { case (name, sig) if SignalNow(sig) => name }
+        if attrs.reactiveClassNames.isEmpty then toggled
+        else toggled ++ attrs.reactiveClassNames.flatMap(SignalNow(_).toChunk)
+    end reactiveTrueClasses
 
     private def renderElementAttrs(sb: StringBuilder, elem: Element)(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         // WHERE A CHANNEL EXISTS, THE CHANNEL IS THE VALUE. Shadows the file-level `boolAttr` for the whole

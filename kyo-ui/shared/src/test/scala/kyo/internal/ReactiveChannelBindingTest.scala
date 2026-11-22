@@ -59,13 +59,31 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
 
     private def classChannel(using Frame): Channel < Sync =
         Signal.initRef(false).map(ref =>
-            Channel("class", UI.div(UI.span("x").cssClass("hot", ref: Signal[Boolean])), ref.set(true).unit, ref.waiters)
+            Channel("class", UI.div(UI.span("x").when(ref: Signal[Boolean])(_.cssClass("hot"))), ref.set(true).unit, ref.waiters)
         )
 
-    /** An aria flag: off is no attribute, so moving it on is one attribute patch, as for the others. */
+    /** A class whose name the signal holds; moving from no class to one is one patch, as for the others. */
+    private def classNameChannel(using Frame): Channel < Sync =
+        Signal.initRef[Maybe[String]](Absent).map(ref =>
+            Channel(
+                "class-name",
+                UI.div(UI.span("x").cssClass.matching(ref: Signal[Maybe[String]])(identity)),
+                ref.set(Present("hot")).unit,
+                ref.waiters
+            )
+        )
+
+    /** An attribute a signal of a `Maybe` may leave out: `Absent` is no attribute, so moving it to a value is one attribute patch, as
+      * for the others.
+      */
     private def ariaFlagChannel(using Frame): Channel < Sync =
-        Signal.initRef(false).map(ref =>
-            Channel("aria-flag", UI.div(UI.span("x").ariaFlag("disabled", ref: Signal[Boolean])), ref.set(true).unit, ref.waiters)
+        Signal.initRef[Maybe[String]](Absent).map(ref =>
+            Channel(
+                "aria-flag",
+                UI.div(UI.span("x").aria(Aria.disabled -> (ref: Signal[Maybe[String]]))),
+                ref.set(Present("true")).unit,
+                ref.waiters
+            )
         )
 
     /** A silent flag on an element with a handler: moving it on takes `data-kyo-ev` away, one patch, as for the others. */
@@ -75,7 +93,7 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
         )
 
     private def channels(using Frame): Seq[Channel] < Sync =
-        Kyo.foreach(Chunk(attrChannel, boolChannel, classChannel, ariaFlagChannel, silentChannel))(identity).map(_.toSeq)
+        Kyo.foreach(Chunk(attrChannel, boolChannel, classChannel, classNameChannel, ariaFlagChannel, silentChannel))(identity).map(_.toSeq)
 
     /** The patches of `data-kyo-ev` an exchange recorded, as `set <events>` and `off`, the `disabled` patches, and the paints. */
     final private class EventPatches(fast: Boolean):
@@ -154,7 +172,7 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
         }
     }
 
-    "an aria flag writes \"true\" while on and takes the attribute away while off, in place" in {
+    "a signal of a Maybe writes its value while Present and takes the attribute away while Absent, in place" in {
         Scope.run {
             Kyo.foreachDiscard(Chunk(true, false)) { fast =>
                 val exchange = new RecordingExchange(synchronous = fast)
@@ -163,14 +181,36 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
                     case op: Op.BoolAttr => s"${if op.value then "on" else "off"} ${op.name}"
                 }
                 for
-                    on   <- Signal.initRef(true)
-                    root <- ReactiveUI.normalize(UI.div(UI.span("x").ariaFlag("disabled", on: Signal[Boolean])), Seq.empty)
+                    on   <- Signal.initRef[Maybe[String]](Present("true"))
+                    root <- ReactiveUI.normalize(UI.div(UI.span("x").aria(Aria.disabled -> (on: Signal[Maybe[String]]))), Seq.empty)
                     _    <- ReactiveUI.subscribe(root, exchange)
-                    _    <- on.set(false)
+                    _    <- on.set(Absent)
                     _    <- assertEventually(Sync.defer(ops.size == 1))
-                    _    <- on.set(true)
+                    _    <- on.set(Present("true"))
                     _    <- assertEventually(Sync.defer(ops.size == 2))
                 yield assert(ops == Seq("off aria-disabled", "set aria-disabled=true"), s"fast=$fast: $ops")
+                end for
+            }
+        }
+    }
+
+    "a class-name channel takes the class it held off and puts the one it holds on, in place" in {
+        Scope.run {
+            Kyo.foreachDiscard(Chunk(true, false)) { fast =>
+                val exchange = new RecordingExchange(synchronous = fast)
+                def classes  = exchange.recorded.collect { case op: Op.Class => (op.name, op.on) }
+                for
+                    size <- Signal.initRef[Maybe[String]](Present("p-sm"))
+                    root <- ReactiveUI.normalize(UI.div(UI.span("x").cssClass.matching(size: Signal[Maybe[String]])(identity)), Seq.empty)
+                    _    <- ReactiveUI.subscribe(root, exchange)
+                    _    <- size.set(Present("p-lg"))
+                    _    <- assertEventually(Sync.defer(classes.size == 2))
+                    _    <- size.set(Absent)
+                    _    <- assertEventually(Sync.defer(classes.size == 3))
+                yield assert(
+                    classes == Seq("p-sm" -> false, "p-lg" -> true, "p-lg" -> false),
+                    s"fast=$fast: $classes"
+                )
                 end for
             }
         }

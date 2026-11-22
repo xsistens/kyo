@@ -8,6 +8,7 @@ import kyo.internal.Reducible
 import kyo.internal.UICommands
 import kyo.internal.UIExchange
 import kyo.internal.UIServer
+import scala.Conversion.into
 import scala.annotation.targetName
 import scala.language.implicitConversions
 
@@ -1761,8 +1762,9 @@ object UI:
             def children: Chunk[UI]
             private[kyo] def withAttrs(a: Attrs): Self
 
-            /** The element with `f` applied where `cond` holds, and as it is where not, so a setter that depends on a condition
-              * stays in the chain: `button.when(disabled)(_.disabled(true)).when(blurs)(_.onBlur(blur))`.
+            /** The element with `f` applied where `cond` holds, and as it is where not, so a setter called only under a condition
+              * stays in the chain: `input.when(blurs)(_.onBlur(blur)).when(editable)(_.onInput(typed))`. A setter that takes the
+              * condition itself gets it directly (`disabled(off)`).
               *
               * Inside a `UI.reactive` block `f` is a lambda, so a `.read` in it is refused; read into a `val` first, or pass the
               * prop to the setter, which takes it as a channel.
@@ -1774,7 +1776,7 @@ object UI:
             end when
 
             /** The element with `f` applied to the value where `v` holds one, and as it is where not, so an optional setting
-              * stays in the chain: `el.when(id)(_.id(_)).when(name)(_.aria("label", _))`.
+              * stays in the chain: `el.when(id)(_.id(_)).when(role)(_.role(_))`.
               */
             def when[A](v: Maybe[A])(f: (Self, A) => Self): Self =
                 // Unsafe: every element is its own `Self` (each case class fixes `type Self` to itself).
@@ -1782,8 +1784,26 @@ object UI:
                 v.fold(self)(a => f(self, a))
             end when
 
+            /** The element with the setters `f` makes on a [[kyo.UI.Ast.Toggle]] applied while `cond` holds, constant or reactive
+              * through one setter: `el.when(fluid)(_.cssClass("p-fluid"))`, `el.when(checked)(_.cssClass("on").aria(Aria.pressed -> "true"))`.
+              *
+              * A `Boolean` applies them as the element's own setters would, or leaves the element as it is, so it is the bytes of
+              * `when(cond: Boolean)` with the same setters (a plain `Boolean` picks that overload anyway). A `Signal[Boolean]`
+              * binds each one to a channel, so a change patches the element in place and draws nothing again. That is why `f`
+              * only has the setters with a channel: classes, `aria`, `data`, `role`, `hidden`, `silent`, and `tabIndex`, `disabled`
+              * and `readOnly` where the element has them; a handler or a style needs `when(Boolean)` in a region.
+              *
+              * Inside a `UI.reactive` block a read handed to `when(Boolean)` with such setters is taken as this form's channel,
+              * by the same rule as any setter that takes a `Prop`.
+              */
+            def when(cond: Prop[Boolean])(f: kyo.UI.Ast.Toggle[Self] => kyo.UI.Ast.Toggle[Self]): Self =
+                // Unsafe: every element is its own `Self` (each case class fixes `type Self` to itself), and a toggle keeps the
+                // element's own class through its setters.
+                f(Toggle.of[Self](this, cond)).element.asInstanceOf[Self]
+            end when
+
             /** Shared bodies of the declarative reactive-channel setters (aria/title/placeholder/href/src →
-              * reactiveAttrs; disabled/readOnly/hidden → reactiveBoolAttrs; cssClass → reactiveClasses).
+              * reactiveAttrs; disabled/readOnly/hidden → reactiveBoolAttrs; cssClass → reactiveClasses, or reactiveClassNames for a name).
               * `inline` so each compiles to the bare `withAttrs(attrs.copy(...))`, adding no dispatch of its own.
               *
               * WHICH SETTER GETS A CHANNEL. A `Signal`-typed setter is a channel (patching in place, returning
@@ -1812,6 +1832,8 @@ object UI:
                 withAttrs(attrs.copy(reactiveBoolAttrs = attrs.reactiveBoolAttrs.updated(name, sig)))
             private[kyo] inline def withReactiveClass(name: String, on: Signal[Boolean]): Self =
                 withAttrs(attrs.copy(reactiveClasses = attrs.reactiveClasses.updated(name, on)))
+            private[kyo] inline def withReactiveClassName(name: Signal[Maybe[String]]): Self =
+                withAttrs(attrs.copy(reactiveClassNames = attrs.reactiveClassNames.append(name)))
             private[kyo] inline def withReactiveStyle(sig: Signal[Style]): Self =
                 withAttrs(attrs.copy(reactiveStyle = Present(sig)))
 
@@ -1919,42 +1941,15 @@ object UI:
                 case c: Style                    => style(c)
 
             // ARIA attributes
-            /** Sets a single `aria-*` attribute (the `name` is the suffix after `aria-`), constant or reactive through one setter: a
-              * `String` is a plain attribute, a `Signal[String]` patches `aria-$name` IN PLACE on emission, with no re-render (for a
-              * locale-driven accessible name or a state that must change without re-mounting). One setter, so a read in a
-              * `UI.reactive` block passed here is a channel and not a read of the block.
+            /** Sets `aria-*` attributes from `name -> value` entries, the name being the part after `aria-`:
+              * `el.aria(Aria.label -> name, Aria.pressed -> checked, Aria.valuemin -> 0)`. Each value is written by its type's
+              * [[kyo.UI.Ast.AttrValue]]: a value writes what it is (`true` as `"true"`, `false` as `"false"`, a number its text),
+              * `Absent` writes nothing, so an optional accessible name stays in the chain, and a signal is the attribute's channel,
+              * patched in place on emission with no re-render (a signal of a `Maybe` leaves the attribute out while it holds
+              * `Absent`). One setter, so a read in a `UI.reactive` block handed to it as a value is a channel and not a read of the
+              * block. A group kept in a `val` is built with [[kyo.UI.Ast.Entry.of]] and spread: `el.aria(range*)`.
               */
-            def aria(name: String, v: Prop[String]): Self = v match
-                case s: Signal[String] @unchecked => withReactiveAttr(s"aria-$name", s)
-                case t: String                    => withAttrs(attrs.copy(ariaAttrs = attrs.ariaAttrs.updated(name, t)))
-
-            /** `aria-*` from an optional prop: `Present` sets it as [[aria]] does, constant or reactive, and `Absent` sets nothing, so
-              * an optional accessible name stays in the chain: `el.aria("label", access.name)`.
-              */
-            @targetName("ariaMaybe")
-            def aria(name: String, v: Maybe[Prop[String]]): Self =
-                // Unsafe: every element is its own `Self` (each case class fixes `type Self` to itself).
-                v.fold(this.asInstanceOf[Self])(aria(name, _))
-
-            /** An `aria-*` state that is said only while it holds: `aria-$name="true"` while `on`, and no attribute while not, where
-              * the absent attribute and `"false"` mean the same (`aria-disabled`, `aria-busy`, `aria-invalid`). A `Boolean` writes it
-              * or leaves it out; a `Signal[Boolean]` sets and removes it in place on emission, with no re-render. Where `"false"`
-              * says something of its own (`aria-pressed`, `aria-expanded`), use [[aria]] with the value.
-              */
-            def ariaFlag(name: String, on: Boolean | Signal[Boolean]): Self = on match
-                case b: Boolean =>
-                    if b then aria(name, "true") else withAttrs(attrs.copy(ariaAttrs = attrs.ariaAttrs - name))
-                case s: Signal[Boolean] @unchecked =>
-                    given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
-                    val said: Signal[Maybe[String]]              = s.map(b => if b then Present("true") else Absent)(using summon, frame)
-                    withAttrs(attrs.copy(
-                        ariaAttrs = attrs.ariaAttrs - name,
-                        reactiveMaybeAttrs = attrs.reactiveMaybeAttrs.updated(s"aria-$name", said)
-                    ))
-
-            /** Sets several `aria-*` attributes at once from name/value pairs. */
-            def aria(pairs: (String, String)*): Self =
-                withAttrs(attrs.copy(ariaAttrs = attrs.ariaAttrs ++ pairs))
+            def aria(entries: into[Entry]*): Self = withEntries(entries, AttrKind.Aria)
 
             /** The native `title` (tooltip), constant or reactive through one setter: a constant is the element's `title`, and a
               * signal is the `title` attribute's channel, patched in place on emission with no re-render.
@@ -1983,42 +1978,37 @@ object UI:
                 withAttrs(attrs.copy(role = Present(v)))
 
             // Data attributes (kyo- prefix is reserved)
-            /** Sets a single `data-*` attribute (the `name` is the suffix after `data-`).
+            /** Sets `data-*` attributes from `name -> value` entries, the name being the part after `data-`:
+              * `el.data(data"data-vs-first" -> firstIdx, data"data-form" -> form)`. Each value is written as [[aria]] writes it, by its type's
+              * [[kyo.UI.Ast.AttrValue]]: what it is, nothing for `Absent`, and a signal as the attribute's channel, patched in place.
               *
               * @throws java.lang.IllegalArgumentException
-              *   if `name` starts with `kyo-`; that prefix is reserved by the framework
+              *   if a name starts with `kyo-`; that prefix is reserved by the framework
               */
-            def data(name: String, value: String): Self =
-                if name.startsWith("kyo-") then
-                    throw new IllegalArgumentException(
-                        s"data-* names must not start with 'kyo-'; the kyo- prefix is reserved by the framework. Got: kyo-${name.stripPrefix("kyo-")}"
-                    )
-                end if
-                withAttrs(attrs.copy(dataAttrs = attrs.dataAttrs.updated(name, value)))
-            end data
+            def data(entries: into[Entry]*): Self = withEntries(entries, AttrKind.Data)
 
-            /** Sets several `data-*` attributes at once from name/value pairs.
-              *
-              * @throws java.lang.IllegalArgumentException
-              *   if any name starts with `kyo-`; that prefix is reserved by the framework
-              */
-            def data(pairs: (String, String)*): Self =
-                pairs.foreach { case (n, _) =>
-                    if n.startsWith("kyo-") then
-                        throw new IllegalArgumentException(
-                            s"data-* names must not start with 'kyo-'; the kyo- prefix is reserved by the framework. Got: kyo-${n.stripPrefix("kyo-")}"
-                        )
-                }
-                withAttrs(attrs.copy(dataAttrs = attrs.dataAttrs ++ pairs))
-            end data
+            // The element with `entries` written; itself where they write nothing (each value `Absent`), as a setter given nothing.
+            private def withEntries(entries: Seq[Entry], kind: AttrKind): Self =
+                val next = Entry.writeAll(attrs, entries, kind)(using frame)
+                // Unsafe: every element is its own `Self` (each case class fixes `type Self` to itself).
+                if next eq attrs then this.asInstanceOf[Self] else withAttrs(next)
+            end withEntries
 
-            /** Adds a CSS class to this element (emitted as `class="..."`); repeated calls space-join.
-              * The class is the stable hook a [[kyo.Stylesheet]] class rule ([[kyo.Selector.cls]])
-              * targets, so document-level rules (`@media`, shared component styles, `:hover` against a
-              * named class) apply to it. For per-element one-off styling use [[style]] instead; the two
-              * coexist on one element.
+            /** The element's CSS classes (emitted as `class="..."`), set through the returned [[kyo.UI.Ast.CssClass]]:
+              * `el.cssClass("p-button", "p-component")` adds classes, and `el.cssClass.matching(prop)(...)` the class of the
+              * case a prop holds. A class that follows a condition is `el.when(cond)(_.cssClass(name))`. A class is the stable
+              * hook a [[kyo.Stylesheet]] class rule ([[kyo.Selector.cls]]) targets, so document-level rules (`@media`, shared component styles, `:hover` against a named class) apply to it. For
+              * per-element one-off styling use [[style]] instead; the two coexist on one element.
               */
-            def cssClass(name: String): Self = withAttrs(attrs.copy(cssClasses = attrs.cssClasses :+ name))
+            // The full path, not `CssClass[Self]`: seen from an element declared outside `Ast` (the `Svg` ones), the short form
+            // types as `Ast.this.CssClass`, and the compiler then finds no extension `apply` on it (scalac 3.9.0).
+            def cssClass: kyo.UI.Ast.CssClass[Self] = this
+
+            /** The element with `name` added after its classes: the body of `cssClass(name)`. */
+            private[kyo] def addClass(name: String): Self = withAttrs(attrs.copy(cssClasses = attrs.cssClasses :+ name))
+
+            /** The element with `names` added after its classes, in order: the body of `cssClass(names*)`. */
+            private[kyo] def addClasses(names: Seq[String]): Self = withAttrs(attrs.copy(cssClasses = attrs.cssClasses ++ names))
 
             /** Declarative ENTER transition (client-local): when a patch inserts this element newly into the DOM (its
               * `data-kyo-path` was not present before, or at initial mount), the client adds the space-separated `classes`
@@ -2041,13 +2031,16 @@ object UI:
               */
             def leaveTransition(classes: String): Self = withAttrs(attrs.copy(leaveTransition = Present(classes)))
 
-            /** Constant OR reactive class through one union setter. A `Boolean` is static (byte-identical to
-              * `cssClass(name)` resp. omitting it). A `Signal[Boolean]` toggles `name` IN PLACE on emission
-              * (`classList.toggle`, so CSS transitions fire) with no re-render, still chainable (`Self`). Declarative twin of `UI.Commands.bindClassById`.
+            /** The body of `cssClass.matching`: a constant adds the class its case names (or none), a signal binds the
+              * element's class-name channel to the class of the case it holds.
               */
-            def cssClass(name: String, on: Boolean | Signal[Boolean]): Self = on match
-                case b: Boolean                    => if b then cssClass(name) else withAttrs(attrs)
-                case s: Signal[Boolean] @unchecked => withReactiveClass(name, s)
+            private[kyo] def matchClass[A](v: Prop[A], f: A => String | Maybe[String]): Self = v match
+                case sig: Signal[A] @unchecked =>
+                    given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
+                    withReactiveClassName(sig.map(a => CssClass.named(f(a)))(using summon, frame))
+                case a =>
+                    // Unsafe: a prop that is no signal is the value itself, and every element is its own `Self`.
+                    CssClass.named(f(a.asInstanceOf[A])).fold(this.asInstanceOf[Self])(addClass)
 
             /** Declarative portal (client-local): after a patch inserts this element, the client physically moves it to
               * `document.body`, leaving an inert placeholder (`data-kyo-portal-slot="<path>"`, hidden) at the logical
@@ -2070,6 +2063,519 @@ object UI:
             private[kyo] def jsProp(name: String, value: String): Self =
                 withAttrs(attrs.copy(jsProps = attrs.jsProps.updated(name, value)))
         end Element
+
+        /** The class setters of an element, what [[kyo.UI.Ast.Element.cssClass]] returns: each one returns the element (`S`, its
+          * own type), so a chain stays an element chain.
+          *
+          * {{{
+          * el.cssClass("p-cascadeselect", "p-component", "p-inputwrapper")
+          * el.cssClass.matching(p.size) {
+          *     case Size.Small  => "p-button-sm"
+          *     case Size.Large  => "p-button-lg"
+          *     case Size.Normal => Absent
+          * }
+          * }}}
+          *
+          * `cssClass(names*)` adds the classes after the ones the element has, in the order given, so repeated calls space-join.
+          * A name the element already carries is written again; a class list is a set to the browser, so it changes nothing.
+          *
+          * `matching(prop)(f)` adds the class of the case a prop holds, for a prop over a closed set of cases (a size, a
+          * severity, a variant): `f` names the class of each case, or `Absent` for a case that has none. A constant writes that
+          * class statically, the bytes of `cssClass(name)` or of nothing. A signal is one class-name channel: the render writes
+          * the class of the case it holds, after the element's fixed classes, and a change takes the old class off and puts the
+          * new one on in place, with nothing drawn again. `f` is a match over the cases, so under the build's `-Werror` a case it
+          * leaves out does not compile.
+          *
+          * A class that follows a condition is `el.when(cond)(_.cssClass(name))`, through [[kyo.UI.Ast.Toggle]]: a `Boolean`
+          * writes it statically or not at all, a signal binds it to the element's class channel, toggled in place.
+          *
+          * It is the element itself under another type, so `el.cssClass` allocates nothing, and each setter is a static forward
+          * to the element's own method. The setters are not `inline`: `UI.reactive` reads a toggle's `cssClass` call as written
+          * to rebuild it (see `Element.when`), and an inline expansion keeps no call it could read. Every setter that writes a
+          * class lives here, so the class vocabulary is one place: a later setter (a prefix or a suffix over a prop, say) is a
+          * method of this type rather than an overload of `cssClass` on every element.
+          *
+          * @tparam S
+          *   the element type the setters return
+          */
+        opaque type CssClass[S] = Element
+
+        object CssClass:
+            extension [S](self: CssClass[S])
+
+                /** Adds the class `name` after the element's classes. */
+                def apply(name: String): S =
+                    // Unsafe: `self` is the element whose `cssClass` built it, and `S` is that element's own `Self`.
+                    self.addClass(name).asInstanceOf[S]
+
+                /** Adds the classes `names` after the element's classes, in the order given. */
+                def apply(names: String*): S =
+                    // Unsafe: `self` is the element whose `cssClass` built it, and `S` is that element's own `Self`.
+                    self.addClasses(names).asInstanceOf[S]
+
+                /** The class of the case `v` holds, as `f` names it, or none where `f` gives `Absent`. A constant is a static
+                  * class; a signal is the element's class-name channel, which swaps the class in place (two `classList.toggle`s,
+                  * so CSS transitions fire) with no re-render. The channel owns the names it writes: a fixed class of the same
+                  * name is taken off with it.
+                  */
+                def matching[A](v: Prop[A])(f: A => String | Maybe[String]): S =
+                    // Unsafe: `self` is the element whose `cssClass` built it, and `S` is that element's own `Self`.
+                    self.matchClass(v, f).asInstanceOf[S]
+            end extension
+
+            /** The class a case names: a name is that class, a `Maybe` is what it holds. A `Present` name is the bare string at
+              * run time, so it takes the first case, which gives it back as it was.
+              */
+            private[kyo] def named(v: String | Maybe[String]): Maybe[String] = v match
+                case s: String => Present(s)
+                // Unsafe: what is no string here is the `Maybe` the union names.
+                case m => m.asInstanceOf[Maybe[String]]
+        end CssClass
+
+        /** What [[kyo.UI.Ast.Element.when]] over a `Prop[Boolean]` hands its function: the setters of the element that have a channel,
+          * each applied while the condition holds.
+          *
+          * {{{
+          * el.when(fluid)(_.cssClass("p-password-fluid"))
+          * el.when(checked)(_.cssClass("p-togglebutton-checked").aria(Aria.pressed -> "true"))
+          * }}}
+          *
+          * Over a constant each setter is the element's own: `true` applies it, `false` leaves the element as it is. Over a signal
+          * each one is bound to the channel of what it sets, and the element is patched in place as the signal moves, with
+          * nothing drawn again:
+          *
+          *   - a class goes on while the signal holds (the class channel); one the element already carries stays on in both
+          *     states, and the toggled classes are written after the element's fixed ones, sorted by name;
+          *   - `aria`, `data`, `role` and `tabIndex` are the attribute's channel, the toggle's value while the signal holds and what the
+          *     element had (its value, or no attribute) while it does not; an entry whose value is a signal is one channel over
+          *     both, its value while the condition holds, and what the element had while the condition does not or the value is
+          *     `Absent`, which, as in every entry, sets nothing;
+          *   - `hidden`, `disabled`, `readOnly` and `required` are the boolean attribute's channel, and `silent` the element's
+          *     silence channel, with the element's own value as the off state.
+          *
+          * Where the element already has a channel of that name that a setter bound, the channel is the value in both states,
+          * as it is for a constant (the precedence rule above `withReactiveAttr`), and the toggle sets nothing. Where an earlier
+          * toggle bound it, the two compose as written: the later toggle's value while its signal holds, else the earlier's.
+          *
+          * Nothing else is offered, since nothing else can change in place: a handler or a style under a condition needs
+          * `when(cond: Boolean)` inside a region.
+          *
+          * @tparam S
+          *   the element type the toggle builds, which `when` hands back
+          */
+        final class Toggle[S] private (private[kyo] val element: Element, cond: Prop[Boolean]):
+
+            /** The classes `names` while the condition holds. */
+            def cssClass(names: String*): Toggle[S] = cond match
+                case s: Signal[Boolean] @unchecked => next(names.foldLeft(element)(Toggle.classChannel(_, _, s)))
+                case on: Boolean                   => if on then next(element.addClasses(names)) else this
+
+            /** The `aria-*` entries while the condition holds, each value written as [[kyo.UI.Ast.Element.aria]] writes it. */
+            def aria(entries: into[Entry]*): Toggle[S] = entries.foldLeft(this)((t, e) => t.entry(e, AttrKind.Aria))
+
+            /** The `data-*` entries while the condition holds, each value written as [[kyo.UI.Ast.Element.data]] writes it.
+              *
+              * @throws java.lang.IllegalArgumentException
+              *   if a name starts with `kyo-`; that prefix is reserved by the framework
+              */
+            def data(entries: into[Entry]*): Toggle[S] =
+                // The element's own setter refuses a reserved name, whichever way the condition goes.
+                entries.foreach(e => AttrKind.Data.check(e.name))
+                entries.foldLeft(this)((t, e) => t.entry(e, AttrKind.Data))
+            end data
+
+            /** The `role` while the condition holds. */
+            def role(value: String): Toggle[S] =
+                attr("role", element.attrs.role, value, _.copy(role = Absent))(element.role(value))
+
+            /** The tab index `v` while the condition holds, and the element's own (or none) while it does not: a tab stop that comes
+              * and goes with the condition, patched in place.
+              */
+            def tabIndex(v: Int)(using ev: S <:< Interactive): Toggle[S] =
+                // Unsafe: the toggle's element is its `S`, which the evidence says is an `Interactive`.
+                val el = ev(element.asInstanceOf[S])
+                attr("tabindex", el.attrs.tabIndex.map(_.toString), v.toString, _.copy(tabIndex = Absent))(el.tabIndex(v))
+            end tabIndex
+
+            /** `hidden` set to `v` while the condition holds. */
+            def hidden(v: Boolean): Toggle[S] =
+                flag("hidden", element.attrs.hidden.getOrElse(false), v)(element.hidden(v))
+
+            /** The element silent (`v`) or listening while the condition holds; see [[kyo.UI.Ast.Element.silent]]. */
+            def silent(v: Boolean): Toggle[S] = cond match
+                case s: Signal[Boolean] @unchecked => next(Toggle.silenceChannel(element, v, s))
+                case on: Boolean                   => if on then next(element.silent(v)) else this
+
+            /** `disabled` set to `v` while the condition holds, on an element that has it. */
+            def disabled(v: Boolean)(using ev: S <:< HasDisabled): Toggle[S] =
+                // Unsafe: the toggle's element is its `S`, which the evidence says is a `HasDisabled`.
+                val el = ev(element.asInstanceOf[S])
+                flag("disabled", el.disabled.getOrElse(false), v)(el.withDisabled(v))
+            end disabled
+
+            /** `readonly` set to `v` while the condition holds, on a text field. */
+            def readOnly(v: Boolean)(using ev: S <:< TextInput): Toggle[S] =
+                // Unsafe: the toggle's element is its `S`, which the evidence says is a `TextInput`.
+                val el = ev(element.asInstanceOf[S])
+                flag("readonly", el.readOnly.getOrElse(false), v)(el.withReadOnly(v))
+            end readOnly
+
+            private def next(el: Element): Toggle[S] = new Toggle(el, cond)
+
+            // One entry: over a constant the element's own setter or nothing; over a signal the attribute's channel, from a value
+            // as a constant does, and from a signal of the value as one channel over both, with nothing where it holds `Absent`.
+            private def entry(e: Entry, kind: AttrKind): Toggle[S] =
+                given Frame = element.frame
+                e.checkKind(kind)
+                cond match
+                    case s: Signal[Boolean] @unchecked =>
+                        val key = kind.key(e.name)
+                        val off = kind.own(element.attrs, e.name)
+                        e.held match
+                            case v: Signal[Maybe[String]] @unchecked =>
+                                next(Toggle.attrSignalChannel(element, key, off, v, kind.strip(_, e.name), s))
+                            // Unsafe: what is no signal here is the `Maybe[String]` the union names.
+                            case m => m.asInstanceOf[Maybe[String]].fold(this)(v =>
+                                    next(Toggle.attrChannel(element, key, off, v, kind.strip(_, e.name), s))
+                                )
+                        end match
+                    case on: Boolean => if on then next(element.withAttrs(e.write(element.attrs, kind))) else this
+                end match
+            end entry
+
+            private def attr(name: String, off: Maybe[String], value: String, strip: Attrs => Attrs)(held: => Element): Toggle[S] =
+                cond match
+                    case s: Signal[Boolean] @unchecked => next(Toggle.attrChannel(element, name, off, value, strip, s))
+                    case on: Boolean                   => if on then next(held) else this
+
+            private def flag(name: String, off: Boolean, v: Boolean)(held: => Element): Toggle[S] = cond match
+                case s: Signal[Boolean] @unchecked => next(Toggle.boolChannel(element, name, off, v, s))
+                case on: Boolean                   => if on then next(held) else this
+        end Toggle
+
+        object Toggle:
+            private[kyo] def of[S](el: Element, cond: Prop[Boolean]): Toggle[S] = new Toggle(el, cond)
+
+            private given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
+
+            // Each channel below is one the toggle binds, named in `Attrs.toggled`, so a later toggle on the same name composes
+            // with it; a channel some setter bound is the value, and the toggle leaves it.
+
+            /** The class `name` on while `s` holds: nothing where the element carries it already, or-ed with a channel a toggle bound. */
+            private[kyo] def classChannel(el: Element, name: String, s: Signal[Boolean]): Element =
+                given Frame = el.frame
+                val a       = el.attrs
+                if a.cssClasses.contains(name) then el
+                else
+                    a.reactiveClasses.get(name) match
+                        case Some(was) =>
+                            el.withAttrs(a.copy(reactiveClasses =
+                                a.reactiveClasses.updated(name, s.combineLatest(was).map((on, w) => on || w))
+                            ))
+                        case None => el.withAttrs(a.copy(reactiveClasses = a.reactiveClasses.updated(name, s)))
+                end if
+            end classChannel
+
+            /** The attribute `name` at `value` while `s` holds, and `off` (what the element had) while not. */
+            private[kyo] def attrChannel(
+                el: Element,
+                name: String,
+                off: Maybe[String],
+                value: String,
+                strip: Attrs => Attrs,
+                s: Signal[Boolean]
+            ): Element =
+                given Frame = el.frame
+                val a       = el.attrs
+                if a.toggled.contains(name) then
+                    val was = a.reactiveMaybeAttrs(name)
+                    el.withAttrs(a.copy(reactiveMaybeAttrs =
+                        a.reactiveMaybeAttrs.updated(name, s.combineLatest(was).map((on, w) => if on then Present(value) else w))
+                    ))
+                else if a.reactiveAttrs.contains(name) || a.reactiveMaybeAttrs.contains(name) || off == Present(value) then el
+                else
+                    val stripped = strip(a)
+                    el.withAttrs(stripped.copy(
+                        reactiveMaybeAttrs = stripped.reactiveMaybeAttrs.updated(name, s.map(on => if on then Present(value) else off)),
+                        toggled = stripped.toggled + name
+                    ))
+                end if
+            end attrChannel
+
+            /** The attribute `name` at what `value` holds while `s` holds, and `off` (what the element had) while not or while `value`
+              * holds `Absent`.
+              */
+            private[kyo] def attrSignalChannel(
+                el: Element,
+                name: String,
+                off: Maybe[String],
+                value: Signal[Maybe[String]],
+                strip: Attrs => Attrs,
+                s: Signal[Boolean]
+            ): Element =
+                given Frame = el.frame
+                val a       = el.attrs
+                if a.toggled.contains(name) then
+                    val was = a.reactiveMaybeAttrs(name)
+                    el.withAttrs(a.copy(reactiveMaybeAttrs =
+                        a.reactiveMaybeAttrs.updated(
+                            name,
+                            s.combineLatest(value).combineLatest(was).map { case ((on, v), w) => if on then v.orElse(w) else w }
+                        )
+                    ))
+                else if a.reactiveAttrs.contains(name) || a.reactiveMaybeAttrs.contains(name) then el
+                else
+                    val stripped = strip(a)
+                    el.withAttrs(stripped.copy(
+                        reactiveMaybeAttrs =
+                            stripped.reactiveMaybeAttrs.updated(
+                                name,
+                                s.combineLatest(value).map((on, v) => if on then v.orElse(off) else off)
+                            ),
+                        toggled = stripped.toggled + name
+                    ))
+                end if
+            end attrSignalChannel
+
+            /** The boolean attribute `name` at `v` while `s` holds, and `off` (the element's own value) while not. */
+            private[kyo] def boolChannel(el: Element, name: String, off: Boolean, v: Boolean, s: Signal[Boolean]): Element =
+                given Frame = el.frame
+                val a       = el.attrs
+                if a.toggled.contains(name) then
+                    val was = a.reactiveBoolAttrs(name)
+                    el.withAttrs(a.copy(reactiveBoolAttrs =
+                        a.reactiveBoolAttrs.updated(name, s.combineLatest(was).map((on, w) => if on then v else w))
+                    ))
+                else if a.reactiveBoolAttrs.contains(name) || off == v then el
+                else
+                    el.withAttrs(a.copy(
+                        reactiveBoolAttrs = a.reactiveBoolAttrs.updated(name, if v then s else s.map(!_)),
+                        toggled = a.toggled + name
+                    ))
+                end if
+            end boolChannel
+
+            /** The element silent (`v`) while `s` holds, and as silent as it was while not. */
+            private[kyo] def silenceChannel(el: Element, v: Boolean, s: Signal[Boolean]): Element =
+                given Frame = el.frame
+                val a       = el.attrs
+                a.silentSignal match
+                    case Present(was) if a.toggled.contains(silentKey) =>
+                        el.withAttrs(a.copy(silentSignal = Present(s.combineLatest(was).map((on, w) => if on then v else w))))
+                    case Present(_)              => el
+                    case Absent if a.silent == v => el
+                    case Absent                  =>
+                        el.withAttrs(a.copy(silentSignal = Present(if v then s else s.map(!_)), toggled = a.toggled + silentKey))
+                end match
+            end silenceChannel
+
+            /** The name `Attrs.toggled` keeps for the silence channel, which has no attribute of its own. */
+            private val silentKey = "data-kyo-ev"
+        end Toggle
+
+        // ---- aria and data entries ----
+
+        /** How `aria(...)` and `data(...)` write a value of type `V`, picked by the value's static type where the call is compiled: a
+          * `Signal[Boolean]` and a `Signal[String]` are told apart there, and a value of a type with no instance is a type error there.
+          *
+          * A value writes what it is: a `String` itself, `true` and `false` as `"true"` and `"false"`, an `Int`, `Long` or `Double`
+          * its `toString`. A `Maybe` writes what it holds, and `Absent` writes nothing, so what the attribute had before stays. A
+          * signal is the attribute's channel, patched in place on emission with no re-render: a signal of a value always writes the
+          * attribute, a signal of a `Maybe` leaves it out while it holds `Absent`. Where a channel of a name is bound it is the
+          * value, in either setter order (the precedence rule above `withReactiveAttr`).
+          *
+          * The instances, for `B` one of `String`, `Boolean`, `Int`, `Long` and `Double`:
+          *
+          *   - `UI.Prop[B]`, so `B` and `Signal[B]`;
+          *   - `Maybe[UI.Prop[B]]`, so `Maybe[B]` and `Maybe[Signal[B]]`;
+          *   - `UI.Prop[Maybe[B]]`, so `Signal[Maybe[B]]`.
+          *
+          * No other type has one, a `Maybe` of a `Maybe` neither: a value of another type is turned into one of these by its caller,
+          * since the form it is written in is a decision of its own (a date, a percentage).
+          *
+          * @tparam V
+          *   the value type the instance writes
+          */
+        sealed abstract class AttrValue[-V]:
+
+            /** `a` with the attribute `name` of `kind` written from `v`. */
+            private[kyo] def write(a: Attrs, kind: AttrKind, name: String, v: V)(using Frame): Attrs
+
+            /** `v` as a [[kyo.UI.Ast.Toggle]] applies it: the value, none, or a signal of the value. */
+            private[kyo] def held(v: V)(using Frame): Maybe[String] | Signal[Maybe[String]]
+        end AttrValue
+
+        object AttrValue extends AttrValueOfMaybe:
+
+            /** A `B`, constant or a signal. `plain` says that `B` is `String`, so a signal is the channel as it is. */
+            final private class OfProp[B](show: B => String, plain: Boolean) extends AttrValue[UI.Prop[B]]:
+                private def shown(s: Signal[B])(using Frame): Signal[String] =
+                    // Unsafe: `plain` is only set for `B = String`.
+                    if plain then s.asInstanceOf[Signal[String]] else s.map(show)
+                private[kyo] def write(a: Attrs, kind: AttrKind, name: String, v: UI.Prop[B])(using Frame): Attrs = v match
+                    case s: Signal[B] @unchecked => a.copy(reactiveAttrs = a.reactiveAttrs.updated(kind.key(name), shown(s)))
+                    // Unsafe: what is no signal here is the `B` the union names.
+                    case b => kind.static(a, name, show(b.asInstanceOf[B]))
+                private[kyo] def held(v: UI.Prop[B])(using Frame): Maybe[String] | Signal[Maybe[String]] = v match
+                    case s: Signal[B] @unchecked => shown(s).map(t => Present(t): Maybe[String])
+                    // Unsafe: what is no signal here is the `B` the union names.
+                    case b => Present(show(b.asInstanceOf[B]))
+            end OfProp
+
+            /** A `Maybe` of a `B` or of a signal of one: what it holds, or nothing. */
+            final private class OfMaybeProp[B](inner: AttrValue[UI.Prop[B]]) extends AttrValue[Maybe[UI.Prop[B]]]:
+                private[kyo] def write(a: Attrs, kind: AttrKind, name: String, v: Maybe[UI.Prop[B]])(using Frame): Attrs =
+                    v.fold(a)(inner.write(a, kind, name, _))
+                private[kyo] def held(v: Maybe[UI.Prop[B]])(using Frame): Maybe[String] | Signal[Maybe[String]] =
+                    v.fold(Absent: Maybe[String] | Signal[Maybe[String]])(inner.held(_))
+            end OfMaybeProp
+
+            given string: AttrValue[UI.Prop[String]]   = OfProp[String](identity, plain = true)
+            given boolean: AttrValue[UI.Prop[Boolean]] = OfProp[Boolean](_.toString, plain = false)
+            given int: AttrValue[UI.Prop[Int]]         = OfProp[Int](_.toString, plain = false)
+            given long: AttrValue[UI.Prop[Long]]       = OfProp[Long](_.toString, plain = false)
+            given double: AttrValue[UI.Prop[Double]]   = OfProp[Double](_.toString, plain = false)
+
+            given maybeString: AttrValue[Maybe[UI.Prop[String]]]   = OfMaybeProp(string)
+            given maybeBoolean: AttrValue[Maybe[UI.Prop[Boolean]]] = OfMaybeProp(boolean)
+            given maybeInt: AttrValue[Maybe[UI.Prop[Int]]]         = OfMaybeProp(int)
+            given maybeLong: AttrValue[Maybe[UI.Prop[Long]]]       = OfMaybeProp(long)
+            given maybeDouble: AttrValue[Maybe[UI.Prop[Double]]]   = OfMaybeProp(double)
+        end AttrValue
+
+        /** The instances over a signal of a `Maybe`, below the ones in [[AttrValue]]: a plain `Maybe[B]` fits both `Maybe[UI.Prop[B]]`
+          * and `UI.Prop[Maybe[B]]`, and writes the same through either, so the nearer one is taken.
+          */
+        sealed trait AttrValueOfMaybe:
+
+            /** A `Maybe[B]`, constant or a signal: the value while it holds one, no attribute while it holds `Absent`. `plain` says
+              * that `B` is `String`, so a signal is the channel as it is.
+              */
+            final private class OfPropMaybe[B](show: B => String, plain: Boolean) extends AttrValue[UI.Prop[Maybe[B]]]:
+                private def shown(s: Signal[Maybe[B]])(using Frame): Signal[Maybe[String]] =
+                    // Unsafe: `plain` is only set for `B = String`.
+                    if plain then s.asInstanceOf[Signal[Maybe[String]]] else s.map(_.map(show))
+                private[kyo] def write(a: Attrs, kind: AttrKind, name: String, v: UI.Prop[Maybe[B]])(using Frame): Attrs = v match
+                    case s: Signal[Maybe[B]] @unchecked =>
+                        a.copy(reactiveMaybeAttrs = a.reactiveMaybeAttrs.updated(kind.key(name), shown(s)))
+                    // Unsafe: what is no signal here is the `Maybe[B]` the union names.
+                    case m => m.asInstanceOf[Maybe[B]].fold(a)(b => kind.static(a, name, show(b)))
+                private[kyo] def held(v: UI.Prop[Maybe[B]])(using Frame): Maybe[String] | Signal[Maybe[String]] = v match
+                    case s: Signal[Maybe[B]] @unchecked => shown(s)
+                    // Unsafe: what is no signal here is the `Maybe[B]` the union names.
+                    case m => m.asInstanceOf[Maybe[B]].map(show)
+            end OfPropMaybe
+
+            given signalMaybeString: AttrValue[UI.Prop[Maybe[String]]]   = OfPropMaybe[String](identity, plain = true)
+            given signalMaybeBoolean: AttrValue[UI.Prop[Maybe[Boolean]]] = OfPropMaybe[Boolean](_.toString, plain = false)
+            given signalMaybeInt: AttrValue[UI.Prop[Maybe[Int]]]         = OfPropMaybe[Int](_.toString, plain = false)
+            given signalMaybeLong: AttrValue[UI.Prop[Maybe[Long]]]       = OfPropMaybe[Long](_.toString, plain = false)
+            given signalMaybeDouble: AttrValue[UI.Prop[Maybe[Double]]]   = OfPropMaybe[Double](_.toString, plain = false)
+        end AttrValueOfMaybe
+
+        /** The attribute family an entry is written to, `aria-*` or `data-*`. */
+        private[kyo] enum AttrKind(val prefix: String) derives CanEqual:
+            case Aria extends AttrKind("aria-")
+            case Data extends AttrKind("data-")
+
+            /** The attribute's full name, the name a channel is bound under. */
+            def key(name: String): String = prefix + name
+
+            /** `a` with the static value `v` of `name`. */
+            def static(a: Attrs, name: String, v: String): Attrs = this match
+                case Aria => a.copy(ariaAttrs = a.ariaAttrs.updated(name, v))
+                case Data => a.copy(dataAttrs = a.dataAttrs.updated(name, v))
+
+            /** The static value of `name` in `a`, if any. */
+            def own(a: Attrs, name: String): Maybe[String] = this match
+                case Aria => Maybe.fromOption(a.ariaAttrs.get(name))
+                case Data => Maybe.fromOption(a.dataAttrs.get(name))
+
+            /** `a` without the static value of `name`. */
+            def strip(a: Attrs, name: String): Attrs = this match
+                case Aria => a.copy(ariaAttrs = a.ariaAttrs - name)
+                case Data => a.copy(dataAttrs = a.dataAttrs - name)
+
+            /** Refuses a name the framework reserves: a `data-kyo-*` attribute is kyo-ui's own. */
+            def check(name: String): Unit =
+                if this == Data && name.startsWith("kyo-") then
+                    throw new IllegalArgumentException(
+                        s"data-* names must not start with 'kyo-'; the kyo- prefix is reserved by the framework. Got: kyo-${name.stripPrefix("kyo-")}"
+                    )
+        end AttrKind
+
+        /** One `aria-*` or `data-*` attribute for [[kyo.UI.Ast.Element.aria]] and [[kyo.UI.Ast.Element.data]]: a name, the part after
+          * `aria-` or `data-`, and a value of a type with an [[AttrValue]], which decides how the value is written.
+          *
+          * A pair converts to an entry where a setter takes entries, with no import. The key is an [[kyo.Aria]] for `aria` and a
+          * [[kyo.Data]] for `data`, each built by its interpolator or named by its constant:
+          * {{{
+          * el.aria(Aria.label -> name, aria"aria-pressed" -> checked, aria"aria-valuemin" -> 0)
+          * el.data(data"data-vs-first" -> firstIdx)
+          * }}}
+          *
+          * A group of entries to hand to several setters is built with [[Entry.of]] and spread:
+          * {{{
+          * val range = Entry.of(Aria.valuemin -> 0, Aria.valuemax -> max)
+          * el.aria(range*)
+          * }}}
+          */
+        final class Entry private[kyo] (
+            private[kyo] val name: String,
+            value: Any,
+            writer: AttrValue[Nothing],
+            kind: AttrKind
+        ):
+
+            // Unsafe: `writer` is the instance the conversion found for `value`'s static type.
+            private def any: AttrValue[Any] = writer.asInstanceOf[AttrValue[Any]]
+
+            /** Refuses an entry whose key is of the other kind: an `Aria` pair given to `data(...)`, or the reverse. The entry types
+              * are shared by both setters, so the kind is checked when the entry is written.
+              */
+            private[kyo] def checkKind(into: AttrKind): Unit =
+                if kind != into then
+                    val article = if kind == AttrKind.Aria then "an" else "a"
+                    throw new IllegalArgumentException(
+                        s"the key '${kind.prefix}$name' is $article ${kind.toString.toLowerCase} key, and this setter takes ${into.toString.toLowerCase} keys"
+                    )
+
+            /** `a` with this entry written as an attribute of `kind`. */
+            private[kyo] def write(a: Attrs, into: AttrKind)(using Frame): Attrs =
+                checkKind(into)
+                into.check(name)
+                any.write(a, into, name, value)
+            end write
+
+            /** The value as a [[kyo.UI.Ast.Toggle]] applies it. */
+            private[kyo] def held(using Frame): Maybe[String] | Signal[Maybe[String]] = any.held(value)
+        end Entry
+
+        object Entry:
+
+            /** The entries given, to keep in a `val` or hand to several setters: `el.aria(range*)`. A group needs this helper because a
+              * pair converts to an entry only where a parameter takes entries, which `Seq.apply` and `Chunk.apply` do not.
+              */
+            def of(entries: into[Entry]*): Chunk[Entry] = Chunk.from(entries)
+
+            /** A pair `key -> value` where the key is an [[kyo.Aria]], where `value`'s type has an [[AttrValue]]: an `aria` entry. */
+            given keyed[V](using v: AttrValue[V]): Conversion[(Aria, V), Entry] =
+                p => new Entry(Aria.name(p._1), p._2, v, AttrKind.Aria)
+
+            /** A pair `key -> value` where the key is a [[kyo.Data]], where `value`'s type has an [[AttrValue]]: a `data` entry. */
+            given dataKeyed[V](using v: AttrValue[V]): Conversion[(Data, V), Entry] =
+                p => new Entry(Data.name(p._1), p._2, v, AttrKind.Data)
+
+            /** The entry `key -> value` where the value may be a signal: the form `UI.reactive` gives a pair whose value reads, so that
+              * the read is the entry's channel, as it is for any setter that takes a `UI.Prop`. `data` says the key is a data key.
+              */
+            private[kyo] def channel[V](data: Boolean, name: String, value: UI.Prop[V])(using v: AttrValue[UI.Prop[V]]): Entry =
+                new Entry(name, value, v, if data then AttrKind.Data else AttrKind.Aria)
+
+            /** `a` with each of `entries` written as an attribute of `kind`, in order. */
+            private[kyo] def writeAll(a: Attrs, entries: Seq[Entry], kind: AttrKind)(using Frame): Attrs =
+                entries.foldLeft(a)((acc, e) => e.write(acc, kind))
+        end Entry
 
         // ---- Interactive trait (event handlers + tabIndex) ----
 
@@ -2549,7 +3055,7 @@ object UI:
               * `SignalRef` holds) is not empty, so a page shown before the client attaches is right. Emits
               * `data-kyo-filled`, which both clients read through `kyo.internal.FilledClass`.
               *
-              * Declarative for the reason [[preventScrollKeys]] is: a handler would learn of the text only after a round
+              * Declarative for the reason `preventScrollKeys` is: a handler would learn of the text only after a round
               * trip, and of an unbound field's text not at all.
               */
             def filledClass(name: String): Self =
@@ -2727,12 +3233,14 @@ object UI:
             // Declarative reactive channels: the element renders each signal's current value at SSR, then an
             // observer (started in ReactiveUI.subscribeScoped) patches it IN PLACE on emission (no re-render).
             // reactiveAttrs: fully-qualified name -> value (aria/placeholder/title(sig)); reactiveBoolAttrs:
-            // present while true (disabled/readOnly(sig)); reactiveClasses: classList.toggle (cssClass(name, sig)).
+            // present while true (disabled/readOnly(sig)); reactiveClasses: classList.toggle (when(sig)(_.cssClass(name))).
             reactiveAttrs: Map[String, Signal[String]] = Map.empty,
             reactiveBoolAttrs: Map[String, Signal[Boolean]] = Map.empty,
-            // Attributes a signal may leave out (ariaFlag(sig)): the value while Present, no attribute while Absent.
+            // Attributes a signal may leave out (an aria or data entry of a signal of a Maybe, a toggle's entry): the value while Present, no attribute while Absent.
             reactiveMaybeAttrs: Map[String, Signal[Maybe[String]]] = Map.empty,
             reactiveClasses: Map[String, Signal[Boolean]] = Map.empty,
+            // Classes whose name a signal holds (cssClass.matching(sig)), written after the toggled ones, in the order they were set.
+            reactiveClassNames: Chunk[Signal[Maybe[String]]] = Chunk.empty,
             // The inline-style channel (inlineStyle(sig)): its declarations are written inline at render and patched with
             // HtmlOp.SetStyleByPath on emission.
             reactiveStyle: Maybe[Signal[Style]] = Absent,
@@ -2744,11 +3252,15 @@ object UI:
             // bound it is the value, as for `silent`.
             partial: Boolean = false,
             partialSignal: Maybe[Signal[Boolean]] = Absent,
-            partialKeep: Set[String] = Set.empty
+            partialKeep: Set[String] = Set.empty,
+            // The channels a `when` over a signal bound (by attribute name; the silence channel as `data-kyo-ev`), which a later
+            // toggle on the same name composes with; a channel a setter bound is the value, and a toggle leaves it (UI.Ast.Toggle).
+            toggled: Set[String] = Set.empty
         ):
             /** Whether any reactive channel is bound here. Every element of a render asks, so it allocates nothing; [[kyo.internal.Channels.of]] is the channels themselves. */
             def hasChannels: Boolean =
                 reactiveAttrs.nonEmpty || reactiveMaybeAttrs.nonEmpty || reactiveBoolAttrs.nonEmpty || reactiveClasses.nonEmpty ||
+                    reactiveClassNames.nonEmpty ||
                     reactiveStyle.nonEmpty || silentSignal.nonEmpty || partialSignal.nonEmpty
         end Attrs
 

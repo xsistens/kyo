@@ -15,7 +15,7 @@ class DomBackendChannelTest extends kyo.test.Test[Any]:
             text <- Signal.initRef("before")
             off  <- Signal.initRef(false)
             ui = UI.div(
-                UI.span("x").id("chan-class").cssClass("hot", hot: Signal[Boolean]),
+                UI.span("x").id("chan-class").when(hot: Signal[Boolean])(_.cssClass("hot")),
                 UI.span("y").id("chan-attr").title(text: Signal[String]),
                 UI.input.id("chan-bool").disabled(off: Signal[Boolean])
             )

@@ -567,7 +567,7 @@ class DomBackendTest extends UITest:
                 UI.button("tick").id("dtick").onClick(tick.getAndUpdate(_ + 1).unit),
                 // dhost is CONST (only a reactive aria-label, no ref-bound value), so its label can change only
                 // via the in-place attr patch, proving no re-render/re-mount.
-                UI.div.id("dhost").aria("label", lbl)(UI.span("x").id("dchild")),
+                UI.div.id("dhost").aria(Aria.label -> lbl)(UI.span("x").id("dchild")),
                 tick.map(t => UI.span(s"t:$t").id("dtxt")),
                 UI.button("relabel").id("drelabel").onClick(lbl.set("second"))
             )
@@ -592,7 +592,7 @@ class DomBackendTest extends UITest:
             yield UI.div(
                 UI.button("relabel").id("mrelabel").onClick(lbl.set("m-second")),
                 waitingMount {
-                    Signal.initRef(0).map(_ => UI.div.id("mhost").aria("label", lbl)(UI.span("y").id("mchild")))
+                    Signal.initRef(0).map(_ => UI.div.id("mhost").aria(Aria.label -> lbl)(UI.span("y").id("mchild")))
                 }.placeholder(UI.empty)
             )
         withUI(app) {
@@ -641,7 +641,7 @@ class DomBackendTest extends UITest:
                 on   <- Signal.initRef(false)
             yield UI.div(
                 UI.button("tick").id("ctick").onClick(tick.getAndUpdate(_ + 1).unit),
-                UI.div.id("chost").cssClass("base").cssClass("hot", on)(UI.span("z").id("cchild")),
+                UI.div.id("chost").cssClass("base").when(on)(_.cssClass("hot"))(UI.span("z").id("cchild")),
                 tick.map(t => UI.span(s"t:$t").id("ctxt")),
                 UI.button("toggle").id("ctoggle").onClick(on.getAndUpdate(b => !b).unit)
             )

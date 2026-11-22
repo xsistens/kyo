@@ -1148,6 +1148,32 @@ private[kyo] object ReactiveUI:
                     end match
                 end bindStyle
 
+                /** A class-name channel. A change takes the name it held off and puts the one it holds on: the name it held is
+                  * what this observer last wrote, seeded with what the render wrote, which only the observer knows.
+                  */
+                def bindClassName(sig: Signal[Maybe[String]], seen: Maybe[Maybe[String]]): Unit < (Async & Scope) =
+                    given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
+                    // Unsafe: one channel's own last write, read and replaced in one step by whichever of its writes runs, on
+                    // the writer's stack (the synchronous sink) or on its fiber; it never leaves this observer.
+                    val last = new java.util.concurrent.atomic.AtomicReference[Maybe[String]](seen.flatten)
+                    def step(next: Maybe[String]): Chunk[(String, Boolean)] =
+                        val held = last.getAndSet(next)
+                        if held == next then Chunk.empty
+                        else held.toChunk.map(_ -> false) ++ next.toChunk.map(_ -> true)
+                    end step
+                    def event = cheapEvent(path, Absent, nodeFrame, UI.RenderKind.Channel("class"))
+                    exchange.classPatcherNow match
+                        case Present(patch) =>
+                            val write = reporting[Maybe[String]](devSink, event)(next => step(next).foreach((n, on) => patch(path, n, on)))
+                            bindChannel(sig, seen, write, releases)
+                        case Absent =>
+                            val write = reportingAsync[Maybe[String]](devSink, event)(next =>
+                                Sync.defer(step(next)).map(Kyo.foreachDiscard(_)((n, on) => exchange.onClassPatch(path, n, on)))
+                            )
+                            Fiber.init(sig.observe(seen, Signal.defaultRepairInterval)(write)).unit
+                    end match
+                end bindClassName
+
                 bindAll(channels.attrs, rendered.attrs, exchange.attrPatcherNow, exchange.onAttrPatch(path, _, _))
                     .andThen {
                         // An attribute a signal may leave out: set while it holds a value, taken away (the boolean op, off) while not.
@@ -1166,6 +1192,9 @@ private[kyo] object ReactiveUI:
                     }
                     .andThen(bindAll(channels.bools, rendered.bools, exchange.boolAttrPatcherNow, exchange.onBoolAttrPatch(path, _, _)))
                     .andThen(bindAll(channels.classes, rendered.classes, exchange.classPatcherNow, exchange.onClassPatch(path, _, _)))
+                    .andThen(Kyo.foreachDiscard(channels.classNames.zipWithIndex)((sig, i) =>
+                        bindClassName(sig, Maybe.fromOption(rendered.classNames.lift(i)))
+                    ))
                     .andThen(channels.style.fold(Kyo.unit: Unit < (Async & Scope))(bindStyle))
             }
     end forkChannelObservers

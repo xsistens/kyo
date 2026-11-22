@@ -22,7 +22,7 @@ class DomBackendMarkerTest extends kyo.test.Test[Any]:
             ui = UI.div(
                 UI.ul(rows.foreachKeyed(identity) { k =>
                     UI.li(
-                        UI.span(k).cssClass("label").cssClass("hot", hot: Signal[Boolean]),
+                        UI.span(k).cssClass("label").when(hot: Signal[Boolean])(_.cssClass("hot")),
                         UI.button("x").title(title: Signal[String]).onClick(()),
                         UI.input.value(k)
                     ).id(s"row-$k")

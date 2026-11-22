@@ -281,13 +281,16 @@ class HtmlRendererReactiveRangesTest extends UITest:
                 deepOuter.map(_ => (deepMiddle.map(_ => (deepValue.map(value => UI.span(value).id("deep-value")): UI)): UI)),
                 UI.table(
                     sectioned.map { authored =>
-                        if authored then UI.tbody(UI.tr(UI.td("authored"))).id("authored-body").data("state", "authored"): UI
+                        if authored then
+                            UI.tbody(UI.tr(UI.td("authored"))).id("authored-body").data(data"data-state" -> "authored"): UI
                         else UI.tr(UI.td("row").id("transition-row")): UI
                     }
                 ).id("transition-table"),
                 UI.table(
                     foreachSectioned.foreach { authored =>
-                        if authored then UI.tbody(UI.tr(UI.td("foreach-authored"))).id("foreach-authored-body").data("state", "authored")
+                        if authored then
+                            UI.tbody(UI.tr(UI.td("foreach-authored"))).id("foreach-authored-body").data(data"data-state" ->
+                                "authored")
                         else UI.tr(UI.td("foreach-row").id("foreach-transition-row"))
                     }
                 ).id("foreach-transition-table"),
@@ -295,7 +298,8 @@ class HtmlRendererReactiveRangesTest extends UITest:
                     nestedTableOuter.map(_ =>
                         (nestedTableSectioned.map { authored =>
                             if authored then
-                                UI.tbody(UI.tr(UI.td("nested-authored"))).id("nested-authored-body").data("state", "authored"): UI
+                                UI.tbody(UI.tr(UI.td("nested-authored"))).id("nested-authored-body").data(data"data-state" ->
+                                    "authored"): UI
                             else UI.tr(UI.td("nested-row").id("nested-transition-row")): UI
                         }: UI)
                     )

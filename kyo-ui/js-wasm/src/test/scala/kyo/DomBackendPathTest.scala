@@ -15,7 +15,7 @@ class DomBackendPathTest extends kyo.test.Test[Any]:
         for
             rows <- Signal.initRef(Chunk(key))
             hot  <- Signal.initRef(false)
-            ui    = UI.div(UI.ul(rows.foreachKeyed(identity)(_ => UI.input.id("quoted-row").cssClass("hot", hot: Signal[Boolean]))))
+            ui    = UI.div(UI.ul(rows.foreachKeyed(identity)(_ => UI.input.id("quoted-row").when(hot: Signal[Boolean])(_.cssClass("hot")))))
             ready = new DomTestEnv.MountReady
             fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
             _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("quoted-row") != null))
