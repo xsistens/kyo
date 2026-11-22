@@ -370,6 +370,33 @@ object UI:
       */
     def fragment[C <: UI](cs: C*)(using Frame): Fragment[C] = Fragment[C](Chunk.from(cs))
 
+    /** Several children with no container around them, for a container's argument list: `div(kids*)`. A helper that draws a part of
+      * an element's content hands it back as `Children`, and another `UI.children` takes it as one part.
+      */
+    type Children = Seq[HtmlChildVal]
+
+    object Children:
+        /** One part of [[UI.children]]: a child, a `Maybe` of one, a `Seq` of them, or [[Children]]. Each is made implicitly and
+          * checked like a literal child, on its static element type, so an SVG node does not fit an HTML container in any form.
+          */
+        final class Part private[kyo] (private[kyo] val values: Children) extends AnyVal
+
+        object Part:
+            implicit def one[T <: UI](t: T)(using AsHtmlChild[T]): Part             = new Part(Seq(new HtmlChildVal(t)))
+            implicit def optional[T <: UI](m: Maybe[T])(using AsHtmlChild[T]): Part =
+                new Part(m.fold(Seq.empty[HtmlChildVal])(t => Seq(new HtmlChildVal(t))))
+            implicit def many[T <: UI](xs: Seq[T])(using AsHtmlChild[T]): Part = new Part(xs.map(new HtmlChildVal(_)))
+            implicit def drawn(cs: Children): Part                             = new Part(cs)
+        end Part
+    end Children
+
+    /** The children in `parts`, in order, for a container's argument list: `div(UI.children(icon, label, rows)*)`. An implicit
+      * conversion does not reach into a splat, so a list needs this. An absent part adds nothing, a list adds its elements. The tree
+      * gets no extra level, unlike `fragment`, so the children keep the paths they would have as literal children.
+      */
+    def children(parts: Children.Part*): Children =
+        if parts.sizeIs == 1 then parts.head.values else parts.flatMap(_.values)
+
     /** Inline HTML passthrough: emits `html` verbatim into the rendered output without any escaping.
       *
       * This is the framework's single deliberate escape hatch for trusted HTML content that cannot be expressed through the normal `UI`
