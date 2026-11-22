@@ -3,6 +3,7 @@ package kyo.internal
 import DragSessions.*
 import EventDispatch.*
 import MountRegions.*
+import RowRegions.*
 import kyo.*
 import kyo.Svg
 import kyo.UI.*
@@ -13,7 +14,7 @@ private[kyo] case class ReactiveUI(
     signal: Signal[UI],
     isConst: Boolean,
     children: Seq[ReactiveUI],
-    handle: (Seq[String], UIEvent) => Boolean < Async,
+    handle: (Seq[String], UIEvent) => Boolean < (Async & Abort[Any]),
     region: ReactiveRegion,
     contentContext: ReactiveRegion.RegionIdentity,
     parentContext: ReactiveRegion.ParentContext,
@@ -66,14 +67,6 @@ private[kyo] object ReactiveUI:
 
     import UI.Ast.*
 
-    /** The app's sink for non-fatal failures, read by [[kyo.UI.notify]] and installed by
-      * [[kyo.UI.notices]]. Inheritable, so it reaches mount effects, the fibers they fork and the
-      * event handlers of the tree below the installation point, all of which descend from the runner's
-      * caller.
-      */
-    private[kyo] val noticeSink: Local[Maybe[Throwable => Unit < Async]] =
-        Local.init(Maybe.empty[Throwable => Unit < Async])
-
     def init(
         path: Seq[String],
         signal: Signal[UI],
@@ -86,7 +79,7 @@ private[kyo] object ReactiveUI:
         rows: Long = 0L,
         deepRows: Chunk[Int] = Chunk.empty
     )(
-        handle: (Seq[String], UIEvent) => Boolean < Async
+        handle: (Seq[String], UIEvent) => Boolean < (Async & Abort[Any])
     )(using frame: Frame): ReactiveUI =
         ReactiveUI(
             path,
@@ -326,7 +319,7 @@ private[kyo] object ReactiveUI:
                 val paintedPlaceholder: Maybe[UI] =
                     if b.display.isEmpty && b.settings.waits && Boundaries.catchesNow(b.child) then b.settings.placeholderView
                     else Absent
-                def toPlaceholder(ph: UI, targetPath: Seq[String], event: UIEvent): Boolean < Async =
+                def toPlaceholder(ph: UI, targetPath: Seq[String], event: UIEvent): Boolean < (Async & Abort[Any]) =
                     Sync.Unsafe.defer {
                         val (_, placeholderHandle) =
                             walkStatic(
@@ -345,14 +338,14 @@ private[kyo] object ReactiveUI:
                 // and a range that keeps showing old content while its new content loads takes no event, which would otherwise land
                 // in the new content.
                 val handle: Handler = (targetPath, event) =>
-                    cells.boundary(contentContext).map {
+                    Failures.within(FailureFrame.Boundary(b.settings))(cells.boundary(contentContext).map {
                         case Present(gate) if !gate.isRevealed =>
                             gate.livePlaceholder match
                                 case Present(ph) => toPlaceholder(ph, targetPath, event)
                                 case Absent      => true
                         case Absent if paintedPlaceholder.nonEmpty => toPlaceholder(paintedPlaceholder.get, targetPath, event)
                         case _ => cells.held(targetPath).map(held => if held then true else childHandle(targetPath, event))
-                    }
+                    })
                 ReactiveUI(
                     path = path,
                     signal = Signal.initConst(b.child),
@@ -375,14 +368,14 @@ private[kyo] object ReactiveUI:
                 val contentContext = regionIdentity.transparent
                 // The node value is fresh on every dispatch, so the handler finds the live instance through the dispatch table.
                 val handle: Handler = (targetPath, event) =>
-                    cells.lookup(contentContext).map {
-                        case Absent        => true
-                        case Present(cell) =>
-                            cell.current.map {
+                    cells.instance(contentContext).map {
+                        case Absent           => true
+                        case Present(running) =>
+                            running.cell.current.map {
                                 case MountState.Pending(Present(_)) => true
                                 case state                          =>
                                     val content = state.content(spec)
-                                    Sync.Unsafe.defer {
+                                    Failures.within(FailureFrame.Mount(running.supervision))(Sync.Unsafe.defer {
                                         val (_, freshHdl) = walkStatic(
                                             content,
                                             path,
@@ -394,7 +387,7 @@ private[kyo] object ReactiveUI:
                                             deepRows = Chunk.empty
                                         )
                                         freshHdl(targetPath, event)
-                                    }
+                                    })
                             }
                     }
                 ReactiveUI(
@@ -613,7 +606,7 @@ private[kyo] object ReactiveUI:
                             // Every child has a handle, so a segment matching none names a child that has left the page
                             // since the client sent the event; like a missing child of an element, it reaches nothing.
                             idx.filter(i => i >= 0 && i < allHandles.length).map(allHandles(_))
-                                .fold(false: Boolean < Async)(h => h(targetPath, event))
+                                .fold(false: Boolean < (Async & Abort[Any]))(h => h(targetPath, event))
                         else true
                     (allKids, handle)
                 }
@@ -637,7 +630,7 @@ private[kyo] object ReactiveUI:
       * so closing the root scope cascade-tears-down the tree.
       */
     case class Subscription(
-        handle: Handler,
+        handle: (Seq[String], UIEvent) => Boolean < Async,
         private[kyo] val handleValidated: ValidatedHandler,
         lastSignalChangeTime: AtomicRef[Instant],
         private val dragSessionCountFn: () => Int < Sync = () => 0,
@@ -729,12 +722,17 @@ private[kyo] object ReactiveUI:
                 case Present(d) => Kyo.lift(d)
                 case Absent     => MountDispatch.init
             session = new MountSession
-            (rootTable, rootMounts) <- MountTable.root(rui.path, session)
-            _                       <- Scope.ensure(rootTable.evictAll)
-            // The root's pass covers the whole tree, so every identity shown twice anywhere in it is found here.
-            rootPass <- rootMounts.beginWalk(Seq(rui))
-            _        <- subscribeScoped(rui, exchange, signalChangeTime, rootMounts, dispatch, rootPass)
-            _        <- rootMounts.endWalk
+            // The session is a group of its own, released before anything it subscribed is.
+            _ <- ReleaseGroup.owning { group =>
+                for
+                    (rootTable, rootMounts) <- MountTable.root(rui.path, session, group)
+                    _                       <- Scope.ensure(rootTable.evictAll)
+                    // The root's pass covers the whole tree, so every identity shown twice anywhere in it is found here.
+                    rootPass <- rootMounts.beginWalk(Seq(rui))
+                    _        <- subscribeScoped(rui, exchange, signalChangeTime, rootMounts, dispatch, rootPass)
+                    _        <- rootMounts.endWalk
+                yield ()
+            }
             // Keyboard activation is synthesized at the bottom, on the tree's own handler, because the
             // two transports enter at different heights: the browser mount goes through `handle`, and
             // the server-push session through `handleValidated` (UIServer). Wrapping either one alone
@@ -742,8 +740,8 @@ private[kyo] object ReactiveUI:
             // button that stops working rather than one that works twice.
             activating = activatingHandle(rui.handle)
             dragging   = dragHandle(activating, dragSessions, dragMutex, expiryWake, dragLimits)
-            // Every handler is one change: the moves its writes cause are decided once it has ended (see MountTable).
-            validatedHandle: ValidatedHandler = (path, event) => session.within(dragging(path, event))
+            // A handler runs in the session, so a UI.batch inside it finds it; the handler itself is no change of its own (see MountTable).
+            validatedHandle: ValidatedHandler = (path, event) => MountSession.current.let(Present(session))(dragging(path, event))
         yield Subscription(
             (path, event) =>
                 DragProtocol.validateEventAndDomain(event, DragProtocol.Limits.default) match
@@ -1190,7 +1188,8 @@ private[kyo] object ReactiveUI:
                         observed(watch.stamp) { current =>
                             val isFirst = first
                             first = false
-                            step(current, isFirst)
+                            // Each value is a group of its own, released before anything it subscribed is.
+                            ReleaseGroup.owning(_ => step(current, isFirst))
                         }
                     }.map { result =>
                         result.fold(

@@ -2,7 +2,9 @@ package kyo
 
 import kyo.internal.HtmlRenderer
 import kyo.internal.ReactiveRegion
+import kyo.internal.ReactiveUI
 import kyo.internal.RecordingExchange
+import kyo.internal.UIEvent
 
 /** A page that takes every paint the way the client does, replacing the content between a range's markers, and reads the visible
   * text of the result: text inside an element with the `hidden` attribute or inside a `template` is not visible. Tests wait for a
@@ -116,6 +118,23 @@ abstract private[kyo] class UIScreen extends kyo.test.Test[Any]:
             out.toString
         end visible
     end Screen
+
+    def mount[A](ui: UI)(f: Screen => A < (Async & Scope))(using Frame): A < Async =
+        mountWith(ui)((screen, _) => f(screen))
+
+    /** Also hands out the subscription's event handler, which events go to as if the user clicked on the page. */
+    def mountWith[A](ui: UI)(f: (Screen, (Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope))(using
+        Frame
+    ): A < Async =
+        Scope.run {
+            for
+                initial <- HtmlRenderer.render(ui, Seq.empty)
+                screen = new Screen(initial)
+                root <- ReactiveUI.normalize(ui, Seq.empty)
+                sub  <- ReactiveUI.subscribe(root, screen)
+                a    <- f(screen, sub.handle)
+            yield a
+        }
 
 end UIScreen
 

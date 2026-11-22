@@ -21,9 +21,9 @@ extension (e: UI.Ast.Element)
       * `UI.mounted` with `Fiber.init`, and wait for the fiber here. Waiting holds up neither events nor a boundary, since nothing waits
       * for the hook.
       *
-      * A failure the hook leaves is logged, as an event handler's is, and `UI.commands` is available inside it. This is the one place
-      * kyo-ui hands out a raw `dom.Element`, since the libraries it is for take nothing else; it exists only in the browser mount
-      * (`UI.runMount`), the one transport whose code runs where the element is.
+      * A failure the hook leaves goes to the `onFailure` rules around the element, as an event handler's does, and `UI.commands` is
+      * available inside it. This is the one place kyo-ui hands out a raw `dom.Element`, since the libraries it is for take nothing
+      * else; it exists only in the browser mount (`UI.runMount`), the one transport whose code runs where the element is.
       */
     def onAttached(f: dom.Element => Any < (Async & Scope & Abort[Any])): e.Self =
         e.withAttrs(e.attrs.copy(onAttached = Present((el: Any) => f(el.asInstanceOf[dom.Element]))))

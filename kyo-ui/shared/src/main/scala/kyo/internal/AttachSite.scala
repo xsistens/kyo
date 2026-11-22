@@ -7,8 +7,9 @@ import kyo.kernel.ContextEffect
   * that lives as long as the element stays there.
   *
   * Neither can ride the event, which is a wire type. The browser mount dispatches the event with both set here, and dispatch reaches
-  * the element through the same chain a click takes, so the hook meets the mounts around it and the session's `UI.commands`. An
-  * `Attach` that arrives without them, from a server-push client say, starts nothing.
+  * the element through the same chain a click takes, so the hook meets the element's `onFailure` rules, the mounts and boundaries
+  * around it, the session's `UI.commands` and `UI.batch`. An `Attach` that arrives without them, from a server-push client say, starts
+  * nothing.
   */
 private[kyo] object AttachSite:
 
@@ -17,19 +18,14 @@ private[kyo] object AttachSite:
     val local: Local[Maybe[Site]] = Local.init(Maybe.empty[Site])
 
     /** Starts `hook` on a fiber the site's scope owns, so a hook that waits never holds up the dispatch, and closing the scope interrupts
-      * it and releases what it acquired. A failure it leaves is logged, as a failing event handler's is.
+      * it and releases what it acquired. A failure it leaves goes to the rules the dispatch put in effect.
       */
     def start(hook: Any => Any < (Async & Scope & Abort[Any]))(using Frame): Unit < Async =
         local.use {
             case Absent        => Kyo.unit
             case Present(site) =>
                 val run: Unit < Async =
-                    Abort.run[Any](ContextEffect.handleInheritable(Tag[Scope], site.scope)(hook(site.element)).unit).map {
-                        case Result.Success(_)            => Kyo.unit
-                        case Result.Panic(_: Interrupted) => Kyo.unit
-                        case Result.Failure(failure)      => Log.error(s"onAttached hook failed: $failure")
-                        case Result.Panic(t)              => Log.error("onAttached hook panicked", t)
-                    }
+                    Failures.recover(())(ContextEffect.handleInheritable(Tag[Scope], site.scope)(hook(site.element)).unit)
                 ContextEffect.handleInheritable(Tag[Scope], site.scope)(Fiber.init(run)).unit
         }
 end AttachSite
