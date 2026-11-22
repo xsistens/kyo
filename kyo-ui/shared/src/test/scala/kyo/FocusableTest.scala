@@ -832,7 +832,7 @@ class FocusableTest extends UITest:
         // A table cell editor is a number field inside the table's navigation region. The arrows are what step its value,
         // and suppressing them as page scrolls left the field on its first value whatever the reader pressed.
         // The region navigates with its own keys, as the table does, so a keydown listener is attached at all.
-        withUI(UI.div.preventScrollKeys.onKeyDown((_: KeyboardEvent) => ())(UI.numberInput.id("qty").value("5"))) {
+        withUI(UI.div.preventScrollKeys.onKeyDown((_: KeyboardEvent) => ())(UI.numberInput.id("qty").defaultValue("5"))) {
             for
                 _    <- Browser.click(Selector.id("qty"))
                 _    <- Browser.press(Selector.id("qty"), Key.ArrowUp)

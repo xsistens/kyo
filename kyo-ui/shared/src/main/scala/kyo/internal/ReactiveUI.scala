@@ -800,7 +800,7 @@ private[kyo] object ReactiveUI:
             // the server-push session through `handleValidated` (UIServer). Wrapping either one alone
             // suppresses the browser's activation on both while replacing it on only one, which is a
             // button that stops working rather than one that works twice.
-            activating = activatingHandle(assertingHandle(rui.handle, exchange))
+            activating = activatingHandle(assertingHandle(rui.handle, exchange, session))
             dragging   = dragHandle(activating, dragSessions, dragMutex, expiryWake, dragLimits)
             // A handler runs in the session, so a UI.batch inside it finds it; the handler itself is no change of its own (see MountTable).
             validatedHandle: ValidatedHandler = (path, event) => MountSession.current.let(Present(session))(dragging(path, event))
@@ -835,35 +835,35 @@ private[kyo] object ReactiveUI:
             }
         }
 
-    /** The tail of showing a walked value in `table`: the channels of the root it painted, its kids, the end of its pass. */
-    private[internal] def subscribeWalked(
-        path: Seq[String],
-        shown: UI,
-        kids: Seq[ReactiveUI],
-        pass: MountPass,
-        table: MountScope,
-        through: UIExchange,
-        signalChangeTime: AtomicRef[Instant],
-        dispatch: MountDispatch
-    )(using Frame): Unit < (Async & Scope) =
-        forkRootChannels(path, shown, through)
-            .andThen(Kyo.foreachDiscard(kids)(subscribeScoped(_, through, signalChangeTime, table, dispatch, pass)))
-            .andThen(table.endWalk)
-
-    /** Puts back an edit its owner did not take on an element that follows a signal. The browser changed the control before the event got here,
-      * and an owner that declines leaves the signal as it was, so no emission would ever reach the control. Compares once the event has
-      * finished bubbling, and sends through the session's own exchange: content a boundary holds back takes no event, so there is nothing to
-      * wait for. Only an edit records, so every other event goes straight through.
+    /** Puts back an edit on a bound control that the control no longer shows (see [[kyo.UI.Bound]]). The browser changed the control
+      * before the event got here, and an owner that declines, filters or reverts leaves a binding that no emission would ever bring back
+      * to the control.
+      *
+      * The edit runs its handlers first, noting whether its target is a bound control. Only then, once every region the handlers woke has
+      * seen their writes ([[MountSession.awaitRegions]] over the regions as they stood before the edit), the edit is dispatched a second
+      * time without handlers, to read the binding of the element that now stands at the target's place, and the difference to what the
+      * edit carried is sent through the session's own exchange. Comparing after the regions keeps an accepted edit free of writes, and
+      * makes a control a region rebuilt answer with its new binding. Only an edit records, so every other event goes straight through.
       */
-    private def assertingHandle(handle: Handler, exchange: UIExchange)(using Frame): Handler =
+    private def assertingHandle(handle: Handler, exchange: UIExchange, session: MountSession)(using Frame): Handler =
         (path, event) =>
             event match
                 case _: (UIEvent.Input | UIEvent.Change | UIEvent.ChangeChecked | UIEvent.ChangeNumeric) =>
                     for
-                        recorded <- AtomicRef.init(Maybe.empty[UIExchange => Unit < Async])
-                        keep     <- followEdit.let(Present(recorded))(handle(path, event))
-                        send     <- recorded.get
-                        _        <- send.fold(Kyo.unit)(_(exchange))
+                        before <- session.regionsNow
+                        edited <- AtomicBoolean.init(false)
+                        keep   <- controlEdited.let(Present(edited))(handle(path, event))
+                        bound  <- edited.get
+                        _      <-
+                            if !bound then Kyo.unit
+                            else
+                                for
+                                    _     <- session.awaitRegions(before)
+                                    probe <- AtomicRef.init(Maybe.empty[UIExchange => Unit < Async])
+                                    _     <- putBackProbe.let(Present(probe))(handle(path, event))
+                                    send  <- probe.get
+                                    _     <- send.fold(Kyo.unit)(_(exchange))
+                                yield ()
                     yield keep
                 case _ => handle(path, event)
 
@@ -1224,6 +1224,21 @@ private[kyo] object ReactiveUI:
             case Present(row) => Sync.Unsafe.defer(row.add(release))
             case Absent       => Scope.ensure(Sync.defer(release()))
 
+    /** The tail of showing a walked value in `table`: the channels of the root it painted, its kids, the end of its pass. */
+    private[internal] def subscribeWalked(
+        path: Seq[String],
+        shown: UI,
+        kids: Seq[ReactiveUI],
+        pass: MountPass,
+        table: MountScope,
+        through: UIExchange,
+        signalChangeTime: AtomicRef[Instant],
+        dispatch: MountDispatch
+    )(using Frame): Unit < (Async & Scope) =
+        forkRootChannels(path, shown, through)
+            .andThen(Kyo.foreachDiscard(kids)(subscribeScoped(_, through, signalChangeTime, table, dispatch, pass)))
+            .andThen(table.endWalk)
+
     /** How a region or a mount inside a waiting boundary takes its values: each is a pass with a group of its own, and the first one is due
       * from now, so the boundary does not reveal before this has rendered and subscribed what it shows. `shownOf` is what a value paints,
       * `step` shows it through the group.
@@ -1302,6 +1317,8 @@ private[kyo] object ReactiveUI:
                 _ <- deliverMeasured(rui, cause, through)(
                     _.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, painted)
                 )
+                // A run after the first draws over what the reader left in the last one.
+                _ <- if previous.isEmpty then Kyo.unit else reportLosses(rui, Chunk((previous, current)), cause)
                 _ <- release()
                 _ <- subscribeWalked(rui.path, current, newKids, pass, regionMounts, through, signalChangeTime, dispatch)
             yield ()
@@ -1383,6 +1400,22 @@ private[kyo] object ReactiveUI:
     /** Reports content the enclosing render already painted. Zero duration and zero bytes are not a rounding-off: the cost sits
       * in the enclosing region's own event, and charging it twice would make every parent look cheap and every child expensive.
       */
+    /** What `drawnAgain`, content `rui` draws over what it drew before, takes from the reader, one [[kyo.UI.RenderKind.Lost]] per
+      * place. The walk runs only with a sink installed, so the off path reads one `Local` and walks nothing.
+      */
+    private[internal] def reportLosses(rui: ReactiveUI, drawnAgain: Chunk[(Maybe[UI], UI)], cause: UI.RenderCause)(using
+        Frame
+    ): Unit < Sync =
+        Devtools.sink.use { local =>
+            if local.isEmpty || drawnAgain.isEmpty then Kyo.unit
+            else
+                Kyo.foreach(drawnAgain)((before, after) => RerunLosses.of(before, after)).map(found =>
+                    Kyo.foreachDiscard(found.flattenChunk)(loss =>
+                        report(rui, UI.RenderKind.Lost(loss), cause, Absent, Duration.Zero, alsoWasted = false)
+                    )
+                )
+        }
+
     private[internal] def reportUnpainted(rui: ReactiveUI, kind: UI.RenderKind)(using Frame): Unit < Sync =
         report(rui, kind, UI.RenderCause.Created, Absent, Duration.Zero, alsoWasted = false)
 

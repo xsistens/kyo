@@ -89,73 +89,6 @@ private[kyo] object DomBackend:
         js.Dynamic.newInstance(js.Dynamic.global.Function)("h", MorphScript.js).asInstanceOf[js.Function1[js.Any, js.Dynamic]](hooks)
     end morphScript
 
-    /** Mirror a patched `value` onto the field's DOM PROPERTY, which is what an input or textarea actually renders.
-      * The property stops tracking the attribute the first time the user types, so `setAttribute("value", ...)` alone
-      * is invisible on any field that has been touched: a clear button writes the bound ref, the attribute changes,
-      * and the field still shows what was typed. Assigning only on a real difference leaves a focused field's caret
-      * alone, since the echo of the user's own keystroke compares equal. Mirrors `__kyoSyncField` in
-      * HtmlRenderer.clientJs.
-      */
-    private def syncFieldProperty(el: dom.Element, name: String, value: String): Unit =
-        if name == "value" && (el.tagName == "INPUT" || el.tagName == "TEXTAREA") then
-            val dyn = el.asInstanceOf[js.Dynamic]
-            if dyn.value.asInstanceOf[String] != value then
-                dyn.value = value
-                applyFilled(el)
-            end if
-        else if name == "value" && el.tagName == "SELECT" then
-            val dyn = el.asInstanceOf[js.Dynamic]
-            if dyn.value.asInstanceOf[String] != value then dyn.value = value
-        end if
-    end syncFieldProperty
-
-    /** A patch of `checked`: a control shows its PROPERTY once the reader has toggled it, so the attribute alone would not move it. The browser
-      * took the group's selection from the other radios when the reader clicked this one, and the one that held it has no patch of its own
-      * coming, so each bound radio of the group shows what its attribute says again. A free radio's tick stays. Twin of `__kyoSyncChecked`.
-      */
-    private def syncChecked(el: dom.Element, on: Boolean): Unit =
-        val dyn = el.asInstanceOf[js.Dynamic]
-        dyn.checked = on
-        val name = dyn.name.asInstanceOf[String]
-        if dyn.selectDynamic("type").asInstanceOf[String] == "radio" && name.nonEmpty then
-            val radios = document.querySelectorAll("input[type=radio][data-kyo-bound]")
-            var i      = 0
-            while i < radios.length do
-                val radio = radios(i).asInstanceOf[dom.Element]
-                val other = radio.asInstanceOf[js.Dynamic]
-                if other.name.asInstanceOf[String] == name && js.special.strictEquals(other.form, dyn.form) then
-                    other.checked = radio.hasAttribute("checked")
-                i += 1
-            end while
-        end if
-    end syncChecked
-
-    /** `filledClass`: toggles the classes `field` marks (on itself, and on the closest ancestor its selector names) from
-      * whether it holds text. Twin of `__kyoFilled` in HtmlRenderer.clientJs; both read `FilledClass`.
-      */
-    private[kyo] def applyFilled(field: dom.Element): Unit =
-        val self = field.getAttribute(FilledClass.classAttr)
-        val up   = field.getAttribute(FilledClass.upAttr)
-        if self != null || up != null then
-            val text = field.asInstanceOf[js.Dynamic].value
-            val on   = js.typeOf(text) == "string" && FilledClass.filled(text.asInstanceOf[String])
-            if self != null && self.nonEmpty then discard(field.classList.toggle(self, on))
-            if up != null && up.nonEmpty then
-                val target = field.closest(field.getAttribute(FilledClass.targetAttr))
-                if target != null then discard(target.classList.toggle(up, on))
-            end if
-        end if
-    end applyFilled
-
-    /** [[applyFilled]] for every field that carries a marker: after a patch, which may have written a target's `class`
-      * attribute from what the server last knew, and at boot. Twin of `__kyoSweepFilled` in HtmlRenderer.clientJs.
-      */
-    private def sweepFilled(): Unit =
-        if saw(Marker.Filled) then
-            val fs = document.querySelectorAll(s"[${FilledClass.classAttr}],[${FilledClass.upAttr}]")
-            (0 until fs.length).foreach(i => applyFilled(fs(i).asInstanceOf[dom.Element]))
-    end sweepFilled
-
     /** The reconciler of a live run, for the table that holds the two clients to one answer (`DomBackendMorphParityTest`). */
     private[kyo] def morphRun(parent: dom.Element, fromStart: dom.Node, fromEnd: dom.Node, toStart: dom.Node, toEnd: dom.Node): Unit =
         discard(morphScript.run(parent, fromStart, fromEnd, toStart, toEnd))
@@ -272,54 +205,6 @@ private[kyo] object DomBackend:
             new js.WrappedMap(js.Map.empty[String, js.Function1[dom.Event, Unit]])
     end LocalSession
 
-    /** Mark attribute `name` on `el` as owned by the imperative id-addressed channel (SetClassById/SetStyleById),
-      * applied out of the render pass so CSS transitions on the toggled class/style fire. The owned names live in a
-      * `__kyoOwn` expando dict ON the element, so the flag is reclaimed with the node (no session-lived set that only
-      * ever grows) and [[MorphScript]] shields each owned attribute BY NAME. Mirrors `__kyoMark` in HtmlRenderer.clientJs.
-      */
-    private def markOwned(el: dom.Element, name: String): Unit =
-        val d   = el.asInstanceOf[js.Dynamic]
-        val own =
-            if js.isUndefined(d.__kyoOwn) then
-                val fresh = js.Dictionary.empty[Boolean]
-                d.__kyoOwn = fresh.asInstanceOf[js.Any]
-                fresh
-            else d.__kyoOwn.asInstanceOf[js.Dictionary[Boolean]]
-        own.update(name, true)
-    end markOwned
-
-    /** Mount a UI into the page body. */
-    def mount(ui: UI)(using Frame): Unit < (Async & Scope) =
-        mountInto(ui, document.body, NoMountDiagnostics)
-
-    private[kyo] def mount(ui: UI, diagnostics: MountDiagnostics)(using Frame): Unit < (Async & Scope) =
-        mountInto(ui, document.body, diagnostics)
-
-    /** Mount a UI into a specific DOM element selected by CSS selector. */
-    def mount(ui: UI, selector: String)(using Frame): Unit < (Async & Scope) =
-        mount(ui, selector, NoMountDiagnostics)
-
-    private[kyo] def mount(ui: UI, selector: String, diagnostics: MountDiagnostics)(using Frame): Unit < (Async & Scope) =
-        Sync.defer {
-            val target = document.querySelector(selector)
-            if target == null then Abort.panic(UIException(s"Element not found: $selector"))
-            else mountInto(ui, target.asInstanceOf[dom.Element], diagnostics)
-        }
-    end mount
-
-    /** Injects a rendered stylesheet CSS string into the live document.
-      *
-      * The base reset is injected first (idempotently) so it precedes the authored CSS in document
-      * order, matching the SSG page head where `baseCss` is emitted before `head.css`. The reset is a
-      * foundational layer authored stylesheets are meant to override (e.g. `body { font-family }`); if
-      * it were appended AFTER the sheet (as happens when an app calls `runStylesheet` before `runMount`,
-      * which injects the reset), its equal-specificity `body` rule would win on document order and clobber
-      * the app's own `body` font, producing a fallback-font flash. Injecting the reset first here makes the
-      * cascade order independent of which entry point runs first.
-      */
-    private[kyo] def injectStylesheet(sheet: Stylesheet)(using Frame): Unit < Sync =
-        DomStyleSheet.injectBase().andThen(Sync.defer(DomStyleSheet.injectStylesheet(sheet.render)))
-
     /** The elements in the document whose `onAttached` hook runs, each with the scope it lives in and the element value it started for.
       *
       * Attached means in the document, so this is decided here and nowhere else: after every patch the page took, an element carrying
@@ -401,6 +286,122 @@ private[kyo] object DomBackend:
             Kyo.foreachDiscard(scopes.toSeq)(scope => scope.close(Absent).andThen(scope.await))
         end closeAll
     end Attachments
+
+    /** Mark attribute `name` on `el` as owned by the imperative id-addressed channel (SetClassById/SetStyleById),
+      * applied out of the render pass so CSS transitions on the toggled class/style fire. The owned names live in a
+      * `__kyoOwn` expando dict ON the element, so the flag is reclaimed with the node (no session-lived set that only
+      * ever grows) and [[MorphScript]] shields each owned attribute BY NAME. Mirrors `__kyoMark` in HtmlRenderer.clientJs.
+      */
+    private def markOwned(el: dom.Element, name: String): Unit =
+        val d   = el.asInstanceOf[js.Dynamic]
+        val own =
+            if js.isUndefined(d.__kyoOwn) then
+                val fresh = js.Dictionary.empty[Boolean]
+                d.__kyoOwn = fresh.asInstanceOf[js.Any]
+                fresh
+            else d.__kyoOwn.asInstanceOf[js.Dictionary[Boolean]]
+        own.update(name, true)
+    end markOwned
+
+    /** Mirror a patched `value` onto the field's DOM PROPERTY, which is what an input or textarea actually renders.
+      * The property stops tracking the attribute the first time the user types, so `setAttribute("value", ...)` alone
+      * is invisible on any field that has been touched: a clear button writes the bound ref, the attribute changes,
+      * and the field still shows what was typed. Assigning only on a real difference leaves a focused field's caret
+      * alone, since the echo of the user's own keystroke compares equal. Mirrors `__kyoSyncField` in
+      * HtmlRenderer.clientJs.
+      */
+    private def syncFieldProperty(el: dom.Element, name: String, value: String): Unit =
+        if name == "value" && (el.tagName == "INPUT" || el.tagName == "TEXTAREA") then
+            val dyn = el.asInstanceOf[js.Dynamic]
+            if dyn.value.asInstanceOf[String] != value then
+                dyn.value = value
+                applyFilled(el)
+            end if
+        else if name == "value" && el.tagName == "SELECT" then
+            val dyn = el.asInstanceOf[js.Dynamic]
+            if dyn.value.asInstanceOf[String] != value then dyn.value = value
+        end if
+    end syncFieldProperty
+
+    /** A patch of `checked`: a control shows its PROPERTY once the reader has toggled it, so the attribute alone would not move it. The browser
+      * took the group's selection from the other radios when the reader clicked this one, and the one that held it has no patch of its own
+      * coming, so each bound radio of the group shows what its attribute says again. A free radio's tick stays. Twin of `__kyoSyncChecked`.
+      */
+    private def syncChecked(el: dom.Element, on: Boolean): Unit =
+        val dyn = el.asInstanceOf[js.Dynamic]
+        // A control that already shows the value takes no write: an accepted edit costs none.
+        if dyn.checked.asInstanceOf[Boolean] != on then dyn.checked = on
+        val name = dyn.name.asInstanceOf[String]
+        if dyn.selectDynamic("type").asInstanceOf[String] == "radio" && name.nonEmpty then
+            val radios = document.querySelectorAll("input[type=radio][data-kyo-bound]")
+            var i      = 0
+            while i < radios.length do
+                val radio = radios(i).asInstanceOf[dom.Element]
+                val other = radio.asInstanceOf[js.Dynamic]
+                if other.name.asInstanceOf[String] == name && js.special.strictEquals(other.form, dyn.form) then
+                    other.checked = radio.hasAttribute("checked")
+                i += 1
+            end while
+        end if
+    end syncChecked
+
+    /** `filledClass`: toggles the classes `field` marks (on itself, and on the closest ancestor its selector names) from
+      * whether it holds text. Twin of `__kyoFilled` in HtmlRenderer.clientJs; both read `FilledClass`.
+      */
+    private[kyo] def applyFilled(field: dom.Element): Unit =
+        val self = field.getAttribute(FilledClass.classAttr)
+        val up   = field.getAttribute(FilledClass.upAttr)
+        if self != null || up != null then
+            val text = field.asInstanceOf[js.Dynamic].value
+            val on   = js.typeOf(text) == "string" && FilledClass.filled(text.asInstanceOf[String])
+            if self != null && self.nonEmpty then discard(field.classList.toggle(self, on))
+            if up != null && up.nonEmpty then
+                val target = field.closest(field.getAttribute(FilledClass.targetAttr))
+                if target != null then discard(target.classList.toggle(up, on))
+            end if
+        end if
+    end applyFilled
+
+    /** [[applyFilled]] for every field that carries a marker: after a patch, which may have written a target's `class`
+      * attribute from what the server last knew, and at boot. Twin of `__kyoSweepFilled` in HtmlRenderer.clientJs.
+      */
+    private def sweepFilled(): Unit =
+        if saw(Marker.Filled) then
+            val fs = document.querySelectorAll(s"[${FilledClass.classAttr}],[${FilledClass.upAttr}]")
+            (0 until fs.length).foreach(i => applyFilled(fs(i).asInstanceOf[dom.Element]))
+    end sweepFilled
+
+    /** Mount a UI into the page body. */
+    def mount(ui: UI)(using Frame): Unit < (Async & Scope) =
+        mountInto(ui, document.body, NoMountDiagnostics)
+
+    private[kyo] def mount(ui: UI, diagnostics: MountDiagnostics)(using Frame): Unit < (Async & Scope) =
+        mountInto(ui, document.body, diagnostics)
+
+    /** Mount a UI into a specific DOM element selected by CSS selector. */
+    def mount(ui: UI, selector: String)(using Frame): Unit < (Async & Scope) =
+        mount(ui, selector, NoMountDiagnostics)
+
+    private[kyo] def mount(ui: UI, selector: String, diagnostics: MountDiagnostics)(using Frame): Unit < (Async & Scope) =
+        Sync.defer {
+            val target = document.querySelector(selector)
+            if target == null then Abort.panic(UIException(s"Element not found: $selector"))
+            else mountInto(ui, target.asInstanceOf[dom.Element], diagnostics)
+        }
+    end mount
+
+    /** Injects a rendered stylesheet CSS string into the live document.
+      *
+      * The base reset is injected first (idempotently) so it precedes the authored CSS in document
+      * order, matching the SSG page head where `baseCss` is emitted before `head.css`. The reset is a
+      * foundational layer authored stylesheets are meant to override (e.g. `body { font-family }`); if
+      * it were appended AFTER the sheet (as happens when an app calls `runStylesheet` before `runMount`,
+      * which injects the reset), its equal-specificity `body` rule would win on document order and clobber
+      * the app's own `body` font, producing a fallback-font flash. Injecting the reset first here makes the
+      * cascade order independent of which entry point runs first.
+      */
+    private[kyo] def injectStylesheet(sheet: Stylesheet)(using Frame): Unit < Sync =
+        DomStyleSheet.injectBase().andThen(Sync.defer(DomStyleSheet.injectStylesheet(sheet.render)))
 
     private def mountInto(ui: UI, container: dom.Element, diagnostics: MountDiagnostics)(using Frame): Unit < (Async & Scope) =
         val session     = new LocalSession
@@ -905,8 +906,15 @@ private[kyo] object DomBackend:
         private def boolAttrPatchNow(path: Seq[String], name: String, value: Boolean): Unit =
             val el = queryByPath(path)
             if el != null then
-                if value then el.setAttribute(name, "") else el.removeAttribute(name)
-                if name == "checked" && el.tagName == "INPUT" then syncChecked(el, value)
+                // indeterminate is a property with no attribute; the put-back of a click writes it alone.
+                if name == "indeterminate" then
+                    val dyn = el.asInstanceOf[js.Dynamic]
+                    if dyn.indeterminate.asInstanceOf[Boolean] != value then dyn.indeterminate = value
+                else
+                    if value then el.setAttribute(name, "") else el.removeAttribute(name)
+                    if name == "checked" && el.tagName == "INPUT" then syncChecked(el, value)
+                end if
+            end if
         end boolAttrPatchNow
 
         // Toggle in place (so CSS transitions fire) rather than re-render.

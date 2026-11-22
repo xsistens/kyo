@@ -169,9 +169,10 @@ class SiteAppTest extends WebsiteTest:
             // not the oldest v0.9.0.
             assert(html.contains("value=\"latest\""), s"latest option value must be 'latest': $html")
             assert(html.contains("value=\"v0.9.0\""), s"oldest option value must be its tag: $html")
-            // The renderer emits value then the selected boolean attribute on the chosen option.
-            assert(html.contains("value=\"latest\" selected"), s"latest option must be selected: $html")
-            assert(!html.contains("value=\"v0.9.0\" selected"), s"oldest option must NOT be selected: $html")
+            // The selector is bound, so every option carries data-kyo-bound; the renderer emits value, the marker, then
+            // the selected boolean attribute on the chosen option.
+            assert(html.contains("value=\"latest\" data-kyo-bound selected"), s"latest option must be selected: $html")
+            assert(html.contains("value=\"v0.9.0\" data-kyo-bound>"), s"oldest option must NOT be selected: $html")
         }
     }
 

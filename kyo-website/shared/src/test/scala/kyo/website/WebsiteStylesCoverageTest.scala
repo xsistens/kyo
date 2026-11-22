@@ -249,9 +249,10 @@ class WebsiteStylesCoverageTest extends WebsiteTest:
                 html.contains("<option"),
                 s"landing HTML must contain <option> rows for the versions: $html"
             )
-            // The single fixture version is latest, so its option value is "latest" and it is selected.
+            // The single fixture version is latest, so its option value is "latest" and it is selected (bound, as
+            // the selector is).
             assert(
-                html.contains("value=\"latest\" selected"),
+                html.contains("value=\"latest\" data-kyo-bound selected"),
                 s"the latest fixture version must render as the selected option: $html"
             )
         }

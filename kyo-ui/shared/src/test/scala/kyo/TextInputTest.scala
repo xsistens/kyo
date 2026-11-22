@@ -173,6 +173,62 @@ class TextInputTest extends UITest:
         }
     }
 
+    "a type from a signal switches the field in place, so the text typed into it and its focus stay" in {
+        val app: UI < Async =
+            for shown <- Signal.initRef(UI.TextType.Password)
+            yield UI.div(
+                UI.passwordInput.id("p").textType(shown).onKeyDown(ev =>
+                    if ev.key == UI.Keyboard.Escape then shown.set(UI.TextType.Text) else Kyo.unit
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.fill(Selector.id("p"), "secret")
+                _ <- Browser.assertAttribute(Selector.id("p"), "type", "password")
+                _ <- Browser.press(Selector.id("p"), Key.Escape)
+                _ <- Browser.assertAttribute(Selector.id("p"), "type", "text")
+                _ <- Browser.assertFocused(Selector.id("p"))
+                v <- Browser.value(Selector.id("p"))
+            yield assert(v == "secret", s"the field's text after the switch: $v")
+        }
+    }
+
+    "a type from a signal is the field's one type attribute, written at the value the signal holds" in {
+        for
+            shown <- Signal.initRef(UI.TextType.Text)
+            html  <- kyo.internal.HtmlRenderer.render(UI.div(UI.passwordInput.textType(shown), UI.input.textType(shown)), Seq.empty)
+        yield
+            val types = """ type="([^"]*)"""".r.findAllMatchIn(html).map(_.group(1)).toList
+            assert(types == List("text", "text"), html)
+    }
+
+    "a constant type is written where the factory writes its own, as the factory of that type would" in {
+        val typed: List[UI.TextType => UI] = List(
+            t => UI.input.id("f").value("v").placeholder("p").textType(t),
+            t => UI.passwordInput.id("f").value("v").placeholder("p").textType(t),
+            t => UI.emailInput.id("f").value("v").placeholder("p").textType(t),
+            t => UI.telInput.id("f").value("v").placeholder("p").textType(t),
+            t => UI.urlInput.id("f").value("v").placeholder("p").textType(t),
+            t => UI.searchInput.id("f").value("v").placeholder("p").textType(t)
+        )
+        def plain(t: UI.TextType): UI = t match
+            case UI.TextType.Text     => UI.input.id("f").value("v").placeholder("p")
+            case UI.TextType.Password => UI.passwordInput.id("f").value("v").placeholder("p")
+            case UI.TextType.Email    => UI.emailInput.id("f").value("v").placeholder("p")
+            case UI.TextType.Tel      => UI.telInput.id("f").value("v").placeholder("p")
+            case UI.TextType.Url      => UI.urlInput.id("f").value("v").placeholder("p")
+            case UI.TextType.Search   => UI.searchInput.id("f").value("v").placeholder("p")
+        def html(ui: UI): String < Sync = kyo.internal.HtmlRenderer.render(ui, Seq.empty)
+        for
+            pairs <- Kyo.foreach(Chunk.from(for f <- typed; t <- UI.TextType.values.toList yield (f, t)))((f, t) =>
+                html(f(t)).map(got => html(plain(t)).map(want => (t, got, want)))
+            )
+        yield
+            val wrong = pairs.filter((_, got, want) => got != want)
+            assert(wrong.isEmpty, wrong.map((t, got, want) => s"$t: $got, its factory writes $want").mkString("; "))
+        end for
+    }
+
     "two different types independent" in {
         val app: UI < Async =
             for
@@ -268,6 +324,92 @@ class TextInputTest extends UITest:
 
         "textarea placeholder delegates through textInputAttrs" in {
             assert(UI.textarea.placeholder("hint").placeholder == Present("hint"))
+        }
+    }
+
+    "the trait's own setters" - {
+        // Code over any text field, as a component that picks the field's type writes it: no setter is reached through a
+        // concrete class.
+        def wired[T <: UI.Ast.TextInput { type Self <: T }](t: T, hint: Maybe[UI.Prop[String]])(using Frame): T =
+            t.onInput(_ => Kyo.unit).onChange(_ => Kyo.unit).placeholder(hint)
+
+        def fields(using Frame): List[UI.Ast.TextInput] = List(
+            wired(UI.input, Present("hint")),
+            wired(UI.passwordInput, Present("hint")),
+            wired(UI.emailInput, Present("hint")),
+            wired(UI.telInput, Present("hint")),
+            wired(UI.urlInput, Present("hint")),
+            wired(UI.searchInput, Present("hint")),
+            wired(UI.numberInput, Present("hint")),
+            wired(UI.textarea, Present("hint"))
+        )
+
+        "every text field takes onInput, onChange and a placeholder through the trait" in {
+            fields.foreach { f =>
+                assert(f.onInput.isDefined && f.onChange.isDefined, s"handlers of $f")
+                assert(f.placeholder == Present("hint"), s"placeholder of $f")
+            }
+            succeed
+        }
+
+        "an absent optional placeholder sets nothing" in {
+            val f = wired(UI.input, Absent)
+            assert(f.placeholder.isEmpty && !f.attrs.reactiveAttrs.contains("placeholder"))
+        }
+
+        "a placeholder from a signal is the attribute's channel, written at the value it holds" in {
+            for
+                hint <- Signal.initRef("first")
+                f = wired(UI.input, Present(hint))
+                html <- kyo.internal.HtmlRenderer.render(UI.div(f), Seq.empty)
+            yield
+                assert(f.placeholder.isEmpty, "a signal fills no static field")
+                assert(f.attrs.reactiveAttrs.get("placeholder").exists(_ eq hint), "the signal is the attribute's channel")
+                assert(""" placeholder="([^"]*)"""".r.findAllMatchIn(html).map(_.group(1)).toList == List("first"), html)
+        }
+
+        "every text field takes required through the trait" in {
+            def req[T <: UI.Ast.TextInput { type Self <: T }](t: T): T = t.required(true)
+            val all: List[UI.Ast.TextInput]                            = List(
+                req(UI.input),
+                req(UI.passwordInput),
+                req(UI.emailInput),
+                req(UI.telInput),
+                req(UI.urlInput),
+                req(UI.searchInput),
+                req(UI.numberInput),
+                req(UI.textarea)
+            )
+            all.foreach(f => assert(f.required == Present(true), s"required of $f"))
+            succeed
+        }
+
+        "a constant required is the boolean attribute, and false writes none" in {
+            for
+                on  <- kyo.internal.HtmlRenderer.render(UI.div(UI.input.required(true), UI.textarea.required(true)), Seq.empty)
+                off <- kyo.internal.HtmlRenderer.render(UI.div(UI.input.required(false), UI.input), Seq.empty)
+            yield
+                assert(""" required(?=[ >/])""".r.findAllMatchIn(on).size == 2, on)
+                assert(""" required(?=[ >/])""".r.findFirstIn(off).isEmpty, off)
+        }
+
+        "a required from a signal is the attribute's channel, written at the value it holds" in {
+            for
+                req <- Signal.initRef(true)
+                f = UI.input.required(req)
+                on  <- kyo.internal.HtmlRenderer.render(UI.div(f), Seq.empty)
+                _   <- req.set(false)
+                off <- kyo.internal.HtmlRenderer.render(UI.div(f), Seq.empty)
+            yield
+                assert(f.required.isEmpty, "a signal fills no static field")
+                assert(f.attrs.reactiveBoolAttrs.get("required").exists(_ eq req), "the signal is the attribute's channel")
+                assert(""" required(?=[ >/])""".r.findAllMatchIn(on).size == 1, on)
+                assert(""" required(?=[ >/])""".r.findFirstIn(off).isEmpty, off)
+        }
+
+        "a constant placeholder is the attribute" in {
+            for html <- kyo.internal.HtmlRenderer.render(UI.div(UI.input.placeholder("hint"), UI.textarea.placeholder("hint")), Seq.empty)
+            yield assert(""" placeholder="([^"]*)"""".r.findAllMatchIn(html).map(_.group(1)).toList == List("hint", "hint"), html)
         }
     }
 
