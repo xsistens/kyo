@@ -251,4 +251,109 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
         }
     }
 
+    /** A keyed table of `size` rows, each with a region over `tick` and, with `mounts`, a keyed mount, inside a region over `show` next to
+      * a sibling region over `tick` and a keyless mount; one more region over `tick` lies outside. The list empties while the region
+      * around it closes. The sibling mount's release waits until the list has begun to release its first row, and it runs before the
+      * list's own release, so the close interrupts the list's fiber while that fiber is releasing its rows.
+      */
+    private def hideWhileEmptying(size: Int, mounts: Boolean)(using Frame, kyo.test.AssertScope) =
+        def card(starts: AtomicInteger, releases: AtomicInteger): UI < (Async & Scope) =
+            Sync.defer(discard(starts.incrementAndGet()))
+                .andThen(Scope.ensure(Sync.defer(discard(releases.incrementAndGet()))))
+                .andThen(UI.span("card"))
+        Scope.run {
+            for
+                starts   <- Sync.defer(new AtomicInteger(0))
+                releases <- Sync.defer(new AtomicInteger(0))
+                armed    <- Sync.defer(new AtomicInteger(0))
+                evicting <- Latch.init(1)
+                show     <- Signal.initRef(true)
+                rows     <- Signal.initRef(Chunk.from((1 to size).map(i => s"r$i")))
+                tick     <- Signal.initRef(0)
+                rec = new Recording
+                // Both effects register their release before they count themselves armed.
+                firstRow = UI.mounted(Scope.ensure(evicting.release).andThen(Sync.defer(discard(armed.incrementAndGet()))).andThen(
+                    UI.span("first")
+                ))
+                sibling = UI.mounted(Scope.ensure(evicting.await).andThen(Sync.defer(discard(armed.incrementAndGet()))).andThen(
+                    UI.span("sibling")
+                ))
+                ui = UI.div(
+                    tick.render(t => UI.span(s"outside:$t")),
+                    show.render(on =>
+                        if on then
+                            UI.div(
+                                UI.table(UI.tbody(rows.foreachKeyed(identity)(item =>
+                                    UI.tr(
+                                        UI.td(tick.render(t => UI.span(s"$item:$t"))),
+                                        if mounts then UI.td(UI.mounted(card(starts, releases)).keyed("card")) else UI.td("-"),
+                                        if item == "r1" then UI.td(firstRow) else UI.td("-")
+                                    )
+                                ))),
+                                tick.render(t => UI.span(s"sibling:$t")),
+                                sibling
+                            )
+                        else UI.span("off")
+                    )
+                )
+                root <- ReactiveUI.normalize(ui, Seq.empty)
+                _    <- ReactiveUI.subscribe(root, rec.exchange)
+                _    <- parked(rows, 1)
+                _    <- parked(show, 1)
+                _    <- parked(tick, size + 2)
+                _    <- assertEventually(Sync.defer(armed.get == 2 && (!mounts || starts.get == size)))
+                _    <- show.set(false)
+                _    <- rows.set(Chunk.empty)
+                // The region waits on `show` again once the value before has closed, the list and every row in it included: then only
+                // the region outside observes `tick`, and no mount is registered. A row never closed keeps a region waiting there.
+                _         <- parked(show, 1)
+                observing <- tick.waiters
+                // A keyed instance is released by its table, which settles on a fiber of its own. Until then its place holds it in
+                // hand-over (MountDispatch.unregister), and `registered` counts it, so the count is read once every release has run.
+                _          <- assertEventually(Sync.defer(releases.get == starts.get))
+                registered <- root.mountDispatch.get.registered
+            yield assert(
+                observing == 1 && registered == 0,
+                s"regions observing tick: $observing (expected 1), mount instances registered: $registered (expected 0)"
+            )
+            end for
+        }
+    end hideWhileEmptying
+
+    "hiding the region around a keyed list that empties at once closes every row" in {
+        hideWhileEmptying(size = 20, mounts = false)
+    }
+
+    "hiding the region around a keyed list that empties at once releases the keyed mount of every row" in {
+        hideWhileEmptying(size = 20, mounts = true)
+    }
+
+    // A release a row's finalizer runs on the evicting fiber is a step that an interrupt of that fiber would abandon halfway: the
+    // finalizer hands only the steps not yet started to a fiber of their own. The eviction runs where no interrupt reaches it, and
+    // closing every row, as the scope around the list does after interrupting its fiber, waits for that eviction to finish.
+    "a row release interrupted halfway still completes, and closing every row waits for it" in {
+        Scope.run {
+            for
+                entered  <- Latch.init(1)
+                gate     <- Latch.init(1)
+                done     <- AtomicBoolean.init(false)
+                registry <- Sync.Unsafe.defer(RowRegistry.initNow())
+                scope    <- Sync.Unsafe.defer(new RowScope(Scope.Finalizer.Unsafe.initInline(), ReleaseGroup.root()))
+                _        <- scope.finalizer.ensure(_ => entered.release.andThen(gate.await).andThen(done.set(true)))
+                row = new RowInstance("a", "a", UI.empty, Seq.empty, Absent, scope, holdsMount = false)
+                _       <- registry.replaceAll(Seq(row), Seq(row))
+                evicter <- Fiber.initUnscoped(registry.evictExcept(_ => false))
+                _       <- entered.await
+                _       <- evicter.interrupt
+                _       <- evicter.getResult
+                closer  <- Fiber.initUnscoped(registry.evictAll)
+                _       <- gate.release
+                _       <- closer.get
+                // `closer` returns only once the release it found running has finished.
+                finished <- done.get
+            yield assert(finished, "the interrupted release was abandoned, or closing every row did not wait for it")
+            end for
+        }
+    }
+
 end ForeachReuseTest

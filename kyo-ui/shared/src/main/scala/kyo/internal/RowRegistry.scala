@@ -20,7 +20,8 @@ final private[kyo] class RowInstance(
     val rowUI: UI,
     val kids: Seq[ReactiveUI],
     val handler: Maybe[Handler],
-    val scope: RowScope
+    val scope: RowScope,
+    val holdsMount: Boolean
 )
 
 /** What keeps one keyed row's subscriptions open, closed by the registry when the row is evicted.
@@ -51,18 +52,21 @@ final private[kyo] class RowScope(val finalizer: Scope.Finalizer, val group: Rel
 end RowScope
 
 /** Per-region ownership of reusable Foreach rows, in list order, plus the same rows by key. Mutation
-  * happens only from the owning region's sequential observe loop, so plain get/set on the refs suffices.
+  * happens only from the owning region's sequential observe loop, and from [[evictAll]] once that loop has ended.
   *
   * The key index is maintained incrementally (evicted keys leave it, fresh instances join it), so
   * neither an emission nor an event lookup rebuilds a map over every live row.
   *
   * A row is the registry's from the moment it starts subscribing, not from [[replaceAll]]: its scope is a root nothing else
-  * closes, so an emission interrupted in between would otherwise leave what the row had already subscribed running.
+  * closes, so an emission interrupted in between would otherwise leave what the row had already subscribed running. It stays
+  * the registry's until its release has completed, for the same reason: an emission evicting rows is interrupted when the region
+  * around the list closes, and the rows it had taken out of the list but not yet closed would be left to nobody.
   */
 final private[kyo] class RowRegistry(
     rows: AtomicRef[Vector[RowInstance]],
     index: AtomicRef[Map[String, RowInstance]],
-    building: AtomicRef[List[RowScope]]
+    building: AtomicRef[List[RowScope]],
+    releasing: AtomicRef[List[Seq[RowScope]]]
 ):
     def snapshot(using Frame): Vector[RowInstance] < Sync = rows.get
 
@@ -88,29 +92,52 @@ final private[kyo] class RowRegistry(
       * (break-before-make, the region-level closed-and-awaited guarantee extended to rows).
       */
     def evictExcept(keep: String => Boolean)(using Frame): Unit < Async =
-        for
-            old <- rows.getAndUpdate(_.filter(r => keep(r.key)))
-            gone = old.filterNot(r => keep(r.key))
-            _ <-
-                if gone.isEmpty then Kyo.unit
+        Sync.Unsafe.defer {
+            val old  = rows.unsafe.getAndUpdate(_.filter(r => keep(r.key)))
+            val gone = old.filterNot(r => keep(r.key))
+            if gone.isEmpty then Kyo.unit
+            else
                 // A cleared list drops the whole index at once rather than one key at a time.
-                else if gone.size == old.size then index.set(Map.empty)
-                else index.getAndUpdate(_ -- gone.map(_.key)).unit
-            // The channel releases of every evicted row in one pass, then the finalizers, which for a plain row hold
-            // nothing and complete without suspending (initInline).
-            _ <- release(gone.map(_.scope))
-        yield ()
+                if gone.size == old.size then index.unsafe.set(Map.empty)
+                else discard(index.unsafe.getAndUpdate(_ -- gone.map(_.key)))
+                val scopes   = gone.map(_.scope)
+                val failures = take(scopes)
+                Async.uninterruptible(logFailures(failures).andThen(settle(scopes)))
+            end if
+        }
 
-    private def release(scopes: Seq[RowScope])(using Frame): Unit < Async =
-        for
-            _        <- Sync.Unsafe.defer(scopes.foreach(_.group.release()))
-            failures <- Sync.Unsafe.defer(scopes.flatMap(_.releaseAll().toList))
-            _        <- Kyo.foreachDiscard(failures)(t => Log.error("kyo-ui: a row's release failed", t))
-            _        <- Kyo.foreachDiscard(scopes)(s => s.finalizer.close(Absent).andThen(s.finalizer.await))
-        yield ()
-
+    /** Closes every row: the listed ones, those still subscribing, and those an emission is releasing, whose release it waits for. */
     def evictAll(using Frame): Unit < Async =
-        evictExcept(_ => false).andThen(building.getAndSet(Nil).map(release))
+        Sync.Unsafe.defer {
+            val scopes   = rows.unsafe.getAndSet(Vector.empty).map(_.scope) ++ building.unsafe.getAndSet(Nil)
+            val failures =
+                if scopes.isEmpty then Seq.empty
+                else
+                    index.unsafe.set(Map.empty)
+                    take(scopes)
+            val batches = releasing.unsafe.get()
+            if batches.isEmpty then Kyo.unit
+            else Async.uninterruptible(logFailures(failures).andThen(Kyo.foreachDiscard(batches)(settle)))
+        }
+
+    /** Moves `scopes` from the list to the rows being released, marks their groups, and runs their channel releases, in the step that
+      * took them out of the list: no interrupt falls between taking a row and owning its release. Returns the failed releases.
+      */
+    private[internal] def take(scopes: Seq[RowScope])(using AllowUnsafe): Seq[Throwable] =
+        discard(releasing.unsafe.getAndUpdate(scopes :: _))
+        scopes.foreach(_.group.release())
+        scopes.flatMap(_.releaseAll())
+    end take
+
+    private def logFailures(failures: Seq[Throwable])(using Frame): Unit < Async =
+        Kyo.foreachDiscard(failures)(t => Log.error("kyo-ui: a row's release failed", t))
+
+    /** Closes and awaits the finalizers of one batch of rows, which for a plain row hold nothing and complete without suspending
+      * (initInline). A finalizer another fiber is already closing is awaited, so [[evictAll]] waits for an emission's batch.
+      */
+    private def settle(scopes: Seq[RowScope])(using Frame): Unit < Async =
+        Kyo.foreachDiscard(scopes)(s => s.finalizer.close(Absent).andThen(s.finalizer.await))
+            .andThen(releasing.getAndUpdate(_.filterNot(_ eq scopes)).unit)
 end RowRegistry
 
 private[kyo] object RowRegistry:
@@ -119,7 +146,8 @@ private[kyo] object RowRegistry:
         new RowRegistry(
             AtomicRef.Unsafe.init(Vector.empty[RowInstance]).safe,
             AtomicRef.Unsafe.init(Map.empty[String, RowInstance]).safe,
-            AtomicRef.Unsafe.init(List.empty[RowScope]).safe
+            AtomicRef.Unsafe.init(List.empty[RowScope]).safe,
+            AtomicRef.Unsafe.init(List.empty[Seq[RowScope]]).safe
         )
 end RowRegistry
 
@@ -139,12 +167,17 @@ final private class RowPlan[T](
     val built: Array[RowPlan.Built],
     val finalRows: Array[RowInstance],
     var rebuilt: Chunk[Int],
-    retainedKeys: java.util.HashSet[String],
+    retainedKeys: scala.collection.mutable.HashSet[String],
     prev: Vector[RowInstance]
 ):
     def size: Int = keys.length
 
     def isRetained(key: String): Boolean = retainedKeys.contains(key)
+
+    /** The keys of the rows this emission keeps as they are, read only: no copy, since a list emission pays for this whether or not
+      * anything below it reads them.
+      */
+    def retainedRows: scala.collection.Set[String] = retainedKeys
 
     /** Every row gets a new instance: the transport repainted the retained rows too, so their subscriptions start
       * again from their cached UI and walk.
@@ -153,8 +186,15 @@ final private class RowPlan[T](
         java.util.Arrays.fill(finalRows.asInstanceOf[Array[AnyRef]], null)
         rebuilt = Chunk.from(0 until size)
 
-    /** The reactive kids of every row, the region's walk for this emission. */
+    /** The reactive kids of every row, the region's walk for this emission. Built only when the region's pass plans. */
     lazy val allKids: Seq[ReactiveUI] = built.toSeq.flatMap(_.kids)
+
+    /** Whether a mount is in any row's walk, from the flag each row took when it was walked, without collecting the walk. */
+    def holdsMount: Boolean =
+        var i = 0
+        while i < size && !built(i).holdsMount do i += 1
+        i < size
+    end holdsMount
 
     def fragmentChildren(using Frame): Chunk[UI] =
         val out = new Array[UI](size)
@@ -183,13 +223,6 @@ final private class RowPlan[T](
             while i < size && keys(i) == prev(i).key do i += 1
             i < size
 
-    /** The keys of the rows this emission keeps as they are. */
-    def retainedRows: Set[String] =
-        val out = Set.newBuilder[String]
-        retainedKeys.forEach(key => discard(out += key))
-        out.result()
-    end retainedRows
-
     def finalRowsSeq: Seq[RowInstance] = scala.collection.immutable.ArraySeq.unsafeWrapArray(finalRows)
 
     def freshRows: Seq[RowInstance] = rebuilt.map(i => finalRows(i)).toSeq
@@ -202,8 +235,12 @@ private object RowPlan:
         val rowUI: UI,
         val kids: Seq[ReactiveUI],
         val handler: Maybe[Handler],
-        val retained: Maybe[RowInstance]
+        val retained: Maybe[RowInstance],
+        val holdsMount: Boolean
     )
+
+    /** Whether a mount is at or below `kids`, a row's walk: fixed by the walk, so a row takes it once and keeps it. */
+    def holdsMount(kids: Seq[ReactiveUI]): Boolean = kids.exists(_.containsMount)
 
     /** Reads an emission once: the key at each position, and the live row kept there. A key that repeats within the emission
       * disables reuse for all of it.
@@ -218,7 +255,7 @@ private object RowPlan:
         val size      = items.length
         val keys      = new Array[String](size)
         val kept      = new Array[RowInstance](size)
-        val seen      = new java.util.HashSet[String]()
+        val seen      = presized(size)
         var dup       = false
         var keptCount = 0
         var i         = 0
@@ -239,7 +276,7 @@ private object RowPlan:
             java.util.Arrays.fill(kept.asInstanceOf[Array[AnyRef]], null)
             keptCount = 0
         val built        = new Array[Built](size)
-        val retainedKeys = new java.util.HashSet[String]()
+        val retainedKeys = presized(keptCount)
         val rebuilt      = new Array[Int](size - keptCount)
         var j            = 0
         i = 0
@@ -249,13 +286,18 @@ private object RowPlan:
                 rebuilt(j) = i
                 j += 1
             else
-                discard(retainedKeys.add(inst.key))
-                built(i) = new Built(inst.key, inst.item, inst.rowUI, inst.kids, inst.handler, Present(inst))
+                retainedKeys += inst.key
+                built(i) = new Built(inst.key, inst.item, inst.rowUI, inst.kids, inst.handler, Present(inst), inst.holdsMount)
             end if
             i += 1
         end while
         new RowPlan(items, keys, dup, built, kept, Chunk.from(rebuilt), retainedKeys, prev)
     end decide
+
+    /** A set that holds `n` keys without growing. */
+    private def presized(n: Int): scala.collection.mutable.HashSet[String] =
+        val loadFactor = scala.collection.mutable.HashSet.defaultLoadFactor
+        new scala.collection.mutable.HashSet[String](math.max(16, (n / loadFactor).toInt + 1), loadFactor)
 end RowPlan
 
 private[kyo] object RowRegions:
@@ -339,7 +381,9 @@ private[kyo] object RowRegions:
                                 built <- Kyo.foreach(Chunk.from(items.toSeq.zipWithIndex)) { (item, i) =>
                                     val key  = keyFn(item)
                                     val kids = grouped.getOrElse(key, Seq.empty)
-                                    rowRunner(kids, pass).map(scope => new RowInstance(key, item, renderFn(i, item), kids, Absent, scope))
+                                    rowRunner(kids, pass).map(scope =>
+                                        new RowInstance(key, item, renderFn(i, item), kids, Absent, scope, RowPlan.holdsMount(kids))
+                                    )
                                 }
                                 _ <- regionMounts.endWalk
                                 // No paint here: the enclosing render already put exactly this fragment in the
@@ -387,12 +431,12 @@ private[kyo] object RowRegions:
                                             rui.rows,
                                             rui.deepRows
                                         )
-                                        plan.built(i) = new RowPlan.Built(key, item, rowUI, kids, Present(hdl), Absent)
+                                        plan.built(i) =
+                                            new RowPlan.Built(key, item, rowUI, kids, Present(hdl), Absent, RowPlan.holdsMount(kids))
                                     }
                                 })
                                 // The regions inside a retained row keep their subscriptions, so the pass leaves them as they are.
-                                retained  <- Sync.defer(plan.retainedRows)
-                                firstPass <- regionMounts.beginWalk(plan.allKids, retained)
+                                firstPass <- regionMounts.beginWalk(plan.allKids, plan.retainedRows, Present(plan.holdsMount))
                                 fragment = Fragment[UI](plan.fragmentChildren)
                                 previous <- Sync.Unsafe.defer(rendered.getAndSet(Present(fragment)))
                                 // A structural command addresses rows by key, so it can say nothing useful
@@ -430,11 +474,15 @@ private[kyo] object RowRegions:
                                 // Every row is subscribed again, so a pass covers the regions of all of them.
                                 pass <-
                                     if kept then Kyo.lift(firstPass)
-                                    else rows.evictAll.andThen(Sync.defer(plan.rebuildAll())).andThen(regionMounts.beginWalk(plan.allKids))
+                                    else
+                                        rows.evictAll.andThen(Sync.defer(plan.rebuildAll())).andThen(regionMounts.beginWalk(
+                                            plan.allKids,
+                                            holdsMount = Present(plan.holdsMount)
+                                        ))
                                 _ <- Kyo.foreachDiscard(plan.rebuilt) { i =>
                                     val b = plan.built(i)
                                     rowRunner(b.kids, pass).map(scope =>
-                                        plan.finalRows(i) = new RowInstance(b.key, b.item, b.rowUI, b.kids, b.handler, scope)
+                                        plan.finalRows(i) = new RowInstance(b.key, b.item, b.rowUI, b.kids, b.handler, scope, b.holdsMount)
                                     )
                                 }
                                 _ <- regionMounts.endWalk
