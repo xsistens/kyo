@@ -774,7 +774,7 @@ private[kyo] object HtmlRenderer:
             case Present(Bound.Ref(ref)) => SignalNow(ref)
             case Present(Bound.Const(s)) => s
             case _                       => ""
-        renderDropdownWithValue(sb, dd, path, baseId, currentVal, cssRules, ddStyle)
+        renderDropdownWithValue(sb, dd, path, baseId, currentVal, cssRules, ddStyle, events = dropdownEventsNow(dd))
     end renderDropdown
 
     private def renderDropdownWithValue(
@@ -784,14 +784,17 @@ private[kyo] object HtmlRenderer:
         baseId: String,
         currentVal: String,
         cssRules: Maybe[CssCollector],
-        channelStyle: Seq[(String, String)] = Nil
+        channelStyle: Seq[(String, String)],
+        // The events the wrapper lists: none while the dropdown is silent (UI.Element.silent), only the kept ones under
+        // UI.Element.silentExcept.
+        events: String
     )(using
         Frame
     ): Unit =
         val pathStr     = pathAttr(path)
         val idAttr      = if baseId.nonEmpty then s""" id="${esc(baseId)}"""" else ""
         val ddAttr      = if baseId.nonEmpty then s""" data-kyo-dropdown="${esc(baseId)}"""" else " data-kyo-dropdown"
-        val disAttr     = if dd.disabled.getOrElse(false) then " data-kyo-disabled" else ""
+        val evAttr      = if events.nonEmpty then s""" data-kyo-ev="$events"""" else ""
         val hidAttr     = if dd.attrs.hidden.getOrElse(false) then " hidden" else ""
         val tabAttr     = dd.attrs.tabIndex.map(n => s""" tabindex="$n"""").getOrElse("")
         val pseudoClass = registerPseudoClass(cssRules, dd.attrs.uiStyle)
@@ -815,7 +818,7 @@ private[kyo] object HtmlRenderer:
         // Wrapper div
         w(
             sb,
-            s"""<div data-kyo-path="$pathStr"$idAttr$clsStr$ddAttr data-kyo-ev="click,keydown,change"$hidAttr$disAttr$tabAttr$styleStr>"""
+            s"""<div data-kyo-path="$pathStr"$idAttr$clsStr$ddAttr$evAttr$hidAttr$tabAttr$styleStr>"""
         )
         // Trigger button
         w(sb, s"""<button$triggerId type="button"$triggerDdAttr tabindex="0">$triggerLabel</button>""")
@@ -978,6 +981,8 @@ private[kyo] object HtmlRenderer:
         attrs.scrollAuto.foreach(v => if v then w(sb, """ data-kyo-scroll-auto="1""""))
         // Marker only: stop-propagation is decided server-side in EventDispatch.dispatchToElement; the client never reads this.
         attrs.stopPropagation.foreach(v => if v then w(sb, """ data-kyo-stop="1""""))
+        // Read by the click handlers (the page script and DomBackend), which decline the browser's default for a blocked link.
+        attrs.blocked.foreach(v => if v then w(sb, """ data-kyo-blocked="1""""))
         // enter/leave transition class lists (read client-side by the patch-application code).
         attrs.enterTransition.foreach(c => w(sb, s""" data-kyo-enter="${esc(c)}""""))
         attrs.leaveTransition.foreach(c => w(sb, s""" data-kyo-leave="${esc(c)}""""))
@@ -1129,6 +1134,7 @@ private[kyo] object HtmlRenderer:
             case b: Button =>
                 w(sb, " type=\"submit\"")
                 boolAttr(sb, "disabled", b.disabled)
+                b.form.foreach(f => w(sb, s""" form="${esc(f)}""""))
             case fs: Fieldset =>
                 boolAttr(sb, "disabled", fs.disabled)
             case cb: Checkbox =>
@@ -1339,15 +1345,80 @@ private[kyo] object HtmlRenderer:
         case _                                             => false
 
     /** Writes `data-kyo-ev` with every event the element's handlers and bindings make the client forward, and
-      * answers whether there was one.
+      * answers whether there was one. A silent element (see UI.Element.silent) writes none: the bytes of the
+      * same element with no handler. A partly silent one (UI.Element.silentExcept) writes only the events it keeps.
       */
-    private def renderEventAttr(sb: StringBuilder, elem: Element): Boolean =
-        // Written as they are found: the attribute opens with the first event and closes at the end, so a
-        // plain element allocates nothing here.
-        var first                   = true
-        def add(name: String): Unit =
-            discard(sb.append(if first then " data-kyo-ev=\"" else ",").append(name))
-            first = false
+    private def renderEventAttr(sb: StringBuilder, elem: Element)(using AllowUnsafe, Frame, SignalNow.Locals): Boolean =
+        if silentNow(elem) then false
+        else
+            // Written as they are found: the attribute opens with the first event and closes at the end, so a
+            // plain element allocates nothing here.
+            val partial = partialNow(elem)
+            val keep    = elem.attrs.partialKeep
+            var first   = true
+            declaredEvents(elem) { name =>
+                if !partial || keep.contains(name) then
+                    discard(sb.append(if first then " data-kyo-ev=\"" else ",").append(name))
+                    first = false
+            }
+            if !first then sb.append('"')
+            !first
+    end renderEventAttr
+
+    /** The events the Dropdown wrapper forwards: its trigger's click, the keys it is driven by, and the pick. */
+    private val dropdownEvents = "click,keydown,change"
+
+    /** The value `data-kyo-ev` carries for `elem` while it is not silent, empty where it declares no event. The
+      * channel of an element silent through a signal (Channels.of) puts it back with this.
+      */
+    private[kyo] def eventList(elem: Element): String =
+        elem match
+            case _: Dropdown => dropdownEvents
+            case _           =>
+                val sb = new StringBuilder
+                declaredEvents(elem) { name =>
+                    if sb.nonEmpty then discard(sb.append(','))
+                    discard(sb.append(name))
+                }
+                sb.toString
+
+    /** The events the Dropdown wrapper lists as it renders: none while it is silent, and only the kept ones under a partial silence. */
+    private def dropdownEventsNow(dd: Dropdown)(using AllowUnsafe, Frame, SignalNow.Locals): String =
+        if silentNow(dd) then ""
+        else if partialNow(dd) then dropdownEvents.split(',').filter(dd.attrs.partialKeep.contains).mkString(",")
+        else dropdownEvents
+
+    /** Whether `elem` hides every event but those in `partialKeep` as it renders (UI.Element.silentExcept), read from its channel where
+      * one is bound, else from the constant.
+      */
+    private def partialNow(elem: Element)(using AllowUnsafe, Frame, SignalNow.Locals): Boolean =
+        val attrs = elem.attrs
+        attrs.partialSignal match
+            case Present(sig) => SignalNow(sig)
+            case Absent       => attrs.partial
+    end partialNow
+
+    /** Whether `elem` is silent as it renders: `disabled` (on an element that has it) or `silent`, each read from
+      * its channel where one is bound, else from the constant. Allocates nothing for an element that binds neither.
+      */
+    private def silentNow(elem: Element)(using AllowUnsafe, Frame, SignalNow.Locals): Boolean =
+        val attrs = elem.attrs
+        val off   = attrs.reactiveBoolAttrs.get("disabled") match
+            case Some(sig) => SignalNow(sig)
+            case None      =>
+                elem match
+                    case hd: HasDisabled => hd.disabled.getOrElse(false)
+                    case _               => false
+        off ||
+        (attrs.silentSignal match
+            case Present(sig) => SignalNow(sig)
+            case Absent       => attrs.silent)
+    end silentNow
+
+    /** Calls `add` with every event the element's handlers and bindings make the client forward, in the order
+      * `data-kyo-ev` lists them. Inline, so the one writer above appends straight into the render's builder.
+      */
+    private inline def declaredEvents(elem: Element)(inline add: String => Unit): Unit =
         val attrs  = elem.attrs
         val clicks = attrs.onClick.nonEmpty || attrs.onClickEvt.nonEmpty ||
             attrs.onClickSelf.nonEmpty || attrs.onClickSelfEvt.nonEmpty
@@ -1399,9 +1470,7 @@ private[kyo] object HtmlRenderer:
         if attrs.onPointerUp.nonEmpty then add("pointerup")
         // fileselect marker so the client's change branch reads all files instead of only the first.
         if attrs.onFileSelect.nonEmpty then add("fileselect")
-        if !first then sb.append('"')
-        !first
-    end renderEventAttr
+    end declaredEvents
 
     /** Whether an element renders its `data-kyo-path`.
       *
@@ -2548,6 +2617,9 @@ private[kyo] object HtmlRenderer:
            |["input","change"].forEach(function(t){document.body.addEventListener(t,function(e){var f=e.target;if(f&&f.getAttribute&&(f.getAttribute("${FilledClass.classAttr}")||f.getAttribute("${FilledClass.upAttr}")))__kyoFilled(f);},true);});
            |// Portal adopt for the initial paint: a portal element present at load re-homes immediately.
            |__kyoAdoptPortals(document.body);__kyoRetireOrphanTwins();
+           |// Whether the dropdown wrapper `w` itself lists event `t` in data-kyo-ev. A silent dropdown lists none, so a pick on it is
+           |// sent nowhere (UI.Element.silent); the pick is the wrapper's own, so no ancestor stands in for it.
+           |function __kyoListens(w,t){var ev=w.getAttribute("data-kyo-ev");return !!(ev&&ev.split(",").indexOf(t)>=0);}
            |// Dropdown helpers: close all dropdowns except the given id
            |function kyoCloseDropdown(exceptId){
            |  var all=document.querySelectorAll('[data-kyo-dropdown-options]');
@@ -2567,6 +2639,10 @@ private[kyo] object HtmlRenderer:
            |var __scrRaf=0,__scrEl=null,__scrPath=null;
            |function __scrFlush(){__scrRaf=0;if(__scrEl){var stid=__scrEl.id?__scrEl.id:null;var sp={path:__scrPath,scrollTop:__scrEl.scrollTop,scrollLeft:__scrEl.scrollLeft};if(stid)sp.targetId=stid;post({ScrollPosition:sp});}}
            |function handle(e){
+           |  // A blocked link (marked data-kyo-blocked) is no navigation: its plain, modified and middle clicks decline the browser's
+           |  // default. A middle click (auxclick) is not a click event, so it runs nothing.
+           |  if((e.type==="click"||e.type==="auxclick")&&e.target&&e.target.closest&&e.target.closest('a[data-kyo-blocked]'))e.preventDefault();
+           |  if(e.type==="auxclick")return;
            |  var el=fp(e.target);
            |  if(!el)return;
            |  var p=pa(el),t=e.type;
@@ -2575,12 +2651,13 @@ private[kyo] object HtmlRenderer:
            |    // not toggle under the pointer either. The click still posts, since the component has already
            |    // dropped the handler that would have acted on it.
            |    if(e.target&&e.target.closest&&e.target.closest('[data-kyo-inert]'))e.preventDefault();
-           |    // Dropdown trigger click: open/close the option list.
+           |    // Dropdown trigger click: open/close the option list. A silent dropdown (it lists no change) does not open.
            |    // Skip isTrusted=false synthetic clicks (e.g. from runSpaceClickSynthesis after Space keydown).
            |    if(e.isTrusted!==false&&e.target&&e.target.getAttribute('data-kyo-dropdown-trigger')){
            |      var did=e.target.getAttribute('data-kyo-dropdown-trigger');
            |      var opts=document.querySelector('[data-kyo-dropdown-options="'+did+'"]');
-           |      if(opts){
+           |      var twrap=e.target.closest('[data-kyo-dropdown]');
+           |      if(opts&&twrap&&__kyoListens(twrap,"change")){
            |        var opening=opts.hidden;
            |        kyoCloseDropdown(opening?did:null);
            |        opts.hidden=!opening;
@@ -2599,7 +2676,7 @@ private[kyo] object HtmlRenderer:
            |        var dOpts=document.querySelector('[data-kyo-dropdown-options="'+wrap.getAttribute('data-kyo-dropdown')+'"]');
            |        if(dOpts)dOpts.hidden=true;
            |        var wp=pa(wrap);
-           |        post({Change:{path:wp,value:val}});
+           |        if(__kyoListens(wrap,"change"))post({Change:{path:wp,value:val}});
            |      }
            |      return;
            |    }
@@ -2800,6 +2877,7 @@ private[kyo] object HtmlRenderer:
            |      var isOpen=opts2&&!opts2.hidden;
            |      var isSpaceKey=(e.key===' '||e.key==='Space'||e.keyCode===32||e.which===32);
            |      if(isSpaceKey&&!isOpen){
+           |        if(!__kyoListens(ddWrap,"change")){e.preventDefault();return;}
            |        kyoCloseDropdown(did2);opts2.hidden=false;
            |        var first2=opts2.querySelector('[data-kyo-dropdown-opt]');if(first2)first2.setAttribute('data-kyo-dropdown-hl','true');
            |        e.preventDefault();return;
@@ -2822,7 +2900,7 @@ private[kyo] object HtmlRenderer:
            |          if(hlEl2){
            |            var val2=hlEl2.getAttribute('data-kyo-dropdown-val');
            |            opts2.hidden=true;
-           |            post({Change:{path:pa(ddWrap),value:val2}});
+           |            if(__kyoListens(ddWrap,"change"))post({Change:{path:pa(ddWrap),value:val2}});
            |          }
            |          e.preventDefault();return;
            |        }
@@ -2907,7 +2985,7 @@ private[kyo] object HtmlRenderer:
            |  else return;
            |  if(nv!==v)kyoSetVal(t,nv);
            |}
-           |["click","contextmenu","input","change","submit","keydown","keyup","focus","blur","mouseover","mouseout"].forEach(function(t){
+           |["click","auxclick","contextmenu","input","change","submit","keydown","keyup","focus","blur","mouseover","mouseout"].forEach(function(t){
            |  document.body.addEventListener(t,handle,true);
            |});
            |document.body.addEventListener("wheel",handle,{capture:true,passive:false});

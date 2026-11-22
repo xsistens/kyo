@@ -817,15 +817,23 @@ private[kyo] object ReactiveUI:
             session
         )
 
-    /** Runs `ui` under `exchange` in a scope of its own and hands over the subscription. What runs a tree for its effects, and what a test
-      * drives one with.
+    /** Runs `ui` under `exchange` in a scope of its own, with a session's command channel installed the way a runner installs it, and hands
+      * over the subscription. What runs a tree for its effects, and what a test drives one with. The channel takes every command and does
+      * nothing, unless `commands` names one.
       */
     private[kyo] def subscribed[A, S](
         ui: UI,
-        exchange: UIExchange,
-        dragLimits: DragSessionLimits = DragSessionLimits()
+        exchange: UIExchange = UIExchange.noop,
+        dragLimits: DragSessionLimits = DragSessionLimits(),
+        commands: Maybe[UI.Commands] = Absent
     )(f: Subscription => A < (Async & Scope & S))(using Frame): A < (Async & S) =
-        Scope.run(normalize(ui, Seq.empty).map(root => subscribe(root, exchange, dragLimits).map(f)))
+        Scope.run {
+            commands.fold(UI.Commands.init(_ => Kyo.unit))(Kyo.lift(_)).map { channel =>
+                UICommands.commands.let(Present(channel)) {
+                    normalize(ui, Seq.empty).map(root => subscribe(root, exchange, dragLimits).map(f))
+                }
+            }
+        }
 
     /** The tail of showing a walked value in `table`: the channels of the root it painted, its kids, the end of its pass. */
     private[internal] def subscribeWalked(

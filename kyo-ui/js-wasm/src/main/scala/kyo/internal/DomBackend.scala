@@ -1481,7 +1481,24 @@ private[kyo] object DomBackend:
             if e.`type` == "click" then
                 val tgt = e.target.asInstanceOf[dom.Element]
                 if tgt != null && tgt.closest("[data-kyo-inert]") != null then e.preventDefault()
-            findPathElement(e.target.asInstanceOf[dom.Element]).foreach { target =>
+            // A blocked link (marked data-kyo-blocked by the blocked setter) declines its plain, modified and middle click, so
+            // the browser never follows its href. Twin of the handle function in clientJs.
+            if e.`type` == "click" || e.`type` == "auxclick" then
+                val tgt = e.target.asInstanceOf[dom.Element]
+                if tgt != null && tgt.closest("a[data-kyo-blocked]") != null then e.preventDefault()
+            // A dropdown's own gesture is the client's (dropdownStep): handled in place it goes no further, and a pick is the
+            // dropdown's Change. Twin of the dropdown blocks in clientJs, which also return before the event is posted.
+            val dropdown = dropdownStep(e)
+            dropdown match
+                case DropdownStep.Pick(wrapper, value) =>
+                    val at = parsePath(wrapper.getAttribute("data-kyo-path"))
+                    fireFromJs(events, dispatch(at, UIEvent.Change(at, value)).unit)
+                case _ => ()
+            end match
+            val passes = dropdown match
+                case DropdownStep.Pass => true
+                case _                 => false
+            (if passes then findPathElement(e.target.asInstanceOf[dom.Element]) else Absent).foreach { target =>
                 val path    = parsePath(target.getAttribute("data-kyo-path"))
                 val evTypes = ChainTypes(target)
                 val t       = e.`type`
@@ -1691,6 +1708,7 @@ private[kyo] object DomBackend:
             }
         val scrollOptions = js.Dynamic.literal(capture = true, passive = true).asInstanceOf[dom.EventListenerOptions]
         listeners.add("click", handler, true)
+        listeners.add("auxclick", handler, true)
         listeners.add("contextmenu", handler, true)
         listeners.add("input", handler, true)
         listeners.add("change", handler, true)
@@ -2048,6 +2066,140 @@ private[kyo] object DomBackend:
                 if nv != v then setValue(t, nv)
             end if
         end if
+
+    /** What the client did with an event on a `UI.dropdown`: nothing of a dropdown's (`Pass`, the event goes on as any other),
+      * handled in place (`Done`, the event goes no further), or a pick of `value` on the dropdown whose wrapper is `wrapper`,
+      * which the client reports as that dropdown's `Change` (`Pick`).
+      */
+    private[kyo] enum DropdownStep derives CanEqual:
+        case Pass, Done
+        case Pick(wrapper: dom.Element, value: String)
+    end DropdownStep
+
+    /** The SPA twin of the dropdown block in `HtmlRenderer.clientJs`, over the same markup.
+      *
+      * A trigger click opens or closes the list (opening one closes the others, and puts the highlight on the first option when
+      * none has it); an option click picks it. On a dropdown's keys: Space opens a closed list on its first option, the arrows
+      * move the highlight round an open one, Enter picks the highlighted option, Escape closes, Tab closes and goes on, and a
+      * printable key jumps to the next option whose label starts with it. A pick closes the list. A silent dropdown (its
+      * wrapper lists no change in `data-kyo-ev`, so a disabled one too) opens nothing and picks nothing. Unlike the server
+      * client, a trigger click is not skipped when untrusted: this client synthesizes no click of its own that would close the
+      * list Space just opened.
+      */
+    private[kyo] def dropdownStep(e: dom.Event): DropdownStep =
+        val target = e.target.asInstanceOf[dom.Element]
+        if target == null || js.typeOf(target.asInstanceOf[js.Dynamic].getAttribute) != "function" then DropdownStep.Pass
+        else if e.`type` == "click" then dropdownClick(target)
+        else if e.`type` == "keydown" then dropdownKey(e.asInstanceOf[dom.KeyboardEvent], target)
+        else DropdownStep.Pass
+        end if
+    end dropdownStep
+
+    /** Whether a dropdown's wrapper lists `t` in `data-kyo-ev`: a silent one lists none. Twin of `__kyoListens` in clientJs. */
+    private def dropdownListens(wrapper: dom.Element, t: String): Boolean =
+        val ev = wrapper.getAttribute("data-kyo-ev")
+        ev != null && ev.split(",").contains(t)
+
+    private def dropdownList(id: String): dom.Element =
+        if id == null then null
+        else dom.document.querySelector(s"""[data-kyo-dropdown-options="$id"]""").asInstanceOf[dom.Element]
+
+    /** Every dropdown list but the one of `except` (`null` for none) closed. Twin of `kyoCloseDropdown` in clientJs. */
+    private def closeDropdowns(except: String): Unit =
+        val all = dom.document.querySelectorAll("[data-kyo-dropdown-options]")
+        (0 until all.length).foreach { i =>
+            val el = all(i).asInstanceOf[dom.Element]
+            if el.getAttribute("data-kyo-dropdown-options") != except then el.setAttribute("hidden", "")
+        }
+    end closeDropdowns
+
+    private def dropdownOptions(list: dom.Element): Seq[dom.Element] =
+        val all = list.querySelectorAll("[data-kyo-dropdown-opt]")
+        (0 until all.length).map(i => all(i).asInstanceOf[dom.Element])
+
+    private def moveHighlight(from: dom.Element, to: dom.Element): Unit =
+        if from != null then from.removeAttribute("data-kyo-dropdown-hl")
+        to.setAttribute("data-kyo-dropdown-hl", "true")
+
+    private def dropdownClick(target: dom.Element): DropdownStep =
+        val did = target.getAttribute("data-kyo-dropdown-trigger")
+        if did != null then
+            val list    = dropdownList(did)
+            val wrapper = target.closest("[data-kyo-dropdown]")
+            if list != null && wrapper != null && dropdownListens(wrapper, "change") then
+                val opening = list.hasAttribute("hidden")
+                closeDropdowns(if opening then did else null)
+                if opening then list.removeAttribute("hidden") else list.setAttribute("hidden", "")
+                if opening && list.querySelector("[data-kyo-dropdown-hl]") == null then
+                    dropdownOptions(list).headOption.foreach(_.setAttribute("data-kyo-dropdown-hl", "true"))
+            end if
+            DropdownStep.Done
+        else
+            val value = target.getAttribute("data-kyo-dropdown-val")
+            if value == null then DropdownStep.Pass
+            else
+                val wrapper = target.closest("[data-kyo-dropdown]")
+                if wrapper == null then DropdownStep.Done
+                else
+                    val list = dropdownList(wrapper.getAttribute("data-kyo-dropdown"))
+                    if list != null then list.setAttribute("hidden", "")
+                    if dropdownListens(wrapper, "change") then DropdownStep.Pick(wrapper, value) else DropdownStep.Done
+                end if
+            end if
+        end if
+    end dropdownClick
+
+    private def dropdownKey(ke: dom.KeyboardEvent, target: dom.Element): DropdownStep =
+        val wrapper = target.closest("[data-kyo-dropdown]")
+        val list    = if wrapper == null then null else dropdownList(wrapper.getAttribute("data-kyo-dropdown"))
+        if list == null then DropdownStep.Pass
+        else if list.hasAttribute("hidden") then
+            if ke.key == " " || ke.key == "Spacebar" || ke.keyCode == 32 then
+                ke.preventDefault()
+                if dropdownListens(wrapper, "change") then
+                    closeDropdowns(wrapper.getAttribute("data-kyo-dropdown"))
+                    list.removeAttribute("hidden")
+                    dropdownOptions(list).headOption.foreach(_.setAttribute("data-kyo-dropdown-hl", "true"))
+                end if
+                DropdownStep.Done
+            else DropdownStep.Pass
+        else
+            val items = dropdownOptions(list)
+            val hl    = list.querySelector("[data-kyo-dropdown-hl]")
+            val at    = if hl == null then 0 else math.max(0, items.indexWhere(_ eq hl))
+            ke.key match
+                case "ArrowDown" | "ArrowUp" =>
+                    ke.preventDefault()
+                    if items.nonEmpty then
+                        val step = if ke.key == "ArrowDown" then 1 else items.length - 1
+                        moveHighlight(hl, items((at + step) % items.length))
+                    DropdownStep.Done
+                case "Enter" =>
+                    ke.preventDefault()
+                    if hl == null then DropdownStep.Done
+                    else
+                        list.setAttribute("hidden", "")
+                        if dropdownListens(wrapper, "change") then DropdownStep.Pick(wrapper, hl.getAttribute("data-kyo-dropdown-val"))
+                        else DropdownStep.Done
+                    end if
+                case "Escape" =>
+                    ke.preventDefault()
+                    list.setAttribute("hidden", "")
+                    DropdownStep.Done
+                case "Tab" =>
+                    list.setAttribute("hidden", "")
+                    DropdownStep.Pass
+                case k if k.length == 1 =>
+                    ke.preventDefault()
+                    val ch   = k.toLowerCase
+                    val next = (1 to items.length).iterator.map(i => items((at + i) % items.length))
+                        .find(_.textContent.trim.toLowerCase.startsWith(ch))
+                    next.foreach(moveHighlight(hl, _))
+                    DropdownStep.Done
+                case _ => DropdownStep.Pass
+            end match
+        end if
+    end dropdownKey
 
     /** Whether the browser's own activation of `target` would run a handler the dispatcher runs again.
       *

@@ -68,8 +68,91 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
             Channel("aria-flag", UI.div(UI.span("x").ariaFlag("disabled", ref: Signal[Boolean])), ref.set(true).unit, ref.waiters)
         )
 
+    /** A silent flag on an element with a handler: moving it on takes `data-kyo-ev` away, one patch, as for the others. */
+    private def silentChannel(using Frame): Channel < Sync =
+        Signal.initRef(false).map(ref =>
+            Channel("silent", UI.div(UI.span("x").onClick(Kyo.unit).silent(ref: Signal[Boolean])), ref.set(true).unit, ref.waiters)
+        )
+
     private def channels(using Frame): Seq[Channel] < Sync =
-        Kyo.foreach(Chunk(attrChannel, boolChannel, classChannel, ariaFlagChannel))(identity).map(_.toSeq)
+        Kyo.foreach(Chunk(attrChannel, boolChannel, classChannel, ariaFlagChannel, silentChannel))(identity).map(_.toSeq)
+
+    /** The patches of `data-kyo-ev` an exchange recorded, as `set <events>` and `off`, the `disabled` patches, and the paints. */
+    final private class EventPatches(fast: Boolean):
+        val exchange              = new RecordingExchange(synchronous = fast)
+        def events: Chunk[String] = exchange.recorded.collect {
+            case op: Op.Attr if op.name == "data-kyo-ev"     => s"set ${op.value}"
+            case op: Op.BoolAttr if op.name == "data-kyo-ev" => if op.value then "on" else "off"
+        }
+        def disabled: Chunk[Boolean] = exchange.recorded.collect { case op: Op.BoolAttr if op.name == "disabled" => op.value }
+        def drawn: Int               = exchange.recorded.count { case _: Op.Paint => true; case _ => false }
+    end EventPatches
+
+    "silent of a signal takes data-kyo-ev away while on and puts it back while off, in place, with nothing drawn again" in {
+        Scope.run {
+            Kyo.foreachDiscard(Chunk(true, false)) { fast =>
+                val rec = new EventPatches(fast)
+                for
+                    muted <- Signal.initRef(false)
+                    root  <- ReactiveUI.normalize(UI.div(UI.span("x").onClick(Kyo.unit).silent(muted: Signal[Boolean])), Seq.empty)
+                    _     <- ReactiveUI.subscribe(root, rec.exchange)
+                    _     <- muted.set(true)
+                    _     <- assertEventually(Sync.defer(rec.events.size == 1))
+                    _     <- muted.set(false)
+                    _     <- assertEventually(Sync.defer(rec.events.size == 2))
+                yield assert(rec.events == Chunk("off", "set click") && rec.drawn == 0, s"fast=$fast: ${rec.events}, drawn ${rec.drawn}")
+                end for
+            }
+        }
+    }
+
+    "disabled of a signal silences the element too, and with silent of a signal it is silent while either holds" in {
+        Scope.run {
+            Kyo.foreachDiscard(Chunk(true, false)) { fast =>
+                val rec = new EventPatches(fast)
+                for
+                    off   <- Signal.initRef(false)
+                    muted <- Signal.initRef(false)
+                    ui = UI.div(UI.button("Go").onClick(Kyo.unit).disabled(off: Signal[Boolean]).silent(muted: Signal[Boolean]))
+                    root <- ReactiveUI.normalize(ui, Seq.empty)
+                    _    <- ReactiveUI.subscribe(root, rec.exchange)
+                    _    <- off.set(true)
+                    _    <- assertEventually(Sync.defer(rec.events.size == 1 && rec.disabled.size == 1))
+                    // Silent through each step until both are off: no data-kyo-ev patch in between.
+                    _ <- muted.set(true)
+                    _ <- off.set(false)
+                    _ <- assertEventually(Sync.defer(rec.disabled.size == 2))
+                    _ <- muted.set(false)
+                    _ <- assertEventually(Sync.defer(rec.events.size == 2))
+                yield assert(
+                    rec.events == Chunk("off", "set click") && rec.disabled == Chunk(true, false) && rec.drawn == 0,
+                    s"fast=$fast: ${rec.events}, disabled ${rec.disabled}, drawn ${rec.drawn}"
+                )
+                end for
+            }
+        }
+    }
+
+    "silent of a signal on a dropdown takes its wrapper's data-kyo-ev away and puts it back, in place" in {
+        Scope.run {
+            Kyo.foreachDiscard(Chunk(true, false)) { fast =>
+                val rec = new EventPatches(fast)
+                for
+                    muted <- Signal.initRef(false)
+                    root  <- ReactiveUI.normalize(UI.div(UI.dropdown("A" -> "a").id("d").silent(muted: Signal[Boolean])), Seq.empty)
+                    _     <- ReactiveUI.subscribe(root, rec.exchange)
+                    _     <- muted.set(true)
+                    _     <- assertEventually(Sync.defer(rec.events.size == 1))
+                    _     <- muted.set(false)
+                    _     <- assertEventually(Sync.defer(rec.events.size == 2))
+                yield assert(
+                    rec.events == Chunk("off", "set click,keydown,change") && rec.drawn == 0,
+                    s"fast=$fast: ${rec.events}, drawn ${rec.drawn}"
+                )
+                end for
+            }
+        }
+    }
 
     "an aria flag writes \"true\" while on and takes the attribute away while off, in place" in {
         Scope.run {
