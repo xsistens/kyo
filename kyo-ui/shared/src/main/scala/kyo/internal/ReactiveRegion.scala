@@ -52,6 +52,8 @@ private[kyo] object ReactiveRegion:
             // placeholder is a `tr` is a list of rows, and its anchors belong inside one tbody.
             case mounted: Mounted =>
                 if mounted.placeholderUI.isEmpty then TableContent.Transparent else tableContent(mounted.placeholderUI.get)
+            // A drawn mount's own range chooses its host from what it drew, so around it nothing is known yet.
+            case drawn: Drawn                           => drawn.display.fold(TableContent.Transparent)(tableContent)
             case b: Bounded                             => tableContent(b.display.getOrElse(b.settings.placeholderView.getOrElse(b.child)))
             case KeyedChild(_, child)                   => tableContent(child)
             case Fragment(children) if children.isEmpty => TableContent.Other
@@ -139,13 +141,16 @@ private[kyo] object ReactiveRegion:
       * hex-encoded so no key can spell a comment terminator or a separator. The live counterpart is `m`, which the
       * client stamps onto the marker once it has adopted the slot: an id never holds a space, so the space before the
       * first flag separates the two unambiguously.
+      *
+      * `f` says the render drew this slot's content for a new instance: a slot the client already holds under the same key belongs to one
+      * that has gone, so the client morphs it where it would otherwise leave it to its owner (see `__kyoPatchLogical`).
       */
-    private[kyo] def mountSlotFlags(key: Maybe[Any], frame: Frame): String =
+    private[kyo] def mountSlotFlags(key: Maybe[Any], frame: Frame, fresh: Boolean = false): String =
         key match
             case Present(value) =>
                 val text = value.toString
-                val out  = new StringBuilder(14 + text.length * 4)
-                out.append(" s k=")
+                val out  = new StringBuilder(16 + text.length * 4)
+                out.append(if fresh then " s f k=" else " s k=")
                 out.append(Integer.toHexString(frame.hashCode))
                 out.append('.')
                 var i = 0

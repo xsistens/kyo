@@ -13,7 +13,7 @@ class SelfAddressScenarioItTest extends UITest:
 
     private def app: UI < Async =
         Kyo.lift(UI.div(
-            UI.mounted(
+            waitingMount(
                 for
                     cmds    <- UI.commands
                     inputId <- cmds.freshId

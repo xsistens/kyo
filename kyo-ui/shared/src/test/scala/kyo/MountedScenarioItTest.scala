@@ -30,6 +30,37 @@ class MountedScenarioItTest extends UITest:
         }
     }
 
+    // Under the rule decided on 2026-11-05 an unkeyed element effect starts again with its region; a keyed one is kept.
+    "an element's effect starts again with its region without a key, and runs once with one" in {
+        val app: UI < Async =
+            for
+                tick <- Signal.initRef(0)
+                runs <- Signal.initRef(0)
+                kept <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("Tick").id("tick").onClick(tick.getAndUpdate(_ + 1).unit),
+                runs.map(n => UI.span(s"runs:$n").id("runs")),
+                kept.map(n => UI.span(s"kept:$n").id("kept")),
+                tick.render(n =>
+                    UI.div(
+                        UI.span(s"tick:$n").id("tickview"),
+                        UI.span("host").id("host").whileMounted(runs.getAndUpdate(_ + 1).unit),
+                        UI.span("keyed").whileMountedKeyed("kept")(kept.getAndUpdate(_ + 1).unit)
+                    )
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("runs"), "runs:1")
+                _ <- Browser.assertText(Selector.id("kept"), "kept:1")
+                _ <- Browser.click(Selector.id("tick"))
+                _ <- Browser.assertText(Selector.id("tickview"), "tick:1")
+                _ <- Browser.assertText(Selector.id("runs"), "runs:2")
+                _ <- Browser.assertText(Selector.id("kept"), "kept:1")
+            yield ()
+        }
+    }
+
     "a kept instance keeps its state and stays clickable while its region re-renders" in {
         val counter: UI < (Abort[Throwable] & Async & Scope) =
             for count <- Signal.initRef(0)

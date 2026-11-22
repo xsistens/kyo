@@ -219,7 +219,7 @@ class BoundaryTest extends UIScreen:
             for
                 started <- Promise.init[Unit, Any]
                 inner   <- Promise.init[Unit, Any]
-                outer = UI.mounted(Kyo.lift(div(
+                outer = waitingMount(Kyo.lift(div(
                     span("outer"),
                     UI.mounted(started.completeUnitDiscard.andThen(inner.get).andThen(span("inner")))
                 )))

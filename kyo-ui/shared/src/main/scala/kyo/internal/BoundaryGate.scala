@@ -19,26 +19,55 @@ private[kyo] object Boundaries:
         end if
     end implicitOf
 
-    /** Whether `ui`, as it renders now, holds a mount that a waiting boundary around it catches: one that no waiting boundary inside
-      * `ui`, its own included, catches first.
+    /** Whether `ui` at `at`, as it renders now, holds a mount that a waiting boundary around it catches: one that no waiting boundary
+      * inside `ui`, its own included, catches first. A drawn mount waits for nothing, but what it drew may hold one that does.
       */
-    def catches(ui: UI)(using Frame): Boolean < Sync = SignalNow.Locals.take(Sync.Unsafe.defer(catchesNow(ui)))
+    def catches(ui: UI, at: ReactiveRegion.RegionIdentity, draws: MountDispatch)(using Frame): Boolean < Sync =
+        // What it is asked about, a boundary's content, is a range of its own.
+        SignalNow.Locals.take(Sync.Unsafe.defer(DrawContext.inRange(catchesNow(ui, at, draws))))
 
     /** [[catches]] for a pass that already holds the thread (see [[SignalNow]]). */
-    def catchesNow(ui: UI)(using AllowUnsafe, Frame, SignalNow.Locals): Boolean =
+    def catchesNow(ui: UI, at: ReactiveRegion.RegionIdentity, draws: MountDispatch)(using AllowUnsafe, Frame, SignalNow.Locals): Boolean =
         ui match
-            case m: Mounted     => implicitOf(m).isEmpty
-            case b: Bounded     => if b.settings.waits then false else catchesNow(b.child)
-            case r: Reactive[?] => catchesNow(SignalNow(r.signal)(using r.frame, summon[SignalNow.Locals], summon[AllowUnsafe]))
+            case m: Mounted => implicitOf(m).isEmpty
+            case d: Drawn   =>
+                val inner = at.transparent
+                // Counted whether or not it draws here, as a render counts every keyed node it meets.
+                val occurrence = DrawContext.occurrence(summon[SignalNow.Locals].read(DrawContext.scope).rows, d)
+                draws.noteOccurrence(inner, d, occurrence)
+                d.display match
+                    case Present(shown) => catchesNow(shown, inner, draws)
+                    case Absent         =>
+                        draws.drawnNow(inner, d, occurrence) match
+                            case DrawSlot.Fresh(draw, _) =>
+                                DrawContext.inContent(draw.base)(draw.outcome.fold(catchesNow(_, inner, draws), _ => false, _ => false))
+                            case DrawSlot.Live(instance, _) =>
+                                DrawContext.inContent(instance.children.idBase)(catchesNow(instance.shownNow(d), inner, draws))
+                end match
+            // A boundary's content and a region's value are ranges of their own, as the render walks them.
+            case b: Bounded     => if b.settings.waits then false else DrawContext.inRange(catchesNow(b.child, at.transparent, draws))
+            case r: Reactive[?] =>
+                DrawContext.inRange(
+                    catchesNow(SignalNow(r.signal)(using r.frame, summon[SignalNow.Locals], summon[AllowUnsafe]), at.transparent, draws)
+                )
             case fe: Foreach[?, ?] @unchecked =>
                 fe.applyTyped {
-                    [T] => (signal, _, render) =>
+                    [T] => (signal, keyFn, render) =>
                         val items = SignalNow(signal)(using fe.frame, summon[SignalNow.Locals], summon[AllowUnsafe])
-                        items.toSeq.iterator.zipWithIndex.exists((item, i) => catchesNow(render(i, item)))
+                        DrawContext.inRange(items.toSeq.iterator.zipWithIndex.exists { (item, i) =>
+                            val key = keyFn match
+                                case Present(f) => f(item)
+                                case Absent     => i.toString
+                            DrawContext.inRow(key)(catchesNow(render(i, item), at.child(key), draws))
+                        })
                 }
-            case e: Element       => e.children.exists(catchesNow)
-            case Fragment(cs)     => cs.exists(catchesNow)
-            case KeyedChild(_, c) => catchesNow(c)
+            case e: Element   => e.children.toSeq.iterator.zipWithIndex.exists((c, i) => catchesNow(c, at.child(i.toString), draws))
+            case Fragment(cs) =>
+                cs.toSeq.iterator.zipWithIndex.exists {
+                    case (kc: KeyedChild[?], _) => DrawContext.inRow(kc.key)(catchesNow(kc.child, at.child(kc.key), draws))
+                    case (c, i)                 => catchesNow(c, at.child(i.toString), draws)
+                }
+            case KeyedChild(_, c) => catchesNow(c, at, draws)
             case _                => false
 
     /** `ui` at `path` as the engine runs it now: every mount shows its instance's current content and every waiting boundary what it
@@ -62,6 +91,15 @@ private[kyo] object Boundaries:
                                             .map(c => m.copy(placeholderUI = Present(c))(using m.frame))
                                 }
                         }
+            case d: Drawn =>
+                dispatch.lookup(at.transparent).map {
+                    case Absent        => d
+                    case Present(cell) =>
+                        cell.current.map(state =>
+                            resolveLive(state.content(MountedSpec(d, path, Nil)), path, at.transparent, dispatch)
+                                .map(c => d.copy(display = Present(c))(using d.frame))
+                        )
+                }
             case b: Bounded =>
                 val shown: UI < Sync =
                     if !b.settings.waits then resolveLive(b.child, path, at.transparent, dispatch).map(ownContent(b, _))

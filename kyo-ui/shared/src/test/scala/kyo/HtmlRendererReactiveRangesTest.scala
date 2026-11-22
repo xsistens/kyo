@@ -120,7 +120,7 @@ class HtmlRendererReactiveRangesTest extends UITest:
                 UI.table(
                     UI.tr(UI.td("head").id("head")),
                     rows.foreachIndexed((_, value) =>
-                        UI.mounted(Sync.defer(UI.tr(UI.td(value).id(value)))).keyed(value).placeholder(UI.tr(UI.td("...")))
+                        waitingMount(Sync.defer(UI.tr(UI.td(value).id(value)))).keyed(value).placeholder(UI.tr(UI.td("...")))
                     )
                 ),
                 Seq.empty
