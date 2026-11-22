@@ -40,21 +40,25 @@ private[kyo] object Boundaries:
                     case Absent         =>
                         draws.drawnNow(inner, d, occurrence) match
                             case DrawSlot.Fresh(draw, _) =>
-                                DrawContext.inContent(draw.base)(draw.outcome.fold(catchesNow(_, inner, draws), _ => false, _ => false))
+                                DrawContext.inContent(
+                                    draw.base,
+                                    d,
+                                    inner
+                                )(draw.outcome.fold(catchesNow(_, inner, draws), _ => false, _ => false))
                             case DrawSlot.Live(instance, _) =>
-                                DrawContext.inContent(instance.children.idBase)(catchesNow(instance.shownNow(d), inner, draws))
+                                DrawContext.inContent(instance.children.idBase, d, inner)(catchesNow(instance.shownNow(d), inner, draws))
                 end match
             // A boundary's content and a region's value are ranges of their own, as the render walks them.
             case b: Bounded     => if b.settings.waits then false else DrawContext.inRange(catchesNow(b.child, at.transparent, draws))
             case r: Reactive[?] =>
-                DrawContext.inRange(
+                DrawContext.inRegion(
                     catchesNow(SignalNow(r.signal)(using r.frame, summon[SignalNow.Locals], summon[AllowUnsafe]), at.transparent, draws)
                 )
             case fe: Foreach[?, ?] @unchecked =>
                 fe.applyTyped {
                     [T] => (signal, keyFn, render) =>
                         val items = SignalNow(signal)(using fe.frame, summon[SignalNow.Locals], summon[AllowUnsafe])
-                        DrawContext.inRange(items.toSeq.iterator.zipWithIndex.exists { (item, i) =>
+                        DrawContext.inRegion(items.toSeq.iterator.zipWithIndex.exists { (item, i) =>
                             val key = keyFn match
                                 case Present(f) => f(item)
                                 case Absent     => i.toString

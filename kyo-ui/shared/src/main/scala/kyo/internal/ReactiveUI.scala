@@ -178,7 +178,7 @@ private[kyo] object ReactiveUI:
                 val current                                 = painted.fold(SignalNow(ui.signal))(_.ui)
                 val contentParentContext                    = nestedParentContext(parentContext, current)
                 val (kids, _)                               =
-                    DrawContext.inRange(walkStatic(current, path, svg, contentContext, contentParentContext, cells, rows, deepRows))
+                    DrawContext.inRegion(walkStatic(current, path, svg, contentContext, contentParentContext, cells, rows, deepRows))
                 init(
                     path,
                     ui.signal,
@@ -196,7 +196,7 @@ private[kyo] object ReactiveUI:
                             val currentUI            = SignalNow(ui.signal)
                             val contentParentContext = nestedParentContext(parentContext, currentUI)
                             val (_, freshHdl)        =
-                                DrawContext.inRange(walkStatic(
+                                DrawContext.inRegion(walkStatic(
                                     currentUI,
                                     path,
                                     svg,
@@ -220,7 +220,16 @@ private[kyo] object ReactiveUI:
                         val current              = foreachFragment(keyFn, renderFn, items0)
                         val contentParentContext = nestedParentContext(parentContext, current)
                         val (kids, _)            =
-                            DrawContext.inRange(walkStatic(current, path, svg, contentContext, contentParentContext, cells, rows, deepRows))
+                            DrawContext.inRegion(walkStatic(
+                                current,
+                                path,
+                                svg,
+                                contentContext,
+                                contentParentContext,
+                                cells,
+                                rows,
+                                deepRows
+                            ))
                         // Fallback dispatch: re-render the whole list from the current value and route
                         // through the fresh fragment handler. Used whenever the row registry cannot
                         // resolve the target (region not subscribed on the reuse path, row painted but
@@ -230,7 +239,7 @@ private[kyo] object ReactiveUI:
                                 val currentUI          = SignalNow(sig)
                                 val freshParentContext = nestedParentContext(parentContext, currentUI)
                                 val (_, freshHdl)      =
-                                    DrawContext.inRange(walkStatic(
+                                    DrawContext.inRegion(walkStatic(
                                         currentUI,
                                         path,
                                         svg,
@@ -350,7 +359,7 @@ private[kyo] object ReactiveUI:
                 val paintedPlaceholder: Maybe[UI] =
                     if b.display.isEmpty && b.settings.waits && {
                             val locals = summon[SignalNow.Locals]
-                            val here   = DrawContext.IdScope(locals.read(DrawContext.scope).owner, rowKeys(path, rows, deepRows))
+                            val here   = locals.read(DrawContext.scope).copy(rows = rowKeys(path, rows, deepRows))
                             Boundaries.catchesNow(b.child, contentContext, cells)(using
                                 summon[AllowUnsafe],
                                 ui.frame,
@@ -407,27 +416,36 @@ private[kyo] object ReactiveUI:
             case ui: MountNode =>
                 val contentContext = regionIdentity.transparent
                 val specRows       = rowKeys(path, rows, deepRows)
-                val spec           = MountedSpec(ui, path, specRows, contentContext, occurrence = DrawContext.occurrence(specRows, ui))
+                // Where this node sits for its ids, as this walk sees it: an event that draws it later draws it here.
+                val scopeHere = summon[SignalNow.Locals].read(DrawContext.scope).copy(rows = specRows)
+                val spec      = MountedSpec(
+                    ui,
+                    path,
+                    specRows,
+                    contentContext,
+                    occurrence = DrawContext.occurrence(specRows, ui),
+                    scope = scopeHere
+                )
                 ui match
                     case d: Drawn   => cells.noteOccurrence(contentContext, d, spec.occurrence)
                     case _: Mounted => ()
-                // Where this node sits for its ids, as this walk sees it: an event that draws it later draws it here.
-                val scopeHere = DrawContext.IdScope(summon[SignalNow.Locals].read(DrawContext.scope).owner, spec.rows)
                 // The content is the instance's: what an event draws in it derives its ids from `base`.
                 def intoContent(content: UI, base: String, targetPath: Seq[String], event: UIEvent): Boolean < (Async & Abort[Any]) =
-                    DrawContext.scope.let(DrawContext.IdScope(base, Chunk.empty))(Sync.Unsafe.defer(DrawContext.inContent(base) {
-                        val (_, freshHdl) = walkStatic(
-                            content,
-                            path,
-                            svg,
-                            contentContext,
-                            nestedParentContext(parentContext, content),
-                            cells,
-                            rows = 0L,
-                            deepRows = Chunk.empty
-                        )
-                        freshHdl(targetPath, event)
-                    }))
+                    DrawContext.scope.let(DrawContext.contentScope(base, ui, contentContext))(Sync.Unsafe.defer(
+                        DrawContext.inContent(base, ui, contentContext) {
+                            val (_, freshHdl) = walkStatic(
+                                content,
+                                path,
+                                svg,
+                                contentContext,
+                                nestedParentContext(parentContext, content),
+                                cells,
+                                rows = 0L,
+                                deepRows = Chunk.empty
+                            )
+                            freshHdl(targetPath, event)
+                        }
+                    ))
                 // The node value is fresh on every dispatch, so the handler finds the live instance through the dispatch table.
                 val handle: Handler = (targetPath, event) =>
                     cells.instanceForEvent(contentContext, ui).map {
@@ -551,7 +569,7 @@ private[kyo] object ReactiveUI:
         val deepRows = if depth < 63 then outerDeepRows else outerDeepRows.append(depth)
         // A row is a range of its own: walked alone (a rebuilt row) it counts the same as walked with its region, where its row key
         // tells its calls apart from the other rows' anyway.
-        DrawContext.inRange {
+        DrawContext.inRegion {
             if needsOwnNode(rowUI) then
                 val rui = normalizeAt(rowUI, rowPath, svg, context, parentContext, cells, rows, deepRows)
                 (Seq(rui), rui.handle)
@@ -611,8 +629,7 @@ private[kyo] object ReactiveUI:
                 val staticHandlers: Seq[(Int, Handler)] = handlers.result()
                 // Where this element sits for ids, as this walk sees it: the instance that holds it and the rows around it. A node the
                 // dispatch draws on its way to the target derives its id from there, as the page's did.
-                val scopeHere =
-                    DrawContext.IdScope(summon[SignalNow.Locals].read(DrawContext.scope).owner, rowKeys(basePath, rows, deepRows))
+                val scopeHere       = summon[SignalNow.Locals].read(DrawContext.scope).copy(rows = rowKeys(basePath, rows, deepRows))
                 val handle: Handler = (targetPath, event) =>
                     DrawContext.scope.let(scopeHere)(
                         dispatch(elem, basePath, context, targetPath, event, reactiveChildren, staticHandlers, cells)
@@ -907,13 +924,15 @@ private[kyo] object ReactiveUI:
                 // A constant node belongs to the enclosing region's pass, which already counts its children.
                 Kyo.foreachDiscard(rui.children)(subscribeScoped(_, exchange, signalChangeTime, mounts, dispatch, pass, releases))
             // Inside a waiting boundary a list goes through the whole-region path, whose passes the boundary counts.
+            // A region or a list runs again, so what its passes draw can be shown again with other props.
             else if rui.foreachSpec.exists(_.reusable) && exchange.gate.isEmpty then
-                RowRegions.subscribeForeachRegion(rui, rui.foreachSpec.get, exchange, signalChangeTime, mounts.child(pass, rui), dispatch)
+                DrawContext.inRegionScope(
+                    subscribeForeachRegion(rui, rui.foreachSpec.get, exchange, signalChangeTime, mounts.child(pass, rui), dispatch)
+                )
             else
                 bindTextRegion(rui, exchange, releases).map { bound =>
                     if bound then Kyo.unit
-                    else
-                        subscribeRegion(rui, exchange, signalChangeTime, mounts.child(pass, rui), dispatch)
+                    else DrawContext.inRegionScope(subscribeRegion(rui, exchange, signalChangeTime, mounts.child(pass, rui), dispatch))
                 }
         }
     end subscribeScoped
@@ -939,8 +958,10 @@ private[kyo] object ReactiveUI:
         if !node.settings.waits then subscribeContent(exchange)
         else
             for
-                holds <- DrawContext.scope.let(DrawContext.IdScope(mounts.table.idBase, rowKeys(rui.path, rui.rows, rui.deepRows)))(
-                    Boundaries.catches(node.child, rui.contentContext, dispatch)
+                holds <- DrawContext.scope.use(now =>
+                    DrawContext.scope.let(now.copy(owner = mounts.table.idBase, rows = rowKeys(rui.path, rui.rows, rui.deepRows)))(
+                        Boundaries.catches(node.child, rui.contentContext, dispatch)
+                    )
                 )
                 seed  <- mounts.left(rui.path)
                 mutex <- Meter.initMutex(reentrant = true)
@@ -1120,6 +1141,21 @@ private[kyo] object ReactiveUI:
                 end bindStyle
 
                 bindAll(channels.attrs, rendered.attrs, exchange.attrPatcherNow, exchange.onAttrPatch(path, _, _))
+                    .andThen {
+                        // An attribute a signal may leave out: set while it holds a value, taken away (the boolean op, off) while not.
+                        given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
+                        val patcher                                  =
+                            for
+                                set <- exchange.attrPatcherNow
+                                off <- exchange.boolAttrPatcherNow
+                            yield (p: Seq[String], name: String, v: Maybe[String]) => v.fold(off(p, name, false))(set(p, name, _))
+                        bindAll[Maybe[String]](
+                            channels.maybeAttrs,
+                            rendered.maybeAttrs,
+                            patcher,
+                            (name, v) => v.fold(exchange.onBoolAttrPatch(path, name, false))(exchange.onAttrPatch(path, name, _))
+                        )
+                    }
                     .andThen(bindAll(channels.bools, rendered.bools, exchange.boolAttrPatcherNow, exchange.onBoolAttrPatch(path, _, _)))
                     .andThen(bindAll(channels.classes, rendered.classes, exchange.classPatcherNow, exchange.onClassPatch(path, _, _)))
                     .andThen(channels.style.fold(Kyo.unit: Unit < (Async & Scope))(bindStyle))
@@ -1207,7 +1243,7 @@ private[kyo] object ReactiveUI:
                 svgContext = rui.region match
                     case _: ReactiveRegion.HtmlRange  => false
                     case _: ReactiveRegion.SvgElement => true
-                (newKids, _) <- SignalNow.Locals.take(Sync.Unsafe.defer(DrawContext.inRange(walkStatic(
+                (newKids, _) <- SignalNow.Locals.take(Sync.Unsafe.defer(DrawContext.inRegion(walkStatic(
                     current,
                     rui.path,
                     svgContext,

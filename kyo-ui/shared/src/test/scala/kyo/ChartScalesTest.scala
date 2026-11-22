@@ -141,4 +141,25 @@ class ChartScalesTest extends kyo.test.Test[Any]:
         """)("value ordinal is not a member")
     }
 
+    // ---- a live chart over a signal chosen from a Local reads the rows the Local chooses where it is lowered ----
+
+    case class LRow(cat: String, y: Int) derives CanEqual
+
+    private val boundRows: Seq[LRow]    = Seq(LRow("bound", 123456789))
+    private val defaultRows: Seq[LRow]  = Seq(LRow("default", 1))
+    private val chooser: Local[Boolean] = Local.init(false)
+
+    "lowerWithScales over a signal chosen from a Local resolves the rows the Local chooses where it is lowered" in {
+        val chosen = Signal.withLocal(chooser)(bound => Signal.initConst(if bound then boundRows else defaultRows))
+        for
+            (_, reference) <- Chart(Signal.initConst(boundRows))(bar(x = _.cat, y = _.y)).lowerWithScales
+            (_, sc)        <- chooser.let(true)(Chart(chosen)(bar(x = _.cat, y = _.y)).lowerWithScales)
+        yield
+            assert(sc.x.toPixelCategory("bound").nonEmpty, "the x scale lacks the category of the rows the Local chooses")
+            assert(sc.x.toPixelCategory("default") == Absent, "the x scale holds the category of the Local's default rows")
+            // The left margin fits the y labels of the rows on screen, which are the bound ones.
+            assert(sc.plot == reference.plot, s"plot ${sc.plot} sized for other rows than the bound ones, ${reference.plot}")
+        end for
+    }
+
 end ChartScalesTest

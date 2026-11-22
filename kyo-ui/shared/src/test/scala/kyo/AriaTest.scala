@@ -16,6 +16,24 @@ class AriaTest extends kyo.test.Test[Any]:
         }
     }
 
+    "aria(name, Maybe) sets the attribute from Present and nothing from Absent" in {
+        val named: Maybe[Prop[String]]   = Present("Save")
+        val unnamed: Maybe[Prop[String]] = Absent
+        val el                           = UI.div
+        for html <- renderHtml(el.aria("label", named))
+        yield
+            assert(html.contains("aria-label=\"Save\""), html)
+            assert(el.aria("label", unnamed) eq el)
+        end for
+    }
+
+    "aria(name, Maybe) of a signal is the attribute channel" in {
+        for
+            ref <- Signal.initRef("Save")
+            el = UI.div.aria("label", Present(ref): Maybe[Prop[String]])
+        yield assert(el.attrs.reactiveAttrs.get("aria-label").exists(_ eq ref), s"${el.attrs}")
+    }
+
     "aria(pairs*) with three pairs renders all aria-* attributes sorted alphabetically" in {
         val html = renderHtml(
             UI.div.aria(
