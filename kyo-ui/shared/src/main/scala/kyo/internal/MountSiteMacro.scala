@@ -15,6 +15,9 @@ object MountSites:
 
         /** The site of a node that has no key. */
         private[kyo] val none: MountSite = 0
+
+        /** Sites compare as the values they are, so a site can key a mount: a component made at two places is two instances. */
+        given CanEqual[MountSite, MountSite] = CanEqual.derived
     end MountSite
 
 end MountSites

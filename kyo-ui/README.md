@@ -318,16 +318,34 @@ val unkeyedLosesFocusOnReorder: UI < Async =
     yield ul(items.foreach(t => li(input.id(s"row-${t.id}"))))
 ```
 
-### Components that run an effect: `UI.mounted`
+### Components with state or an effect: `UI.mounted`
 
-The boundaries above re-render pure `UI` values. A component that has to run an effect to produce its UI (load data, open a subscription, start a feed) is a `UI.mounted` node: it takes a `UI < (Abort[Throwable] & Async & Scope)`, shows a placeholder until the effect publishes, and renders a failure in place while the rest of the page keeps working. The effect runs inside a `Scope` that lives as long as the node's instance, so what it acquires or forks is released when the instance goes away.
+The boundaries above re-render pure `UI` values. A component that holds state of its own or has to run an effect to produce its UI is a `UI.mounted` node. The type of what you give it says which of two things it is.
+
+A `UI < Sync` allocates what it needs and draws. It runs in the render pass, so what it returns is on the page from the first paint: a static page shows it, a live page shows it with nothing in between, and it takes events from that paint on. There is nothing to wait for, so this form has no `.placeholder`. The node keeps what the effect allocated for as long as its instance lives.
+
+```scala
+import UI.*
+import kyo.*
+
+val counter: UI =
+    UI.mounted(
+        for count <- Signal.initRef(0)
+        yield button(count.map(_.toString)).onClick(count.updateAndGet(_ + 1).unit)
+    )
+```
+
+An effect that waits (`UI < (Abort[Any] & Async & Scope)`: load data, a round trip) runs on a live page, on a fiber, shows a placeholder until it publishes, and renders a failure in place while the rest of the page keeps working. It runs inside a `Scope` that lives as long as the node's instance, so what it acquires or forks is released when the instance goes away. A static page shows the placeholder.
+
+The overload goes by the type: a helper annotated wider than what it does counts as waiting.
 
 ```scala
 import UI.*
 import kyo.*
 
 def profileCard(userId: Int): UI < (Abort[Throwable] & Async & Scope) =
-    for name <- Signal.initRef(s"user #$userId")
+    for
+        name <- Async.sleep(1.millis).andThen(Signal.initRef(s"user #$userId"))
     yield div(h2(name))
 
 def profile(selected: Signal[Int]): UI =
@@ -342,36 +360,55 @@ def profile(selected: Signal[Int]): UI =
 | Modifier | Effect |
 | --- | --- |
 | `.keyed(k)` | Keeps the instance (its `Scope`, resources and content) as long as a region of the page shows the node from the same `.keyed` call, in the same row of any list around it, with an equal key. Otherwise the old instance is released before the new one starts. |
-| `.placeholder(ui)` | Shown until the effect publishes. Defaults to an empty node. |
+| `.keyedOnSite(site)` | The same, keyed on `site`, where a component was made, instead of on a key its caller chose; calls of one site in one region are told apart by their order. |
+| `.placeholder(ui)` | Only on a waiting mount. Shown until the effect publishes. Defaults to an empty node. |
 | `.onError(f)` | Renders a failure from a `UI.MountError`: the error, a ready `message`, and a `source` saying whether the effect failed (`Effect`, `Panic`) or a feed it forked died later (`Fork`). Defaults to an inline error node. |
-| `.whilePending(p)` | What a node shows while a new instance is pending: `KeepLatest` (the default) keeps an inert snapshot of the previous content, with no live regions and no handlers; `Placeholder` shows the placeholder, the better choice for a form. |
+| `.whilePending(p)` | Only on a waiting mount. What a node shows while a new instance is pending: `KeepLatest` (the default) keeps an inert snapshot of the previous content, with no live regions and no handlers; `Placeholder` shows the placeholder, the better choice for a form. |
 
-A node without a key gets a fresh instance every time its enclosing region re-renders. A keyed instance is found by its identity (the `.keyed` call, the key, and the keys of the list rows around it, up to the enclosing mounted node), not by its position: siblings that appear or disappear around it, the regions around it, and the `Frame` they were built under do not affect it, and two `.keyed` calls never share an instance, even with equal keys. A keyed node that moves from one region to another keeps its instance. When the page shows the same identity in several places at once, none of them gets an instance and each shows an error naming all of them, with `source` `Duplicate`: give each place a key of its own, such as the id of the data it shows, or render repeating data with `foreachKeyed`. Inputs that should update a live instance belong in `Signal` parameters; a plain value the effect captures belongs in the key. A helper that applies `.keyed` itself to effects its callers pass in can take a `(using UI.MountSite)`, so that each of its callers counts as a call of its own.
+A node without a key gets a fresh instance every time its enclosing region re-renders. A keyed instance is found by its identity (the `.keyed` call, the key, and the keys of the list rows around it, up to the enclosing mounted node), not by its position: siblings that appear or disappear around it, the regions around it, and the `Frame` they were built under do not affect it, and two `.keyed` calls never share an instance, even with equal keys. A keyed node that moves from one region to another keeps its instance. A `.keyed` key is the caller's choice, so the same identity shown in more than one place at once, in one region or in several, is a mistake: none of its places gets an instance and each shows an error naming all of them, with `source` `Duplicate`. Give each place a key of its own, such as the id of the data it shows, or render repeating data with `foreachKeyed`. Inputs that should update a live instance belong in `Signal` parameters; a plain value the effect captures belongs in the key. A helper that applies `.keyed` itself to effects its callers pass in can take a `(using UI.MountSite)`, so that each of its callers counts as a call of its own.
+
+A component can instead key itself on where it was made, so that its caller writes no key: it takes a `(using UI.MountSite)` and applies `.keyedOnSite(site)`, which is how uic's components keep their state. Nothing tells apart the calls of one site in one region but their order, as Compose tells apart calls without a key, and as the rows of a list without keys are told apart by their index: one call in a `map` is one site, its first call is the first instance, its second the second, and so on. When the first of three such calls goes away, the two left show the first two instances and the third is released, so the state stays at its place while the data moves through it. Calls written on different lines are different sites, and one of them going away moves nothing. Where the state has to follow the data, key it with the data's id or use `foreachKeyed`.
 
 Whether a keyed node moved, went away or shows twice is decided at the moment every region has seen the writes that changed it, so the order the regions render in never decides it, and a write after that moment is a change of its own: a node hidden and then shown again gets a new instance. Writes that land before the regions run belong together by themselves: in the browser that is everything a handler writes before its first suspension, since no region runs while the handler does. On the JVM a region can run on another thread between two writes of one handler, so a handler that moves a node with more than one write wraps them in `UI.batch`, and so does code that writes on both sides of a suspension, on either platform, such as a fiber a mount effect forked. Without it the first write is decided on its own, and the instance is released and started again. A `UI.batch` must not wait for a release its own writes cause, such as a keyed node it hides going away: what it drops is released only once it has ended, so that wait never returns. Write inside the batch and wait after it. A handler itself is no such change, so it can hide a node and wait until the node is gone, or keep a request in flight while the content its writes show loads.
 
 A failed keyed instance stays failed when it moves: its new place shows its error view, rendered by that node's `.onError`, and the effect does not run again. An interrupt that ends the effect without being the instance's own release counts as a failure, `source` `Panic`, for instance when another mount's release interrupts a promise both effects await. If it arrives while a move of the instance is still undecided, it waits for the decision: it is silent when the instance went away, and a failure in the new place when the instance moved. To run the effect again, change the key, which releases the failed instance and starts a new one.
 
-A mount effect returns once it has set things up, so a feed it starts keeps running after the content is on screen. Start it with `UI.fork` instead of `Fiber.init`, and a failure of the feed switches the node to its error rendering:
+What only makes sense on a live page belongs in `UI.whileMounted`, inside either form: a feed, an observer, a timer. It runs once the content is on the page, on the client or in the session and never in a static render, on a fiber in the node's `Scope`, and a failure switches the node to its error rendering unless an `onFailure` rule takes it:
 
 ```scala
 import UI.*
 import kyo.*
 
-def liveTicker(quotes: Stream[String, Async]): UI < (Abort[Any] & Async & Scope) =
-    for
-        price <- Signal.initRef("...")
-        _     <- UI.fork(quotes.foreach(price.set(_)))
-    yield div(span(price))
+def liveTicker(quotes: Stream[String, Async]): UI =
+    UI.mounted(
+        for
+            price <- Signal.initRef("...")
+            _     <- UI.whileMounted(quotes.foreach(price.set(_)))
+        yield div(span(price))
+    )
 ```
 
-A plain `Fiber.init` still runs on the node's `Scope`, but its failure does not reach the node, which is what a feed whose failure the component handles itself wants.
+An effect that belongs to one element needs no mount of its own and goes on the element. It obeys the same rules: live pages only, a `Scope` that ends when the element leaves, failures to the `onFailure` rules around it. It follows the rule of an unkeyed mount: the effect belongs to the current run of the region around the element, so when that region runs again its content is new and the effect starts again, with the values the new run captured. What has to survive its region running again says so with a key: `whileMountedKeyed(key)` is identified as a `.keyed` mount is, by the call, the key and the rows of the lists around it, never by its place among its siblings, so an `if` or a spliced sibling before it changes nothing. The element's `id` is no key.
+
+```scala
+import UI.*
+import kyo.*
+
+def stickyHeader(onScroll: Stream[Int, Async], top: SignalRef[Int]): UI =
+    div.whileMounted(onScroll.foreach(top.set(_)))("Header")
+```
+
+A waiting mount may also fork from its effect. `UI.fork` reports a failure as `UI.whileMounted` does; a plain `Fiber.init` still runs on the node's `Scope`, but its failure does not reach the node, which is what a feed whose failure the component handles itself wants.
+
+`UI.id` names an element from inside a mount effect. An id is an address, not a lifetime. A keyed node's derives from its identity, the instance that holds it, the `.keyed` call, the key and the keys of the list rows around it, and for a node keyed on its site the order of its call from the second call of that site in its region on, never from its place, so no sibling before it changes it. A node without a key keeps its place as base, so a new instance a re-render shows at the same place gets the same id. Either way it needs no session and is the same on a static page and on the live one, on the JVM and in JavaScript. Each call in one effect names another element.
 
 #### The page and a mount's effect
 
-A mount effect runs before what it returns is on the page: the content shows once the effect has published it, and under a `.placeholder`, `.onError` or `UI.boundary`, which hold their content back until every mount inside has loaded, only once that boundary reveals it. Two things follow, and kyo-ui takes care of both.
+A waiting mount's effect runs before what it returns is on the page: the content shows once the effect has published it, and under a `.placeholder`, `.onError` or `UI.boundary`, which hold their content back until every mount inside has loaded, only once that boundary reveals it. A mount that draws holds no boundary back by itself, but a waiting mount inside what it drew does. Two things follow, and kyo-ui takes care of both.
 
-A command a mount sends about an element (`focusId`, `scrollIntoViewId`, `requestMeasureById`, the `bind*ById` channels, `observeViewportById`), from its effect or a fiber the effect forked, goes out once the mount's own content is on the page, behind the paints that put it there. A mount can therefore focus the field it just built. If that content never shows, because the region switched away first, the command is dropped, and a measure waiting for it answers `Absent`. A measure the effect itself waits for before it yields goes out at once, since it can only be about something already on the page, and so does a command from an event handler.
+A command a mount sends about an element (`focusId`, `scrollIntoViewId`, `requestMeasureById`, the `bind*ById` channels, `observeViewportById`), from `UI.whileMounted`, a waiting effect or a fiber it forked, goes out once the mount's own content is on the page, behind the paints that put it there. A mount can therefore focus the field it just built. If that content never shows, because the region switched away first, the command is dropped, and a measure waiting for it answers `Absent`. A measure a waiting effect itself waits for before it yields goes out at once, since it can only be about something already on the page, and so does a command from an event handler.
+
+`UI.commands` needs a session, so a mount that a static page also draws reaches it inside `UI.whileMounted`, `el.whileMounted` or a handler, not in the draw.
 
 ```scala
 import UI.*
@@ -380,11 +417,10 @@ import kyo.*
 val search: UI =
     UI.mounted(
         for
-            cmds <- UI.commands
-            id   <- cmds.freshId
-            _    <- cmds.focusId(id)
+            id <- UI.id
+            _  <- UI.whileMounted(UI.commands.map(_.focusId(id)))
         yield input.id(id).placeholder("Search")
-    ).placeholder(span("loading..."))
+    )
 ```
 
 Code that needs the element itself, to hand it to a chart, an editor or a map library, uses `onAttached` (Scala.js only, under `UI.runMount`). The hook runs once the element is in the document, wherever it sits, and its `Scope` closes when the element leaves, which tears the widget down. Work the widget needs can start earlier: begin it in the mount and wait for it in the hook, so neither waits for the other.

@@ -18,7 +18,8 @@ private[kyo] object HtmlRenderer:
         // whole prefix per node. Normalizing once at the entry makes those appends Vector appends; paths
         // are only ever built, compared and joined, and Seq equality holds across both.
         val root = path.toVector
-        pass(ui) {
+        // The page is a range of its own, as the session's root is, so the calls of one keyed site count the same in both.
+        pass(ui)(DrawContext.inRange {
             val sb = new StringBuilder
             renderTo(
                 sb,
@@ -30,7 +31,7 @@ private[kyo] object HtmlRenderer:
                 boundaryMode = ReactiveRegion.BoundaryMode.Emit
             )
             sb.toString
-        }
+        })
     end render
 
     /** One render pass as a `Sync` effect.
@@ -46,7 +47,7 @@ private[kyo] object HtmlRenderer:
       * reading with the locals of the fiber that runs it.
       */
     private inline def pass[A](ui: UI)(inline body: (SignalNow.Locals, AllowUnsafe) ?=> A)(using Frame): A < Sync =
-        if bindsSignal(ui) then SignalNow.Locals.take(Sync.Unsafe.defer(body))
+        if bindsSignal(ui) then SignalNow.Locals.take(Sync.Unsafe.defer(body(using MountDispatch.drawing)))
         else body(using SignalNow.Locals.none, AllowUnsafe.embrace.danger)
 
     /** The rows a list patch changed, rendered into one string under one effect. */
@@ -57,7 +58,8 @@ private[kyo] object HtmlRenderer:
         host: ReactiveRegion.RenderHost
     )(using Frame): String < Sync =
         SignalNow.Locals.take(Sync.Unsafe.defer {
-            val sb = new StringBuilder
+            given SignalNow.Locals = MountDispatch.drawing
+            val sb                 = new StringBuilder
             rows.foreach { row =>
                 if row.changed then renderRowInto(sb, row.ui, path :+ row.key, context.child(row.key), host, Absent)
             }
@@ -66,12 +68,12 @@ private[kyo] object HtmlRenderer:
 
     /** Whether rendering `ui` reads a signal anywhere: the reactive nodes, an element with a reactive
       * attribute, bool-attribute or class channel, and a control bound to a ref. Mirrors every read
-      * [[renderTo]] performs, and a mount's placeholder is read like any other tree.
+      * [[renderTo]] performs, and a mount's placeholder is read like any other tree. A drawn mount's draw is an effect like such a read.
       */
     private def bindsSignal(ui: UI): Boolean =
         ui match
-            case _: Reactive[?] | _: Foreach[?, ?] => true
-            case el: Element                       =>
+            case _: Reactive[?] | _: Foreach[?, ?] | _: Drawn => true
+            case el: Element                                  =>
                 el.attrs.hasChannels
                 || ReactiveUI.collectSignalRef(el).nonEmpty
                 || Channels.follows(el)
@@ -126,6 +128,7 @@ private[kyo] object HtmlRenderer:
             case _: Reactive[?]       => false
             case _: Foreach[?, ?]     => false
             case _: Mounted           => false
+            case _: Drawn             => false
             case _: Bounded           => false
     end paintsAsKeyedRoot
 
@@ -164,7 +167,8 @@ private[kyo] object HtmlRenderer:
             case _: ReactiveRegion.RenderHost.HtmlTableBody =>
                 (ReactiveRegion.Namespace.Html, ReactiveRegion.ParentContext.Other)
             case other => (ReactiveRegion.namespace(other), ReactiveRegion.contentParent(other))
-        renderTo(
+        // A row is a range of its own, as the session walks a rebuilt row; its key tells its calls apart from the other rows' anyway.
+        DrawContext.inRange(renderTo(
             sb,
             ui,
             path.toVector,
@@ -174,7 +178,7 @@ private[kyo] object HtmlRenderer:
             parentContext,
             ReactiveRegion.BoundaryMode.Emit,
             keyedRoot = true
-        )
+        ))
     end renderRowInto
 
     private[kyo] def renderRegion(
@@ -186,11 +190,11 @@ private[kyo] object HtmlRenderer:
         boundaryMode: ReactiveRegion.BoundaryMode
     )(using Frame): String < Sync =
         val host = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(ui))
-        pass(ui) {
+        pass(ui)(DrawContext.inRange {
             val sb = new StringBuilder
             renderHostedContent(sb, ui, path, context, host, boundaryMode)
             sb.toString
-        }
+        })
     end renderRegion
 
     /** Render a UI tree to HTML, additionally collecting the CSS rule(s) for every pseudo-state
@@ -206,7 +210,7 @@ private[kyo] object HtmlRenderer:
       */
     private[kyo] def renderWithCss(ui: UI, path: Seq[String])(using Frame): (String, Chunk[(String, String)]) < Sync =
         val root = path.toVector
-        pass(ui) {
+        pass(ui)(DrawContext.inRange {
             val sb  = new StringBuilder
             val css = new CssCollector
             renderTo(
@@ -220,7 +224,7 @@ private[kyo] object HtmlRenderer:
                 boundaryMode = ReactiveRegion.BoundaryMode.Emit
             )
             (sb.toString, Chunk.from(css))
-        }
+        })
     end renderWithCss
 
     private[kyo] def renderRegionWithCss(ui: UI, path: Seq[String])(using
@@ -251,12 +255,13 @@ private[kyo] object HtmlRenderer:
         boundaryMode: ReactiveRegion.BoundaryMode
     )(using Frame): (String, Chunk[(String, String)]) < Sync =
         val host = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(ui))
-        pass(ui) {
+        // What one paint shows is one range: a region's value or an instance's content.
+        pass(ui)(DrawContext.inRange {
             val sb  = new StringBuilder
             val css = new CssCollector
             renderHostedContent(sb, ui, path, context, host, boundaryMode, Present(css))
             (sb.toString, Chunk.from(css))
-        }
+        })
     end renderRegionWithCss
 
     private def renderHostedContent(
@@ -509,7 +514,32 @@ private[kyo] object HtmlRenderer:
                     val childContext = child match
                         case kc: KeyedChild[?] => context.child(kc.key)
                         case _                 => context.child(i.toString)
-                    renderTo(sb, child, childPath, childContext, namespace, cssRules, parentContext, ReactiveRegion.BoundaryMode.Emit)
+                    child match
+                        case kc: KeyedChild[?] =>
+                            DrawContext.inRow(kc.key)(
+                                renderTo(
+                                    sb,
+                                    child,
+                                    childPath,
+                                    childContext,
+                                    namespace,
+                                    cssRules,
+                                    parentContext,
+                                    ReactiveRegion.BoundaryMode.Emit
+                                )
+                            )
+                        case _ =>
+                            renderTo(
+                                sb,
+                                child,
+                                childPath,
+                                childContext,
+                                namespace,
+                                cssRules,
+                                parentContext,
+                                ReactiveRegion.BoundaryMode.Emit
+                            )
+                    end match
                     i += 1
                 }
 
@@ -521,7 +551,7 @@ private[kyo] object HtmlRenderer:
                 val current = SignalNow(r.signal)(using r.frame, summon[SignalNow.Locals], summon[AllowUnsafe])
                 val host    = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(current))
                 openInitialHost(sb, host)
-                renderTo(
+                DrawContext.inRange(renderTo(
                     sb,
                     current,
                     path,
@@ -530,7 +560,7 @@ private[kyo] object HtmlRenderer:
                     cssRules,
                     ReactiveRegion.contentParent(host),
                     ReactiveRegion.BoundaryMode.Emit
-                )
+                ))
                 closeInitialHost(sb, host)
 
             case fe: Foreach[?, ?] @unchecked =>
@@ -548,8 +578,8 @@ private[kyo] object HtmlRenderer:
                         val host    = ReactiveRegion.renderHost(region, parentContext, content)
                         openInitialHost(sb, host)
                         val keyed = keyFn.nonEmpty
-                        rendered.foreach { (key, child) =>
-                            renderTo(
+                        DrawContext.inRange(rendered.foreach { (key, child) =>
+                            DrawContext.inRow(key)(renderTo(
                                 sb,
                                 child,
                                 path :+ key,
@@ -559,8 +589,8 @@ private[kyo] object HtmlRenderer:
                                 ReactiveRegion.contentParent(host),
                                 ReactiveRegion.BoundaryMode.Emit,
                                 keyedRoot = keyed
-                            )
-                        }
+                            ))
+                        })
                         closeInitialHost(sb, host)
                 }
 
@@ -574,7 +604,11 @@ private[kyo] object HtmlRenderer:
                 val content = b.display match
                     case Present(d) => d
                     case Absent     =>
-                        if b.settings.waits && Boundaries.catchesNow(b.child) then b.settings.placeholderView.get else b.child
+                        if b.settings.waits &&
+                            DrawContext.inRange(Boundaries.catchesNow(b.child, context.transparent, MountDispatch.drawingNow))
+                        then
+                            b.settings.placeholderView.get
+                        else b.child
                 val host = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(content))
                 // A boundary around one mount, which a mount's own `.placeholder` is, is that mount's slot: an enclosing repaint
                 // leaves the instance's live content alone, as it does for a mount without one.
@@ -582,7 +616,7 @@ private[kyo] object HtmlRenderer:
                     case m: Mounted => ReactiveRegion.mountSlotFlags(m.key, m.frame)
                     case _          => ""
                 openInitialHost(sb, host, flags)
-                renderTo(
+                DrawContext.inRange(renderTo(
                     sb,
                     content,
                     path,
@@ -591,8 +625,11 @@ private[kyo] object HtmlRenderer:
                     cssRules,
                     ReactiveRegion.contentParent(host),
                     ReactiveRegion.BoundaryMode.Emit
-                )
+                ))
                 closeInitialHost(sb, host)
+
+            case d: Drawn =>
+                renderDrawn(sb, d, path, context, namespace, cssRules, parentContext)
 
             case m: Mounted =>
                 // A mount's live content belongs to the instance the renderer runs, so a static render shows its placeholder,
@@ -601,7 +638,7 @@ private[kyo] object HtmlRenderer:
                 val placeholder = m.placeholderUI.getOrElse(UI.empty(using m.frame))
                 val host        = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(placeholder))
                 openInitialHost(sb, host, ReactiveRegion.mountSlotFlags(m.key, m.frame))
-                renderTo(
+                DrawContext.inRange(renderTo(
                     sb,
                     placeholder,
                     path,
@@ -610,9 +647,72 @@ private[kyo] object HtmlRenderer:
                     cssRules,
                     ReactiveRegion.contentParent(host),
                     ReactiveRegion.BoundaryMode.Emit
-                )
+                ))
                 closeInitialHost(sb, host)
     end renderTo
+
+    /** A drawn mount in a range of its own, holding what it drew, or the live state the engine resolved. The draw is filed at the node's
+      * place, where the subscription that follows takes it as its instance's content, so it is on the page before any instance exists.
+      * A place an instance already shows is left to that instance: its own paint goes behind this one, and a client that kept the slot
+      * under the same key keeps it.
+      */
+    private def renderDrawn(
+        sb: StringBuilder,
+        d: Drawn,
+        path: Seq[String],
+        context: ReactiveRegion.RegionIdentity,
+        namespace: ReactiveRegion.Namespace,
+        cssRules: Maybe[CssCollector],
+        parentContext: ReactiveRegion.ParentContext
+    )(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
+        val region                                                                                 = ReactiveRegion.from(context, namespace)
+        val inner                                                                                  = context.transparent
+        def inRange(hostContent: UI, flags: String, body: Maybe[UI])(using SignalNow.Locals): Unit =
+            val host = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(hostContent))
+            openInitialHost(sb, host, flags)
+            body.foreach(renderTo(
+                sb,
+                _,
+                path,
+                inner,
+                ReactiveRegion.namespace(host),
+                cssRules,
+                ReactiveRegion.contentParent(host),
+                ReactiveRegion.BoundaryMode.Emit
+            ))
+            closeInitialHost(sb, host)
+        end inRange
+        // Counted whether or not it draws here, as the session's walk counts every keyed node it meets.
+        val occurrence = DrawContext.occurrence(summon[SignalNow.Locals].read(DrawContext.scope).rows, d)
+        MountDispatch.drawingNow.noteOccurrence(inner, d, occurrence)
+        d.display match
+            case Present(shown) => inRange(shown, ReactiveRegion.mountSlotFlags(d.key, d.frame), Present(shown))
+            case Absent         =>
+                MountDispatch.drawingNow.drawnNow(inner, d, occurrence) match
+                    case DrawSlot.Live(instance, _) =>
+                        DrawContext.inContent(instance.children.idBase)(
+                            inRange(instance.shownNow(d), ReactiveRegion.mountSlotFlags(d.key, d.frame), Absent)
+                        )
+                    case DrawSlot.Fresh(draw, _) => DrawContext.inContent(draw.base) {
+                            // A failed draw shows the node's own error view here; the instance reports it with the boundaries around it.
+                            val content = draw.content(MountedSpec(d, path, Chunk.empty))
+                            // A walk of its own over the same content, so it counts from the start as the render does.
+                            draw.painted(DrawContext.inRange(ReactiveUI.walkStatic(
+                                content,
+                                path,
+                                namespace == ReactiveRegion.Namespace.Svg,
+                                inner,
+                                ReactiveUI.nestedParentContext(parentContext, content),
+                                MountDispatch.drawingNow,
+                                rows = 0L,
+                                deepRows = Chunk.empty
+                            )._1))
+                            // A slot without a key is never kept, so it needs no flags at all: what a repaint brings is what it shows.
+                            val flags = if d.key.isEmpty then "" else ReactiveRegion.mountSlotFlags(d.key, d.frame, fresh = true)
+                            inRange(content, flags, Present(content))
+                        }
+        end match
+    end renderDrawn
 
     private def renderBoundElementBoundary(
         sb: StringBuilder,

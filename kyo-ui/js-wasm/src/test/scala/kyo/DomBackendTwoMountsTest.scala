@@ -27,7 +27,7 @@ class DomBackendTwoMountsTest extends kyo.test.Test[Any]:
 
     "a viewport observer keeps delivering after another mount on the page is torn down" in {
         val observing: UI =
-            UI.mounted(
+            waitingMount(
                 for
                     cmds <- UI.commands
                     id   <- cmds.freshId
