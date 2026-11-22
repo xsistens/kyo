@@ -383,6 +383,65 @@ class InputTest extends UITest:
         }
     }
 
+    // Nothing binds the field and nothing hears its typing, so the text exists only in the browser until the blur carries it.
+    "a text field's blur reports the text typed into a field nothing binds" in {
+
+        val app: UI < Async =
+            for ref <- Signal.initRef("none")
+            yield UI.div(
+                UI.input.id("i").onBlur((_, v) => ref.set(s"[$v]")),
+                UI.button("other").id("other"),
+                ref.map(v => UI.span(v).id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.fill(Selector.id("i"), "ab")
+                _ <- Browser.click(Selector.id("other"))
+                _ <- Browser.assertText(Selector.id("v"), "[ab]")
+            yield ()
+        }
+    }
+
+    "a text field's blur reports the edit of a field started from a constant, not the constant" in {
+
+        val app: UI < Async =
+            for ref <- Signal.initRef("none")
+            yield UI.div(
+                UI.input.id("i").value("x").onBlur((_, v) => ref.set(s"[$v]")),
+                UI.button("other").id("other"),
+                ref.map(v => UI.span(v).id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.fill(Selector.id("i"), "xy")
+                _ <- Browser.click(Selector.id("other"))
+                _ <- Browser.assertText(Selector.id("v"), "[xy]")
+            yield ()
+        }
+    }
+
+    "the blur with the text runs beside a payload-free onBlur on the same field" in {
+
+        val app: UI < Async =
+            for
+                plain <- Signal.initRef(false)
+                text  <- Signal.initRef("none")
+            yield UI.div(
+                UI.input.id("i").onBlur(plain.set(true)).onBlur((_, v) => text.set(v)),
+                UI.button("other").id("other"),
+                plain.map(v => UI.span(v.toString).id("p")),
+                text.map(v => UI.span(v).id("t"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.fill(Selector.id("i"), "kept")
+                _ <- Browser.click(Selector.id("other"))
+                _ <- Browser.assertText(Selector.id("p"), "true")
+                _ <- Browser.assertText(Selector.id("t"), "kept")
+            yield ()
+        }
+    }
+
     // ---- Keyboard ----
 
     "pressKey fires onKeyDown" in {

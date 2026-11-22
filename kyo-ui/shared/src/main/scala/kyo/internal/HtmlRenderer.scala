@@ -74,6 +74,7 @@ private[kyo] object HtmlRenderer:
             case el: Element                       =>
                 el.attrs.hasChannels
                 || ReactiveUI.collectSignalRef(el).nonEmpty
+                || Channels.follows(el)
                 || (el match
                     case ta: Textarea => hasSignalRefValue(ta.value)
                     case dd: Dropdown => hasSignalRefValue(dd.value)
@@ -434,7 +435,7 @@ private[kyo] object HtmlRenderer:
                             discard(sb.append(" data-kyo-attach=\"")
                                 .append(Integer.toHexString(java.lang.System.identityHashCode(elem))).append('"'))
                     end openTag
-                    openTag(reactiveTrueClasses(elem.attrs), reactiveStyleNow(elem.attrs))
+                    openTag(reactiveTrueClasses(elem.attrs) ++ filledNow(elem), reactiveStyleNow(elem.attrs))
                     renderElementAttrs(sb, elem)
                     renderReactiveAttrs(sb, elem.attrs)
                     renderReactiveBoolAttrs(sb, elem.attrs)
@@ -654,9 +655,10 @@ private[kyo] object HtmlRenderer:
 
     private def renderTextareaValue(sb: StringBuilder, ta: Textarea)(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         ta.value match
-            case Present(Bound.Const(s)) => w(sb, esc(masked(ta.inputMask, s)))
-            case Present(Bound.Ref(ref)) => w(sb, esc(masked(ta.inputMask, SignalNow(ref))))
-            case _                       => ()
+            case Present(Bound.Const(s))    => w(sb, esc(masked(ta.inputMask, s)))
+            case Present(Bound.Ref(ref))    => w(sb, esc(masked(ta.inputMask, SignalNow(ref))))
+            case Present(Bound.Follow(sig)) => w(sb, esc(masked(ta.inputMask, SignalNow(sig))))
+            case _                          => ()
 
     // ---- Dropdown (custom div-based overlay) ----
 
@@ -978,6 +980,26 @@ private[kyo] object HtmlRenderer:
     /** The reactive classes whose signal is currently true, for folding into the SSR class list; the client
       * toggles them in place afterwards (HtmlOp.SetClassByPath). Empty (and cheap) when none are bound.
       */
+    /** The `filledClass` a text field carries on itself as first rendered: present while its starting text, as the field
+      * shows it (masked), is not empty. The client keeps it right from there (`FilledClass`).
+      */
+    private def filledNow(elem: Element)(using AllowUnsafe, Frame, SignalNow.Locals): Seq[String] =
+        elem match
+            case ti: TextInput =>
+                elem.attrs.dataAttrs.get(FilledClass.classKey) match
+                    case Some(name) =>
+                        val mask = ti match
+                            case ci: ConstrainedInput => ci.inputMask
+                            case _                    => Absent
+                        val text = ti.value match
+                            case Present(Bound.Const(v))    => masked(mask, v)
+                            case Present(Bound.Ref(ref))    => masked(mask, SignalNow(ref))
+                            case Present(Bound.Follow(sig)) => masked(mask, SignalNow(sig))
+                            case _                          => ""
+                        if FilledClass.filled(text) then Seq(name) else Seq.empty
+                    case None => Seq.empty
+            case _ => Seq.empty
+
     private def reactiveTrueClasses(attrs: Attrs)(using AllowUnsafe, Frame, SignalNow.Locals): Seq[String] =
         if attrs.reactiveClasses.isEmpty then Seq.empty
         else attrs.reactiveClasses.toSeq.sortBy(_._1).collect { case (name, sig) if SignalNow(sig) => name }
@@ -1062,9 +1084,10 @@ private[kyo] object HtmlRenderer:
                 w(sb, " type=\"range\"")
                 boolAttr(sb, "disabled", r.disabled)
                 r.value match
-                    case Present(Bound.Const(d)) => w(sb, s""" value="${fmtD(d)}"""")
-                    case Present(Bound.Ref(ref)) => w(sb, s""" value="${fmtD(SignalNow(ref))}"""")
-                    case _                       => ()
+                    case Present(Bound.Const(d))    => w(sb, s""" value="${fmtD(d)}"""")
+                    case Present(Bound.Ref(ref))    => w(sb, s""" value="${fmtD(SignalNow(ref))}"""")
+                    case Present(Bound.Follow(sig)) => w(sb, s""" value="${fmtD(SignalNow(sig))}"""")
+                    case _                          => ()
                 end match
                 r.min.foreach(v => w(sb, s""" min="${fmtD(v)}""""))
                 r.max.foreach(v => w(sb, s""" max="${fmtD(v)}""""))
@@ -1106,9 +1129,10 @@ private[kyo] object HtmlRenderer:
                     w(sb, s""" value="${esc(s)}"""")
                     if !sel.attrs.jsProps.contains("value") then w(sb, s""" data-kyo-prop-value="${esc(s)}"""")
                 sel.value match
-                    case Present(Bound.Const(s)) => bound(s)
-                    case Present(Bound.Ref(ref)) => bound(SignalNow(ref))
-                    case _                       =>
+                    case Present(Bound.Const(s))    => bound(s)
+                    case Present(Bound.Ref(ref))    => bound(SignalNow(ref))
+                    case Present(Bound.Follow(sig)) => bound(SignalNow(sig))
+                    case _                          =>
                         // Fall back to first Opt child with selected(true)
                         val selected = Maybe.fromOption(sel.children.toSeq.collectFirst {
                             case opt: Opt if opt.selected == Present(true) =>
@@ -1154,11 +1178,16 @@ private[kyo] object HtmlRenderer:
     private def boolAttr(sb: StringBuilder, name: String, value: Maybe[Boolean]): Unit =
         value.foreach(v => if v then w(sb, s" $name"))
 
+    /** Renders the `checked` state of a box the render binds, marked `data-kyo-bound` so the morph can tell it from a free
+      * one: a bound box that is off renders no `checked`, exactly like a free one, and only the marker says that what it
+      * shows is the render's to set on every pass.
+      */
     private def renderCheckedAttr(sb: StringBuilder, value: Maybe[Bound[Boolean]])(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         value match
-            case Present(Bound.Const(b)) => if b then w(sb, " checked")
-            case Present(Bound.Ref(ref)) => if SignalNow(ref) then w(sb, " checked")
-            case _                       => ()
+            case Present(Bound.Const(b))    => w(sb, " data-kyo-bound"); if b then w(sb, " checked")
+            case Present(Bound.Ref(ref))    => w(sb, " data-kyo-bound"); if SignalNow(ref) then w(sb, " checked")
+            case Present(Bound.Follow(sig)) => w(sb, " data-kyo-bound"); if SignalNow(sig) then w(sb, " checked")
+            case _                          => ()
 
     /** Render a value attribute, reading SignalRef if needed. */
     /** Formats a value about to be displayed through the element's mask, if it carries one.
@@ -1181,9 +1210,10 @@ private[kyo] object HtmlRenderer:
         SignalNow.Locals
     ): Unit =
         value match
-            case Present(Bound.Const(s)) => w(sb, s""" value="${esc(masked(mask, s))}"""")
-            case Present(Bound.Ref(ref)) => w(sb, s""" value="${esc(masked(mask, SignalNow(ref)))}"""")
-            case _                       => ()
+            case Present(Bound.Const(s))    => w(sb, s""" value="${esc(masked(mask, s))}"""")
+            case Present(Bound.Ref(ref))    => w(sb, s""" value="${esc(masked(mask, SignalNow(ref)))}"""")
+            case Present(Bound.Follow(sig)) => w(sb, s""" value="${esc(masked(mask, SignalNow(sig)))}"""")
+            case _                          => ()
 
     private def renderPickerAttrs(sb: StringBuilder, pi: PickerInput)(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         boolAttr(sb, "disabled", pi.disabled)
@@ -1194,6 +1224,11 @@ private[kyo] object HtmlRenderer:
     private def hasSignalRefValue(value: Maybe[Bound[?]]): Boolean = value match
         case Present(_: Bound.Ref[?]) => true
         case _                        => false
+
+    /** Whether the client has to forward the commit of an edit: to write a ref, or to put back what a followed signal's owner did not take. */
+    private def bindsEdit(value: Maybe[Bound[?]]): Boolean = value match
+        case Present(_: Bound.Ref[?] | _: Bound.Follow[?]) => true
+        case _                                             => false
 
     /** Writes `data-kyo-ev` with every event the element's handlers and bindings make the client forward, and
       * answers whether there was one.
@@ -1211,7 +1246,13 @@ private[kyo] object HtmlRenderer:
         if clicks then add("click")
         if attrs.onContextMenu.nonEmpty || attrs.onContextMenuEvt.nonEmpty then add("contextmenu")
         if attrs.onFocus.nonEmpty || attrs.onFocusEvt.nonEmpty then add("focus")
-        if attrs.onBlur.nonEmpty || attrs.onBlurEvt.nonEmpty then add("blur")
+        // "blurtext" marks a text field whose blur carries its text, so the client reads the text off the field only
+        // where a handler takes it.
+        val blurText = elem match
+            case ti: TextInput => ti.onBlurText.nonEmpty
+            case _             => false
+        if attrs.onBlur.nonEmpty || attrs.onBlurEvt.nonEmpty || blurText then add("blur")
+        if blurText then add("blurtext")
         // An element that says it is a button and takes a click is activated by Enter and Space, which the client posts as a
         // keydown only where one is listed (KeyPolicy.activatesAsButton).
         if attrs.onKeyDown.nonEmpty || attrs.onKeyDownSelf.nonEmpty || (clicks && attrs.role.contains("button")) then add("keydown")
@@ -1233,14 +1274,14 @@ private[kyo] object HtmlRenderer:
             case _                                                                   =>
         // "change" event: when handler is set OR when .value/.checked(SignalRef) auto-binding is in use
         elem match
-            case ti: TextInput if ti.onChange.nonEmpty || hasSignalRefValue(ti.value)          => add("change")
-            case pi: PickerInput if pi.onChange.nonEmpty || hasSignalRefValue(pi.value)        => add("change")
-            case bi: BooleanInput if bi.onChange.nonEmpty || hasSignalRefValue(bi.checked)     => add("change")
-            case ni: NumberInput if ni.onChangeNumeric.nonEmpty || hasSignalRefValue(ni.value) => add("change")
-            case ri: RangeInput if ri.onChange.nonEmpty || hasSignalRefValue(ri.value)         => add("change")
-            case fi: FileInput if fi.onChange.nonEmpty || attrs.onFileSelect.nonEmpty          => add("change")
-            case sel: Select if hasSignalRefValue(sel.value)                                   => add("change")
-            case _                                                                             =>
+            case ti: TextInput if ti.onChange.nonEmpty || bindsEdit(ti.value)          => add("change")
+            case pi: PickerInput if pi.onChange.nonEmpty || bindsEdit(pi.value)        => add("change")
+            case bi: BooleanInput if bi.onChange.nonEmpty || bindsEdit(bi.checked)     => add("change")
+            case ni: NumberInput if ni.onChangeNumeric.nonEmpty || bindsEdit(ni.value) => add("change")
+            case ri: RangeInput if ri.onChange.nonEmpty || bindsEdit(ri.value)         => add("change")
+            case fi: FileInput if fi.onChange.nonEmpty || attrs.onFileSelect.nonEmpty  => add("change")
+            case sel: Select if bindsEdit(sel.value)                                   => add("change")
+            case _                                                                     =>
         end match
         elem match
             case f: Form if f.onSubmit.nonEmpty || f.onSubmitEvt.nonEmpty => add("submit")
@@ -1276,7 +1317,8 @@ private[kyo] object HtmlRenderer:
             namespace == ReactiveRegion.Namespace.Svg ||
             elem.isInstanceOf[Svg.SvgElement] ||
             elem.isInstanceOf[Focusable] ||
-            addressedByClient(elem.attrs)
+            addressedByClient(elem.attrs) ||
+            Channels.follows(elem)
 
     private def addressedByClient(attrs: Attrs): Boolean =
         attrs.identifier.nonEmpty ||
@@ -1534,12 +1576,11 @@ private[kyo] object HtmlRenderer:
           |    __focusReturnStack.push({fa:fa,ret:ret,restore:cand[i].hasAttribute("data-kyo-focus-restore")});
           |    if(typeof cand[i].focus==="function")cand[i].focus({preventScroll:true});return;}}
           |}
-          |// The morph lives in MorphScript: both clients run that one walk over their own hooks.
+          |// The morph and the list patch live in MorphScript: both clients run that one walk over their own hooks.
           |var __kyoMorph=(function(h){
           |""".stripMargin + MorphScript.js +
             """})({syncField:__kyoSyncField,portalTwin:__kyoPortalTwin,rewrite:function(slot,twin,change){return __kyoRangeRewrite(twin,change);},
-          |  beginAnimations:ba,guardAttached:false,
-          |  listBefore:__kyoListBefore,listAfter:__kyoListAfter});
+          |  beginAnimations:ba,guardAttached:false,listBefore:__kyoListBefore,listAfter:__kyoListAfter});
           |var __kyoMorphRun=__kyoMorph.run,__kyoSpanId=__kyoMorph.spanId,__kyoLogicalNext=__kyoMorph.logicalNext,__kyoEachSpanNode=__kyoMorph.eachSpanNode;
           |// Nested ranges reconcile as logical children, so a region containing another region morphs like any other;
           |// kyoRangeReplace re-reads the live markers afterwards and hands the registry what is actually there.
@@ -1888,6 +1929,8 @@ private[kyo] object HtmlRenderer:
            |    if(!__live){__live=true;__wsRetries=0;var pending=__q;__q=[];for(var i=0;i<pending.length;i++)sock.send(pending[i]);
            |      var waiters=__liveWaiters;__liveWaiters=[];for(var j=0;j<waiters.length;j++)waiters[j](true);}
            |    kyoOnMessage(e);
+           |    // A patch may have written a field's value or its target's class from what the server last knew.
+           |    __kyoSweepFilled();
            |  };
            |  // A connect that never completes reports here and then closes, so recovery is driven from onclose alone;
            |  // this handler exists so the failure does not surface as an unhandled error.
@@ -1999,7 +2042,7 @@ private[kyo] object HtmlRenderer:
            |    // Regions carry no element of their own (comment markers), so the path resolves uniquely to the content element.
            |    var sapp=op.SetAttrByPath.path.join(".");var sapel=document.querySelector(__kyoPathSel(sapp));if(sapel){sapel.setAttribute(op.SetAttrByPath.name,op.SetAttrByPath.value);__kyoSyncField(sapel,op.SetAttrByPath.name,op.SetAttrByPath.value);}
            |  }else if(op.SetBoolAttrByPath){
-           |    var sbpp=op.SetBoolAttrByPath.path.join(".");var sbpel=document.querySelector(__kyoPathSel(sbpp));if(sbpel){if(op.SetBoolAttrByPath.value){sbpel.setAttribute(op.SetBoolAttrByPath.name,'');}else{sbpel.removeAttribute(op.SetBoolAttrByPath.name);}}
+           |    var sbpp=op.SetBoolAttrByPath.path.join(".");var sbpel=document.querySelector(__kyoPathSel(sbpp));if(sbpel){if(op.SetBoolAttrByPath.value){sbpel.setAttribute(op.SetBoolAttrByPath.name,'');}else{sbpel.removeAttribute(op.SetBoolAttrByPath.name);}if(op.SetBoolAttrByPath.name==="checked"&&sbpel.tagName==="INPUT")__kyoSyncChecked(sbpel,op.SetBoolAttrByPath.value);}
            |  }else if(op.SetClassByPath){
            |    // Path-addressed reactive class: toggle in place so CSS transitions fire. Not owned: the render carries its value.
            |    var scpp=op.SetClassByPath.path.join(".");var scpel=document.querySelector(__kyoPathSel(scpp));if(scpel){scpel.classList.toggle(op.SetClassByPath.name,op.SetClassByPath.on);}
@@ -2084,9 +2127,19 @@ private[kyo] object HtmlRenderer:
            |// the property. Assigning only on a real difference leaves a focused field's caret alone (the echo of the
            |// user's own keystroke compares equal). Twin of DomBackend.syncFieldProperty; keep in lockstep.
            |function __kyoSyncField(el,name,value){
-           |  if(name==="value"&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&el.value!==value)el.value=value;
+           |  if(name==="value"&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&el.value!==value){el.value=value;__kyoFilled(el);}
            |  else if(name==="value"&&el.tagName==="SELECT"&&el.value!==value)el.value=value;
            |}
+           |// A patch of checked: a control shows its property once the reader has toggled it. The browser took the group's selection from
+           |// the other radios when the reader clicked this one, so each bound radio of the group shows what its attribute says again; a free
+           |// radio's tick stays. Twin of syncChecked in DomBackend.
+           |function __kyoSyncChecked(el,on){
+           |  el.checked=on;
+           |  if(el.type==="radio"&&el.name){var rs=document.querySelectorAll("input[type=radio][data-kyo-bound]");
+           |    for(var i=0;i<rs.length;i++){var r=rs[i];if(r.name===el.name&&r.form===el.form)r.checked=r.hasAttribute("checked");}}
+           |}
+           |// filledClass: a text field's class follows whether it holds text (kyo.internal.FilledClass, shared with DomBackend).
+           |${FilledClass.js}
            |// Mark an attr name as owned by the imperative id-addressed channel: names live in a __kyoOwn expando dict
            |// ON the element (reclaimed with the node), which __kyoMorphAttrs reads to shield each owned attr from
            |// reconciliation. Mirrors markOwned in DomBackend.
@@ -2382,6 +2435,10 @@ private[kyo] object HtmlRenderer:
            |// Record what already carries the scroll flag without acting on it: a page that arrives with a
            |// highlight has not moved it, and scrolling on load would fight the browser's own restoration.
            |sweepScrollAuto(false);
+           |// filledClass: a field the reader typed into before the script ran (or one the browser refilled) is put right, and
+           |// every later keystroke, paste or autofill toggles its class where it happens.
+           |__kyoSweepFilled();
+           |["input","change"].forEach(function(t){document.body.addEventListener(t,function(e){var f=e.target;if(f&&f.getAttribute&&(f.getAttribute("${FilledClass.classAttr}")||f.getAttribute("${FilledClass.upAttr}")))__kyoFilled(f);},true);});
            |// Portal adopt for the initial paint: a portal element present at load re-homes immediately.
            |__kyoAdoptPortals(document.body);__kyoRetireOrphanTwins();
            |// Dropdown helpers: close all dropdowns except the given id
@@ -2683,7 +2740,8 @@ private[kyo] object HtmlRenderer:
            |  }
            |  else if(t==="keyup"&&he(el,"keyup")){var kutid=e.target&&e.target.id?e.target.id:null;post({KeyUp:{path:p,keyboard:mkKbd(e.key,{ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},kutid)}});}
            |  else if(t==="focus"&&he(el,"focus")){var ftid=e.target&&e.target.id?e.target.id:null;post({Focus:{path:p,mouse:mkMouse({ctrl:false,alt:false,shift:false,meta:false},ftid)}});}
-           |  else if(t==="blur"&&he(el,"blur")){var btid=e.target&&e.target.id?e.target.id:null;post({Blur:{path:p,mouse:mkMouse({ctrl:false,alt:false,shift:false,meta:false},btid)}});}
+           |  // blurtext: a text field's blur carries the text it holds as focus leaves it, read off the field itself.
+           |  else if(t==="blur"&&he(el,"blur")){var btid=e.target&&e.target.id?e.target.id:null;var bl={path:p,mouse:mkMouse({ctrl:false,alt:false,shift:false,meta:false},btid)};var bt=e.target;if(bt===el&&he(el,"blurtext")&&bt.tagName&&(bt.tagName==="INPUT"||bt.tagName==="TEXTAREA"))bl.value=bt.value;post({Blur:bl});}
            |  else if(t==="mouseover"&&he(el,"mouseover")){var hotid=e.target&&e.target.id?e.target.id:null;post({Hover:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},hotid,mkPos(e))}});}
            |  else if(t==="mouseout"&&he(el,"mouseout")){var uhotid=e.target&&e.target.id?e.target.id:null;post({Unhover:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},uhotid,mkPos(e))}});}
            |  // Do NOT auto-call preventDefault: leave native-scroll suppression to the handler, matching DomBackend. Server-side rendering cannot synchronously decline the event, so the default is to NOT prevent.

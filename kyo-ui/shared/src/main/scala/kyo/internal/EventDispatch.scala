@@ -217,17 +217,19 @@ private[kyo] object EventDispatch:
     /** Read current checked value from Maybe[Bound[Boolean]]. */
     private def readChecked(checked: Maybe[Bound[Boolean]])(using Frame): Boolean < Sync =
         checked match
-            case Present(Bound.Const(b)) => b
-            case Present(Bound.Ref(ref)) => ref.get
-            case _                       => false
+            case Present(Bound.Const(b))    => b
+            case Present(Bound.Ref(ref))    => ref.get
+            case Present(Bound.Follow(sig)) => sig.current
+            case _                          => false
 
     /** Toggle checked and auto-set SignalRef if bound. Returns the new value. */
     private def toggleChecked(checked: Maybe[Bound[Boolean]])(using Frame): Boolean < Sync =
         checked match
             case Present(Bound.Ref(ref)) =>
                 ref.getAndUpdate(!_).map(!_)
-            case Present(Bound.Const(b)) => !b
-            case _                       => true
+            case Present(Bound.Const(b))    => !b
+            case Present(Bound.Follow(sig)) => sig.current.map(!_)
+            case _                          => true
 
     /** Cycle a Select to the next or previous option. Updates SignalRef and fires onChange. */
     private def cycleSelectOption(sel: Select, forward: Boolean)(using Frame): Unit < (Async & Abort[Any]) =
@@ -237,9 +239,10 @@ private[kyo] object EventDispatch:
         else
             for
                 current <- sel.value match
-                    case Present(Bound.Ref(ref)) => ref.get
-                    case Present(Bound.Const(s)) => Kyo.lift(s)
-                    case _                       => Kyo.lift("")
+                    case Present(Bound.Ref(ref))    => ref.get
+                    case Present(Bound.Const(s))    => Kyo.lift(s)
+                    case Present(Bound.Follow(sig)) => sig.current
+                    case _                          => Kyo.lift("")
                 currentIdx = values.indexOf(current).max(0)
                 nextIdx    =
                     if forward then (currentIdx + 1)    % values.size
@@ -472,6 +475,19 @@ private[kyo] object EventDispatch:
     private def keepBubbling(elem: Element, declared: Boolean): Boolean =
         !(declared && elem.attrs.stopPropagation.getOrElse(false))
 
+    /** Where an edit that reached an element following a signal records what puts it back, read by [[ReactiveUI.subscribe]]'s wrapper once
+      * the event has finished bubbling, and after a handler that failed too, since a failure is recovered on the way.
+      */
+    private[internal] val followEdit: Local[Maybe[AtomicRef[Maybe[UIExchange => Unit < Async]]]] = Local.init(Absent)
+
+    private def recordEdit(elem: Element, event: UIEvent, isTarget: Boolean, path: Seq[String])(using Frame): Unit < Sync =
+        if !isTarget || !Channels.follows(elem) then Kyo.unit
+        else
+            followEdit.use {
+                case Present(ref) => Channels.putBack(elem, event, path).fold(Kyo.unit)(send => ref.set(Present(send)))
+                case Absent       => Kyo.unit
+            }
+
     /** Dispatch event to element. isTarget=true when element is the click target, false on bubble. disabledTarget=true when the original
       * click target was disabled (prevents Form onSubmit on bubble).
       *
@@ -550,7 +566,21 @@ private[kyo] object EventDispatch:
             case ev: UIEvent.Blur =>
                 if isTarget then
                     val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
-                    invoke(attrs.onBlur).andThen(invokeWith(attrs.onBlurEvt, mouse)).andThen(true)
+                    // A text field's blur carries the text the client read off it; one that carries none (a transport
+                    // with no element to read) reports what the field holds instead.
+                    val text: Unit < (Async & Abort[Any]) = elem match
+                        case ti: TextInput if ti.onBlurText.nonEmpty =>
+                            val held: String < Sync = ev.value match
+                                case Present(v) => v
+                                case Absent     =>
+                                    ti.value match
+                                        case Present(Bound.Ref(ref))    => ref.get
+                                        case Present(Bound.Const(v))    => v
+                                        case Present(Bound.Follow(sig)) => sig.current
+                                        case _                          => ""
+                            held.map(v => ti.onBlurText.get(mouse, v).unit)
+                        case _ => ()
+                    invoke(attrs.onBlur).andThen(invokeWith(attrs.onBlurEvt, mouse)).andThen(text).andThen(true)
                 else true
             case e: UIEvent.KeyDown =>
                 unlessInert(isTarget, isDisabled(elem)) {
@@ -639,17 +669,17 @@ private[kyo] object EventDispatch:
                 invokeWith(attrs.onKeyUp, kbEvent).andThen(keepBubbling(elem, attrs.onKeyUp.nonEmpty))
             case e: UIEvent.Input =>
                 unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isReadOnly(elem))) {
-                    elem match
+                    recordEdit(elem, e, isTarget, selfPath).andThen(elem match
                         case ti: TextInput =>
                             val autoSet = ti.value match
                                 case Present(Bound.Ref(ref)) => ref.set(e.value)
                                 case _                       => Kyo.lift(())
                             autoSet.andThen(invokeWith(ti.onInput, e.value)).andThen(true)
-                        case _ => true
+                        case _ => true)
                 }
             case e: UIEvent.Change =>
                 unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isReadOnly(elem))) {
-                    elem match
+                    recordEdit(elem, e, isTarget, selfPath).andThen(elem match
                         case ti: TextInput =>
                             val autoSet = ti.value match
                                 case Present(Bound.Ref(ref)) => ref.set(e.value)
@@ -666,7 +696,7 @@ private[kyo] object EventDispatch:
                                 case _                       => Kyo.lift(())
                             autoSet.andThen(invokeWith(pi.onChange, e.value)).andThen(true)
                         case fi: FileInput => invokeWith(fi.onChange, e.value).andThen(true)
-                        case _             => true
+                        case _             => true)
                 }
             case e: UIEvent.FileSelect =>
                 // Bubbles like Change: the files ride the payload, nothing is read from the element here.
@@ -675,17 +705,17 @@ private[kyo] object EventDispatch:
                 }
             case e: UIEvent.ChangeChecked =>
                 unlessInert(isTarget, isDisabled(elem)) {
-                    elem match
+                    recordEdit(elem, e, isTarget, selfPath).andThen(elem match
                         case bi: BooleanInput =>
                             val autoSet = bi.checked match
                                 case Present(Bound.Ref(ref)) => ref.set(e.checked)
                                 case _                       => Kyo.lift(())
                             autoSet.andThen(invokeWith(bi.onChange, e.checked)).andThen(true)
-                        case _ => true
+                        case _ => true)
                 }
             case e: UIEvent.ChangeNumeric =>
                 unlessInert(isTarget, isDisabled(elem)) {
-                    elem match
+                    recordEdit(elem, e, isTarget, selfPath).andThen(elem match
                         case ni: NumberInput =>
                             val autoSet = ni.value match
                                 case Present(Bound.Ref(ref)) => ref.set(formatDouble(e.value))
@@ -696,7 +726,7 @@ private[kyo] object EventDispatch:
                                 case Present(Bound.Ref(ref)) => ref.set(e.value)
                                 case _                       => Kyo.lift(())
                             autoSet.andThen(invokeWith(ri.onChange, e.value)).andThen(true)
-                        case _ => true
+                        case _ => true)
                 }
             case ev: UIEvent.Submit =>
                 elem match

@@ -153,4 +153,22 @@ class NumberInputTest extends UITest:
         }
     }
 
+    // The browser keeps the typed number until the blur carries it: nothing binds the field or hears its typing.
+    "a number field's blur reports the number typed into a field nothing binds" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef("none")
+            yield UI.div(
+                UI.numberInput.id("n").onBlur((_, v) => ref.set(s"[$v]")),
+                UI.button("other").id("other"),
+                ref.map(v => UI.span(v).id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.fill(Selector.id("n"), "42")
+                _ <- Browser.click(Selector.id("other"))
+                _ <- Browser.assertText(Selector.id("v"), "[42]")
+            yield ()
+        }
+    }
+
 end NumberInputTest

@@ -99,12 +99,62 @@ private[kyo] object DomBackend:
     private def syncFieldProperty(el: dom.Element, name: String, value: String): Unit =
         if name == "value" && (el.tagName == "INPUT" || el.tagName == "TEXTAREA") then
             val dyn = el.asInstanceOf[js.Dynamic]
-            if dyn.value.asInstanceOf[String] != value then dyn.value = value
+            if dyn.value.asInstanceOf[String] != value then
+                dyn.value = value
+                applyFilled(el)
+            end if
         else if name == "value" && el.tagName == "SELECT" then
             val dyn = el.asInstanceOf[js.Dynamic]
             if dyn.value.asInstanceOf[String] != value then dyn.value = value
         end if
     end syncFieldProperty
+
+    /** A patch of `checked`: a control shows its PROPERTY once the reader has toggled it, so the attribute alone would not move it. The browser
+      * took the group's selection from the other radios when the reader clicked this one, and the one that held it has no patch of its own
+      * coming, so each bound radio of the group shows what its attribute says again. A free radio's tick stays. Twin of `__kyoSyncChecked`.
+      */
+    private def syncChecked(el: dom.Element, on: Boolean): Unit =
+        val dyn = el.asInstanceOf[js.Dynamic]
+        dyn.checked = on
+        val name = dyn.name.asInstanceOf[String]
+        if dyn.selectDynamic("type").asInstanceOf[String] == "radio" && name.nonEmpty then
+            val radios = document.querySelectorAll("input[type=radio][data-kyo-bound]")
+            var i      = 0
+            while i < radios.length do
+                val radio = radios(i).asInstanceOf[dom.Element]
+                val other = radio.asInstanceOf[js.Dynamic]
+                if other.name.asInstanceOf[String] == name && js.special.strictEquals(other.form, dyn.form) then
+                    other.checked = radio.hasAttribute("checked")
+                i += 1
+            end while
+        end if
+    end syncChecked
+
+    /** `filledClass`: toggles the classes `field` marks (on itself, and on the closest ancestor its selector names) from
+      * whether it holds text. Twin of `__kyoFilled` in HtmlRenderer.clientJs; both read `FilledClass`.
+      */
+    private[kyo] def applyFilled(field: dom.Element): Unit =
+        val self = field.getAttribute(FilledClass.classAttr)
+        val up   = field.getAttribute(FilledClass.upAttr)
+        if self != null || up != null then
+            val text = field.asInstanceOf[js.Dynamic].value
+            val on   = js.typeOf(text) == "string" && FilledClass.filled(text.asInstanceOf[String])
+            if self != null && self.nonEmpty then discard(field.classList.toggle(self, on))
+            if up != null && up.nonEmpty then
+                val target = field.closest(field.getAttribute(FilledClass.targetAttr))
+                if target != null then discard(target.classList.toggle(up, on))
+            end if
+        end if
+    end applyFilled
+
+    /** [[applyFilled]] for every field that carries a marker: after a patch, which may have written a target's `class`
+      * attribute from what the server last knew, and at boot. Twin of `__kyoSweepFilled` in HtmlRenderer.clientJs.
+      */
+    private def sweepFilled(): Unit =
+        if saw(Marker.Filled) then
+            val fs = document.querySelectorAll(s"[${FilledClass.classAttr}],[${FilledClass.upAttr}]")
+            (0 until fs.length).foreach(i => applyFilled(fs(i).asInstanceOf[dom.Element]))
+    end sweepFilled
 
     /** The reconciler of a live run, for the table that holds the two clients to one answer (`DomBackendMorphParityTest`). */
     private[kyo] def morphRun(parent: dom.Element, fromStart: dom.Node, fromEnd: dom.Node, toStart: dom.Node, toEnd: dom.Node): Unit =
@@ -191,6 +241,7 @@ private[kyo] object DomBackend:
         spawnGhosts(state.ghosts)
         sweepFocusAuto()
         sweepScrollAuto()
+        sweepFilled()
     end listAfter
 
     private def elementsBetweenLive(target: DomReactiveRegions.MorphTarget): Seq[dom.Element] =
@@ -420,6 +471,7 @@ private[kyo] object DomBackend:
                     // Record the initial carriers without scrolling: the first paint is where the reader starts, not a
                     // movement to follow.
                     _ <- Sync.defer(sweepScrollAuto(scroll = false))
+                    _ <- Sync.defer(sweepFilled())
                     // Portal adopt for the initial paint: a portal element present at load re-homes immediately.
                     _        <- Sync.defer { adoptPortals(container); retireOrphanTwins() }
                     _        <- Sync.defer(beginAnimationsSync(container))
@@ -854,6 +906,7 @@ private[kyo] object DomBackend:
             val el = queryByPath(path)
             if el != null then
                 if value then el.setAttribute(name, "") else el.removeAttribute(name)
+                if name == "checked" && el.tagName == "INPUT" then syncChecked(el, value)
         end boolAttrPatchNow
 
         // Toggle in place (so CSS transitions fire) rather than re-render.
@@ -939,6 +992,7 @@ private[kyo] object DomBackend:
             // A patch that left the flag on a different element scrolls that element into view; one that left it
             // where it was scrolls nothing.
             sweepScrollAuto()
+            sweepFilled()
         end finishRangePatch
 
         /** Replaces the SVG region's element with `html`, answering the element that shows it afterwards. */
@@ -1418,6 +1472,11 @@ private[kyo] object DomBackend:
                     e.preventDefault()
                 if tgt != null && doubleActivation(ke.key, tgt) then e.preventDefault()
             end if
+            // filledClass: the class follows the field's text where the reader changes it, before any event is forwarded.
+            if e.`type` == "input" || e.`type` == "change" then
+                val tgt = e.target.asInstanceOf[dom.Element]
+                if tgt != null && js.typeOf(tgt.asInstanceOf[js.Dynamic].getAttribute) == "function" then applyFilled(tgt)
+            end if
             // The click's default goes the same way, so a readonly control does not toggle under the pointer.
             if e.`type` == "click" then
                 val tgt = e.target.asInstanceOf[dom.Element]
@@ -1555,8 +1614,18 @@ private[kyo] object DomBackend:
                             MouseEventData(UI.Modifiers.none, focusTargetId)
                         ))
                     else if t == "blur" && evTypes.contains("blur") then
-                        val blurTargetId = Maybe(e.target.asInstanceOf[dom.Element].id).filter(_.nonEmpty)
-                        Present(UIEvent.Blur(path, MouseEventData(UI.Modifiers.none, blurTargetId)))
+                        val blurred      = e.target.asInstanceOf[dom.Element]
+                        val blurTargetId = Maybe(blurred.id).filter(_.nonEmpty)
+                        // blurtext: a text field's blur carries the text it holds as focus leaves it, read off the field
+                        // itself. Twin of the blur branch in clientJs.
+                        val text: Maybe[String] =
+                            if !(blurred eq target) || !evTypes.contains("blurtext") then Absent
+                            else
+                                blurred.tagName.toUpperCase match
+                                    case "INPUT"    => Present(blurred.asInstanceOf[dom.html.Input].value)
+                                    case "TEXTAREA" => Present(blurred.asInstanceOf[dom.html.TextArea].value)
+                                    case _          => Absent
+                        Present(UIEvent.Blur(path, MouseEventData(UI.Modifiers.none, blurTargetId), text))
                     else if t == "mouseover" && evTypes.contains("mouseover") then
                         val hoverTargetId = Maybe(e.target.asInstanceOf[dom.Element].id).filter(_.nonEmpty)
                         val me            = e.asInstanceOf[dom.MouseEvent]
@@ -1660,7 +1729,8 @@ private[kyo] object DomBackend:
         inline val SvgAnim    = 32
         inline val Portal     = 64
         inline val Attach     = 128
-        inline val All        = 255
+        inline val Filled     = 256
+        inline val All        = 511
     end Marker
 
     /** The markers `html` carries, among those not already in `known`. */
@@ -1675,6 +1745,8 @@ private[kyo] object DomBackend:
         if (known & Marker.SvgAnim) == 0 && html.contains("<animate") then found |= Marker.SvgAnim
         if (known & Marker.Portal) == 0 && html.contains("data-kyo-portal") then found |= Marker.Portal
         if (known & Marker.Attach) == 0 && html.contains("data-kyo-attach") then found |= Marker.Attach
+        // One search covers data-kyo-filled and data-kyo-filled-up.
+        if (known & Marker.Filled) == 0 && html.contains(FilledClass.classAttr) then found |= Marker.Filled
         found
     end markersIn
 

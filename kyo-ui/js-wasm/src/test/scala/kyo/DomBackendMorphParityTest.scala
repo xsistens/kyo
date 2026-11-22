@@ -125,6 +125,12 @@ class DomBackendMorphParityTest extends kyo.test.Test[Any]:
     )(
         _.props("x.checked") == "true"
     )
+    morph(
+        "a bound box takes a tick back",
+        """<input id="x" type="checkbox" data-kyo-bound>""",
+        """<input id="x" type="checkbox" data-kyo-bound>""",
+        _ => el("x").checked = true
+    )(_.props("x.checked") == "false")
     morph("a free box follows a render that turns it on", box, """<input id="x" type="checkbox" checked>""")(_.props("x.checked") == "true")
     morph(
         "a free box follows a render that turns it off, past the reader's tick",

@@ -61,6 +61,18 @@ class HtmlRendererTest extends UITest:
         }
     }
 
+    // The morph tells a box whose state the render owns from a free one by this marker: it has no other way, since a
+    // bound box that is off renders no `checked`, exactly like an unbound one.
+    "a checkbox or radio whose checked state the render binds says so, a free one does not" in {
+        for
+            ref   <- Signal.initRef(true)
+            bound <- kyo.internal.HtmlRenderer.render(UI.div(UI.checkbox.id("a").checked(false), UI.radio.id("b").checked(ref)), Seq.empty)
+            free  <- kyo.internal.HtmlRenderer.render(UI.div(UI.checkbox.id("c"), UI.radio.id("d")), Seq.empty)
+        yield
+            assert("data-kyo-bound".r.findAllMatchIn(bound).size == 2, s"both bound controls carry the marker: $bound")
+            assert(!free.contains("data-kyo-bound"), s"a free control carries none: $free")
+    }
+
     "select renders" in {
         withUI(UI.div(UI.select(UI.option("A").value("a"), UI.option("B").value("b")).id("sel"))) {
             Browser.assertVisible(Selector.id("sel")).unit
