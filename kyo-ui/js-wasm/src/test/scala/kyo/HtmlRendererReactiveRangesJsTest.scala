@@ -92,26 +92,28 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
 
     // The same markup over fields the reader edited is not left as it is: the state differs, so the range takes the
     // morph, which reconciles each control by the morph rule (DomBackendMorphParityTest) on the live nodes. A field
-    // with a value attribute takes the render's state; a textarea whose content did not move, a free box and a select
-    // whose options did not move keep the reader's.
+    // with a value attribute and a box the render binds take the render's state; a textarea whose content did not
+    // move, a free box and a select whose options did not move keep the reader's.
     "embedded same markup over edited form properties reconciles them on the live nodes" in {
         Sync.defer {
             install("<!--kyo-rs:r--><section><input id='text' value='server'><textarea id='area'>server</textarea>" +
-                "<input id='check' type='checkbox' checked>" +
+                "<input id='bound' type='checkbox' data-kyo-bound checked><input id='check' type='checkbox' checked>" +
                 "<select id='choice'><option value='a' selected>A</option><option value='b'>B</option></select></section><!--kyo-re:r-->")
             val result = evalString("""(() => {
                 const section = document.querySelector('section'), markup = section.outerHTML;
                 document.getElementById('text').value = 'typed';
                 document.getElementById('area').value = 'typed';
+                document.getElementById('bound').checked = false;
                 document.getElementById('check').checked = false;
                 document.getElementById('check').indeterminate = true;
                 document.getElementById('choice').selectedIndex = 1;
                 kyoRangeReplace('r', markup);
                 return [section === document.querySelector('section'), document.getElementById('text').value,
-                    document.getElementById('area').value, document.getElementById('check').checked, document.getElementById('check').indeterminate,
+                    document.getElementById('area').value, document.getElementById('bound').checked,
+                    document.getElementById('check').checked, document.getElementById('check').indeterminate,
                     document.getElementById('choice').value].join('|');
             })()""")
-            assert(result == "true|server|typed|false|true|b", result)
+            assert(result == "true|server|typed|true|false|true|b", result)
         }
     }
 
@@ -259,6 +261,28 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
         replace("r~1", "<div id='box' data-kyo-path='1'><p id='para' data-kyo-path='1.0'>c</p></div>")
         assert(live("para") eq para)
         assert(para.textContent.asInstanceOf[String] == "c")
+    }
+
+    // A box whose `checked` the render binds says so (`data-kyo-bound`): what it shows is the render's, so a repaint
+    // that keeps it where it was takes back a tick the app never accepted. An unbound box (below) keeps the reader's.
+    "embedded morph takes back a tick the render of a bound checkbox never gave" in {
+        val id = "r"
+        install(s"<!--kyo-rs:$id--><input id='held' type='checkbox' data-kyo-bound><span>0</span><!--kyo-re:$id-->")
+        val box = live("held")
+        discard(box.click())
+        replace(id, "<input id='held' type='checkbox' data-kyo-bound><span>1</span>")
+        assert(live("held") eq box)
+        assert(!box.checked.asInstanceOf[Boolean], "the bound checkbox still shows a tick its render never gave")
+    }
+
+    "embedded morph gives back a tick the reader took from a bound checkbox the render keeps on" in {
+        val id = "r"
+        install(s"<!--kyo-rs:$id--><input id='kept' type='checkbox' data-kyo-bound checked><span>0</span><!--kyo-re:$id-->")
+        val box = live("kept")
+        discard(box.click())
+        replace(id, "<input id='kept' type='checkbox' data-kyo-bound checked><span>1</span>")
+        assert(live("kept") eq box)
+        assert(box.checked.asInstanceOf[Boolean], "the bound checkbox lost the tick its render keeps")
     }
 
     "embedded morph leaves the reader's tick on an unbound checkbox" in {

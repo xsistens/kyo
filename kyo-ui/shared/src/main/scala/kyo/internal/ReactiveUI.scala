@@ -459,7 +459,7 @@ private[kyo] object ReactiveUI:
     private def needsOwnNode(ui: UI): Boolean = ui match
         case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted | _: Bounded => true
         case el: Element                                                 =>
-            collectSignalRef(el).nonEmpty || el.attrs.hasChannels
+            collectSignalRef(el).nonEmpty || el.attrs.hasChannels || Channels.follows(el)
         case _ => false
 
     /** The Fragment a Foreach paints for `items`: one KeyedChild per element, keyed by the key function (or
@@ -739,7 +739,7 @@ private[kyo] object ReactiveUI:
             // the server-push session through `handleValidated` (UIServer). Wrapping either one alone
             // suppresses the browser's activation on both while replacing it on only one, which is a
             // button that stops working rather than one that works twice.
-            activating = activatingHandle(rui.handle)
+            activating = activatingHandle(assertingHandle(rui.handle, exchange))
             dragging   = dragHandle(activating, dragSessions, dragMutex, expiryWake, dragLimits)
             // A handler runs in the session, so a UI.batch inside it finds it; the handler itself is no change of its own (see MountTable).
             validatedHandle: ValidatedHandler = (path, event) => MountSession.current.let(Present(session))(dragging(path, event))
@@ -776,6 +776,23 @@ private[kyo] object ReactiveUI:
         dispatch: MountDispatch
     )(using Frame): Unit < (Async & Scope) =
         Kyo.foreachDiscard(kids)(subscribeScoped(_, exchange, signalChangeTime, table, dispatch, pass)).andThen(table.endWalk)
+
+    /** Puts back an edit its owner did not take on an element that follows a signal. The browser changed the control before the event got here,
+      * and an owner that declines leaves the signal as it was, so no emission would ever reach the control. Compares once the event has
+      * finished bubbling, and sends through the session's own exchange: content a boundary holds back takes no event, so there is nothing to
+      * wait for. Only an edit records, so every other event goes straight through.
+      */
+    private def assertingHandle(handle: Handler, exchange: UIExchange)(using Frame): Handler =
+        (path, event) =>
+            event match
+                case _: (UIEvent.Input | UIEvent.Change | UIEvent.ChangeChecked | UIEvent.ChangeNumeric) =>
+                    for
+                        recorded <- AtomicRef.init(Maybe.empty[UIExchange => Unit < Async])
+                        keep     <- followEdit.let(Present(recorded))(handle(path, event))
+                        send     <- recorded.get
+                        _        <- send.fold(Kyo.unit)(_(exchange))
+                    yield keep
+                case _ => handle(path, event)
 
     /** Turns a keydown's recorded activation into the click it stands for.
       *
@@ -972,7 +989,7 @@ private[kyo] object ReactiveUI:
       */
     private[internal] def forkRootChannels(path: Seq[String], content: UI, exchange: UIExchange)(using Frame): Unit < (Async & Scope) =
         content match
-            case el: Element if el.attrs.hasChannels =>
+            case el: Element if el.attrs.hasChannels || Channels.follows(el) =>
                 forkChannelObservers(path, Channels.of(el), RenderedChannels.empty, exchange, el.frame, Absent)
             case _ => Kyo.unit
 

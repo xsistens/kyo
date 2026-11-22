@@ -68,9 +68,10 @@ private[kyo] object MorphScript:
           |  for(var j=from.attributes.length-1;j>=0;j--){var n=from.attributes[j].name;
           |    if(!own[n]&&!to.hasAttribute(n))from.removeAttribute(n);}
           |  // A checkbox, a radio and an option show their PROPERTY once toggled by the reader, so a render that
-          |  // turns the control on or off writes it. Only a change is written: a bound control that is off renders no
-          |  // attribute, like an unbound one, whose tick a repaint must keep.
-          |  if(tg){var on=to.hasAttribute(tg);if(on!==wasOn)from[tg]=on;}
+          |  // turns the control on or off writes it. A box the render binds (data-kyo-bound) shows the render's state
+          |  // on every pass, so a repaint takes back a tick the app did not accept. A free one is written only on a
+          |  // change: it renders no attribute when off, and a repaint must keep its tick.
+          |  if(tg){var on=to.hasAttribute(tg);if(to.hasAttribute("data-kyo-bound")?from[tg]!==on:on!==wasOn)from[tg]=on;}
           |  __kyoRestoreProps(from,to);
           |  // Active-input preservation: two-way binding echoes each keystroke back as a re-render. Never overwrite
           |  // the focused field's live value (its caret) with its own echo; assign only a genuine external change.

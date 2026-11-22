@@ -842,6 +842,28 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
         yield assert((a, b) == (true, false), s"the group shows a=$a b=$b after the app chose a")
     }
 
+    // A box whose state the render binds shows the render's state on every pass: a repaint that keeps it off takes back
+    // a tick the app did not accept, which is how a one-way binding stays honest when its owner declines a toggle.
+    "a repaint that keeps a bound checkbox off takes back the reader's tick" in {
+        for
+            outer <- Signal.initRef(0)
+            ui    = UI.div(outer.map(o => UI.div(UI.checkbox.id("held-tick").checked(false), UI.span(s"o=$o").id("held-tick-status"))))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("held-tick") != null))
+            box   <- element("held-tick")
+            _     <- Sync.defer(discard(box.click()))
+            _     <- outer.set(1)
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("held-tick-status").textContent == "o=1"))
+            same  <- element("held-tick").map(_ eq box)
+            shown <- element("held-tick").map(_.checked.asInstanceOf[Boolean])
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield
+            assert(same)
+            assert(!shown, "the bound checkbox kept a tick its render never gave")
+    }
+
     // Guard for the fix above: an unbound checkbox renders no `checked` on every pass, so a repaint of the region
     // around it must leave the reader's tick alone, as it leaves an unbound field's text.
     "a repaint around an unbound checkbox keeps the reader's tick" in {

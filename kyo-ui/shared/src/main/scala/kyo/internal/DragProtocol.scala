@@ -605,8 +605,16 @@ private[kyo] object DragProtocol:
                         validateKeyboard(event.keyboard, limits).map(_ => ValidatedEvent.KeyDown(event))
                     case event: UIEvent.KeyUp =>
                         validateKeyboard(event.keyboard, limits).map(_ => ValidatedEvent.KeyUp(event))
-                    case event: UIEvent.Focus  => validateMouse(event.mouse, limits).map(_ => ValidatedEvent.Focus(event))
-                    case event: UIEvent.Blur   => validateMouse(event.mouse, limits).map(_ => ValidatedEvent.Blur(event))
+                    case event: UIEvent.Focus => validateMouse(event.mouse, limits).map(_ => ValidatedEvent.Focus(event))
+                    // The text a blur carries is client-supplied like an input event's, and counts against the same limit.
+                    case event: UIEvent.Blur =>
+                        validateMouse(event.mouse, limits)
+                            .flatMap(_ =>
+                                event.value match
+                                    case Present(v) => validateText(v, "value", limits.maxTextLength, allowEmpty = true)
+                                    case Absent     => Result.unit
+                            )
+                            .map(_ => ValidatedEvent.Blur(event))
                     case event: UIEvent.Scroll =>
                         validateNumber(event.deltaX, "deltaX")
                             .flatMap(_ => validateNumber(event.deltaY, "deltaY"))
