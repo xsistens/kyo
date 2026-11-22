@@ -216,8 +216,10 @@ final private[kyo] class MountDispatch(
             case Absent =>
                 Sync.Unsafe.defer(handovers.get().get(at).filter { kept =>
                     val node = kept.supervision.spec.node
+                    // A node without a key that its place holds (see DrawContext.Reach) is the same node at the same place.
                     !kept.fate.group.released && node.site == event.site && node.keyOrigin == event.keyOrigin &&
-                    event.key.exists(k => node.key.exists(_.equals(k)))
+                    (event.key.exists(k => node.key.exists(_.equals(k))) ||
+                        (event.key.isEmpty && node.key.isEmpty && kept.supervision.spec.identity.nonEmpty))
                 })
             case found => found
         }
@@ -305,22 +307,77 @@ private[kyo] object DrawContext:
     /** What a keyed node's id derives from besides its own site and key: the base of the instance whose table holds it (`owner`), and the
       * keys of the list rows around it up to that instance, innermost first, as its [[MountIdentity]] has them. A walk binds it where it
       * enters an instance's content and where it enters a list row; a node no instance holds is in the root's.
+      *
+      * `reach` says what can show a node here again, between it and `owner` (see [[Reach]]), and `content` is where the content of
+      * `owner` starts, which the place of a node held by its place is counted from.
       */
-    final case class IdScope(owner: String, rows: List[String])
+    final case class IdScope(owner: String, rows: List[String], reach: Reach, content: ReactiveRegion.RegionIdentity):
+        /** Whether a later run can show a node here again with other props. */
+        def runsAgain: Boolean = reach == Reach.Again
+    end IdScope
     object IdScope:
-        val root: IdScope = IdScope("kyo", Nil)
+        val root: IdScope = IdScope("kyo", Nil, Reach.Root, ReactiveRegion.RegionIdentity(Seq.empty, 0))
+
+    /** What can show a node again, between it and the owner of its table (decided 2026-11-06).
+      *
+      *   - `Again`: a region or a list that runs again, or the content of a waiting mount, which changes as its effect publishes. A keyed
+      *     `UI.mountedWith` node gets the signal later runs offer their props through, and a node without a key is new with every run.
+      *   - `Kept`: nothing; the node is in the content of a drawn mount, which is drawn once. Its place there is fixed for as long as that
+      *     instance lives, so a node without a key is held by its place in the instance's table, as a keyed one is by its key: when a run
+      *     around the instance shows it again, what is in it keeps its state.
+      *   - `Root`: nothing either, at the root of a session, which is walked once.
+      */
+    enum Reach derives CanEqual:
+        case Root, Kept, Again
 
     /** The scope a render pass or a boundary walk is in. */
     val scope: Local[IdScope] = Local.init(IdScope.root)
+
+    /** What can show a node in the content of an instance of `node` again: a waiting mount's content changes as its effect publishes,
+      * a drawn mount's is drawn once.
+      */
+    def contentReach(node: UI.Ast.MountNode): Reach =
+        node match
+            case _: UI.Ast.Mounted => Reach.Again
+            case _: UI.Ast.Drawn   => Reach.Kept
+
+    /** The scope of the content of the instance of `node` whose ids derive from `owner`, which starts at `at`. */
+    def contentScope(owner: String, node: UI.Ast.MountNode, at: ReactiveRegion.RegionIdentity): IdScope =
+        IdScope(owner, Nil, contentReach(node), at)
 
     /** `body` walked inside a list row keyed `row`. */
     def inRow[A](row: String)(body: SignalNow.Locals ?=> A)(using locals: SignalNow.Locals): A =
         val now = locals.read(scope)
         body(using locals.bound(scope, now.copy(rows = row :: now.rows)))
 
-    /** `body` walked inside the content of the instance whose ids derive from `owner`, a range of its own. */
-    def inContent[A](owner: String)(body: SignalNow.Locals ?=> A)(using locals: SignalNow.Locals): A =
-        body(using locals.bound(scope, IdScope(owner, Nil)).bound(range, Present(new Occurrences)))
+    /** `body` walked inside the content of the instance of `node` whose ids derive from `owner`, starting at `at`, a range of its own. */
+    def inContent[A](owner: String, node: UI.Ast.MountNode, at: ReactiveRegion.RegionIdentity)(body: SignalNow.Locals ?=> A)(using
+        locals: SignalNow.Locals
+    ): A =
+        body(using locals.bound(scope, contentScope(owner, node, at)).bound(range, Present(new Occurrences)))
+
+    /** `body` walked as the value of a region or a list that runs again: a range of its own, where what it shows can be shown again with
+      * other props.
+      */
+    def inRegion[A](body: SignalNow.Locals ?=> A)(using locals: SignalNow.Locals): A =
+        body(using locals.bound(scope, locals.read(scope).copy(reach = Reach.Again)).bound(range, Present(new Occurrences)))
+
+    /** `v` run as the subscription of a region or a list that runs again, so a draw it starts knows a later run can reach the node. */
+    def inRegionScope[A, S](v: A < S)(using Frame): A < S =
+        scope.use(now => scope.let(now.copy(reach = Reach.Again))(v))
+
+    /** Where a node without a key at `at` is held in the table of the instance whose content `scope` is, when nothing can show it
+      * again ([[Reach.Kept]]): its place counted from where that content starts, so the instance keeps it wherever it is shown.
+      */
+    def placeIn(scope: IdScope, node: UI.Ast.MountNode, at: ReactiveRegion.RegionIdentity): Maybe[Placed] =
+        if node.key.nonEmpty || scope.reach != Reach.Kept then Absent
+        else
+            val from  = scope.content
+            val below = at.path.drop(from.path.size)
+            Present(Placed(below, if below.isEmpty then at.transparentDepth - from.transparentDepth else at.transparentDepth))
+
+    /** The key a node without one is held by in the content of a drawn instance: its place there (see [[placeIn]]). */
+    final case class Placed(path: Seq[String], depth: Int) derives CanEqual
 
     /** How often a walk met each site-keyed identity so far in the range it walks: the region, or the content of an instance, whose nodes
       * one pass shows. Only the walk that holds the thread touches it.
@@ -417,8 +474,10 @@ final private[kyo] class MountDraw(
     val outcome: Result[Any, UI],
     context: DrawContext,
     node: Drawn,
-    // The props signal of a node built by `UI.mountedWith`, which the instance that takes this draw keeps.
-    val props: Maybe[SignalRef[?]] = Absent
+    // The props a node built by `UI.mountedWith` reads, which the instance that takes this draw keeps and later runs offer to.
+    val props: Maybe[UI.Live[?]] = Absent,
+    // Whether its instance is held by an identity, a key or its place in a drawn instance (see DrawContext.Reach), so a paint keeps it.
+    held: Boolean = false
 ):
     /** The base of this draw's ids, which the content it drew is an instance's of. */
     def base: String = context.base
@@ -445,7 +504,7 @@ final private[kyo] class MountDraw(
 
     /** Whether this draw stays when a new paint comes over its place, which leaves it as not on the page. */
     def keepAcrossPaints()(using AllowUnsafe): Boolean =
-        val keep = node.key.nonEmpty
+        val keep = held
         if keep then onPage.set(false)
         keep
     end keepAcrossPaints
@@ -467,15 +526,23 @@ end MountDraw
 /** The props of a node built by [[kyo.UI.mountedWith]] and the draw that reads them: the first draw makes the signal, a later run of the
   * node offers its props to the instance that kept that signal.
   */
-final private[kyo] class PropsDraw[P](val value: P, draw: Signal[P] => UI < Sync)(using CanEqual[P, P]):
-    /** The instance's props signal, holding this node's props, and the draw over it. */
-    def start(using Frame): (SignalRef[P], UI < Sync) < Sync = Signal.initRef(value).map(ref => (ref, draw(ref)))
+final private[kyo] class PropsDraw[P](val value: P, draw: UI.Live[P] => UI < Sync)(using
+    CanEqual[P, P],
+    scala.deriving.Mirror.ProductOf[P]
+):
+    /** The draw over this node's props. Where a later run can offer the instance props (`offered`), also the props that follow them,
+      * holding this node's; anywhere else none, and the draw reads the props as they are.
+      */
+    def start(offered: Boolean)(using Frame): (Maybe[UI.Live[P]], UI < Sync) < Sync =
+        Owning.start(value, summon[scala.deriving.Mirror.ProductOf[P]]).map { owning =>
+            if offered then owning.kept(value).map(live => (Present(live), draw(live)))
+            else (Absent, draw(new UI.Live(value, Absent, owning)))
+        }
 
-    /** Hands this node's props to the instance that holds `to`, unless it holds equal ones. */
-    def offer(to: SignalRef[?])(using Frame): Unit < Sync =
-        // Unsafe cast: `to` is the signal `start` made for this node's site and key, which a draw of another type cannot reach.
-        val ref = to.asInstanceOf[SignalRef[P]]
-        ref.get.map(now => if now == value then Kyo.unit else ref.set(value))
+    /** Hands this node's props to the instance that reads `to`, unless it holds equal ones. */
+    def offer(to: UI.Live[?])(using Frame): Unit < Sync =
+        // Unsafe cast: `to` is the props `start` made for this node's site and key, which a draw of another type cannot reach.
+        to.asInstanceOf[UI.Live[P]].offer(value)
     end offer
 end PropsDraw
 
@@ -503,10 +570,12 @@ private[kyo] object MountDraw:
     def run(node: Drawn, at: ReactiveRegion.RegionIdentity, scope: DrawContext.IdScope, occurrence: Int)(using Frame): MountDraw < Sync =
         Sync.defer(new DrawContext(DrawContext.base(at, node, scope, occurrence))).map { context =>
             // No Abort in a draw's row: a Result of a panic is the only other outcome.
-            def drawing(draw: UI < Sync, props: Maybe[SignalRef[?]]): MountDraw < Sync =
-                DrawContext.current.let(Present(context))(Abort.run[Any](draw)).map(new MountDraw(_, context, node, props))
+            def drawing(draw: UI < Sync, props: Maybe[UI.Live[?]]): MountDraw < Sync =
+                DrawContext.current.let(Present(context))(Abort.run[Any](draw)).map(
+                    new MountDraw(_, context, node, props, held = node.key.nonEmpty || scope.reach == DrawContext.Reach.Kept)
+                )
             node.props match
-                case Present(props) => props.start.map((ref, draw) => drawing(draw, Present(ref)))
+                case Present(props) => props.start(node.key.nonEmpty && scope.runsAgain).map((live, draw) => drawing(draw, live))
                 case _              => drawing(node.draw, Absent)
         }
 end MountDraw
@@ -535,7 +604,9 @@ final private[kyo] case class MountedSpec(
     // An element's effect: it shows nothing, so it has no error view, and a failure goes straight to what is around the element.
     headless: Boolean = false,
     // How many calls of the same identity came before this one in its range (see [[MountIdentity]]).
-    occurrence: Int = 0
+    occurrence: Int = 0,
+    // The scope the walk that found the node saw it in (see [[DrawContext.IdScope]]): what can show it again, and where its owner's content starts.
+    scope: DrawContext.IdScope = DrawContext.IdScope.root
 ):
     def placeholder: UI =
         node match
@@ -566,13 +637,19 @@ final private[kyo] case class MountedSpec(
         UI.MountError(t, source, Maybe(t.getMessage).getOrElse(t.toString), node.frame, path, node.key)
     end mountError
 
-    /** The instance identity of a keyed node; a keyless node has none, since every re-render replaces its instance. `rows` are the keys of
-      * the list rows between the node and the owner of its table, the session root or the mount instance whose content it is in, across
-      * every region in between, and `occurrence` tells apart the calls of one site in one range, by their order, where the node is keyed
-      * on its site.
+    /** The instance identity of a keyed node, and of a node without a key in the content of a drawn instance, which is held by its place
+      * there (see [[DrawContext.Reach]]); any other node without a key has none, since every re-render replaces its instance. `rows` are
+      * the keys of the list rows between the node and the owner of its table, the session root or the mount instance whose content it is
+      * in, across every region in between, and `occurrence` tells apart the calls of one site in one range, by their order, where the node
+      * is keyed on its site.
       */
     def identity: Maybe[MountIdentity] =
-        node.key.map(MountIdentity(rows, node.site, _, node.keyOrigin, occurrence))
+        node.key match
+            case Present(key) => Present(MountIdentity(rows, node.site, key, node.keyOrigin, occurrence))
+            case Absent       => DrawContext.placeIn(scope, node, context).map(MountIdentity(rows, node.site, _, node.keyOrigin, 0))
+
+    /** The scope the node is drawn in, in the table of `owner`. */
+    def drawScope(owner: String): DrawContext.IdScope = scope.copy(owner = owner, rows = rows)
 end MountedSpec
 
 // ---- Mounted nodes ----
@@ -746,8 +823,8 @@ final private[kyo] class MountInstance(
     val fate: MountFate,
     // The walk of the render pass that already put this instance's first content on the page.
     drawnOnPage: Maybe[Seq[ReactiveUI]] = Absent,
-    // The signal a `UI.mountedWith` draw reads its props through: each run of the node that shows this instance offers its props to it.
-    val props: Maybe[SignalRef[?]] = Absent,
+    // The props a `UI.mountedWith` draw reads: each run of the node that shows this instance offers its props to them.
+    val props: Maybe[UI.Live[?]] = Absent,
     // The state the instance starts in, which is what the render pass behind `drawnOnPage` put on the page.
     drawnState: Maybe[MountState] = Absent
 ):
@@ -842,7 +919,7 @@ private[kyo] object MountInstance:
                     inner       = FailureFrame.Mount(supervision) :: frames
                     scope <- Scope.Finalizer.init(1)
                     go    <- Promise.init[Unit, Any]
-                    base = DrawContext.base(spec.context, m, DrawContext.IdScope(parent.idBase, spec.rows), spec.occurrence)
+                    base = DrawContext.base(spec.context, m, spec.drawScope(parent.idBase), spec.occurrence)
                     runner <-
                         Fiber.initUnscoped(go.get.andThen(runEffect(spec, m, base, cell, scope, supervision, inner, parent.session, fate)))
                 yield new MountInstance(
@@ -854,7 +931,12 @@ private[kyo] object MountInstance:
                     fate
                 )
             case d: Drawn =>
-                drawn.fold(MountDraw.run(d, spec.context, DrawContext.IdScope(parent.idBase, spec.rows), spec.occurrence))(Kyo.lift)
+                drawn.fold(MountDraw.run(
+                    d,
+                    spec.context,
+                    spec.drawScope(parent.idBase),
+                    spec.occurrence
+                ))(Kyo.lift)
                     .map(fromDraw(spec, _, frames, parent))
 
     /** An instance over what a draw produced. Its content is there from the start, so it never pends; only its `whileMounted` effects, when
@@ -2443,10 +2525,10 @@ private[kyo] object MountRegions:
     )(using Frame): Unit < (Async & Scope) =
         // A run of the node that shows a kept instance hands it this run's props.
         val offered: Unit < Sync = (spec.node, instance.props) match
-            case (d: Drawn, Present(ref)) => d.props.fold(Kyo.unit)(_.offer(ref))
-            case _                        => Kyo.unit
+            case (d: Drawn, Present(live)) => d.props.fold(Kyo.unit)(_.offer(live))
+            case _                         => Kyo.unit
         // The content is the instance's: a walk that draws in it, and every region fiber it forks, derive their ids from it.
-        offered.andThen(DrawContext.scope.let(DrawContext.IdScope(instance.children.idBase, Nil))(
+        offered.andThen(DrawContext.scope.let(DrawContext.contentScope(instance.children.idBase, spec.node, rui.contentContext))(
             showContent(rui, spec, instance, exchange, signalChangeTime, dispatch, follow)
         ))
     end subscribeMountContent

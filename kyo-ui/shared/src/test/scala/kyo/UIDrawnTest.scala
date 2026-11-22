@@ -771,6 +771,209 @@ class UIDrawnTest extends kyo.test.Test[Any]:
         end for
     }
 
+    // ---- mountedWith: props read through Live ----
+
+    private case class Labeled(label: Prop[String]) derives CanEqual
+
+    /** A node that reads its label through `Live` and keeps what it read in `read`, drawn once per instance. */
+    private def labeled(props: Labeled, read: AtomicReference[Chunk[Prop[String]]])(using Frame): UI.Ast.Drawn =
+        UI.mountedWith(props) { live =>
+            val label = live(_.label)
+            discard(read.updateAndGet(_.append(label)))
+            span(label)
+        }
+
+    private case class Optional(label: Maybe[Prop[String]], size: Prop[Int]) derives CanEqual
+
+    "an optional field reads as one prop of an option, a plain field as its prop" in {
+        val set                        = new UI.Live(Optional(Present("a"), 1), Absent)
+        val unset                      = new UI.Live(Optional(Absent, 1), Absent)
+        val label: Prop[Maybe[String]] = set(_.label)
+        val size: Prop[Int]            = set(_.size)
+        for
+            l <- Prop.signal(label).current
+            n <- Prop.signal(unset(_.label)).current
+            z <- Prop.signal(size).current
+        yield
+            assert(!label.isInstanceOf[Signal[?]] && !size.isInstanceOf[Signal[?]], s"$label $size")
+            assert(l == Present("a") && n == Absent && z == 1, s"$l $n $z")
+        end for
+    }
+
+    "an optional field follows the latest run and a signal inside it" in {
+        for
+            inner <- Signal.initRef("x")
+            live  <- kyo.internal.Owning.none[Optional].kept(Optional(Absent, 1))
+            read = Prop.signal(live(_.label))
+            first <- read.current
+            _     <- live.offer(Optional(Present(inner), 1))
+            _     <- assertEventually(read.current.map(_ == Present("x")))
+            _     <- inner.set("y")
+            _     <- assertEventually(read.current.map(_ == Present("y")))
+        yield assert(first == Absent, s"$first")
+    }
+
+    private case class Held(bound: Maybe[Prop[String]] = Absent, start: Maybe[String] = Present("own")) extends UI.Ownable[String]:
+        def bind(v: Prop[String]): Held              = copy(bound = Present(v))
+        def withHearer(f: String => UI.Action): Held = this
+
+    private case class Form(name: Held, size: Int) derives CanEqual
+
+    private def formLive(first: Form)(using Frame): UI.Live[Form] < Sync =
+        kyo.internal.Owning.start(first, summon[scala.deriving.Mirror.ProductOf[Form]]).map(_.kept(first))
+
+    private def nameOf(live: UI.Live[Form])(using Frame): String < Sync =
+        live.call(_.name.bound).flatMap(b => Prop.signal(b.get).current)
+
+    "an ownable prop the run leaves unbound reads the instance's own value, a bound one the binding" in {
+        for
+            app  <- Signal.initRef("app")
+            live <- formLive(Form(Held(), 1))
+            mine <- nameOf(live)
+            _    <- live.offer(Form(Held(Present(app)), 1))
+            seen <- nameOf(live)
+        yield assert(mine == "own" && seen == "app", s"$mine $seen")
+    }
+
+    "a run that stops binding an ownable prop hands the value it showed to the instance before that run is seen" in {
+        for
+            app  <- Signal.initRef("app")
+            live <- formLive(Form(Held(Present(app)), 1))
+            _    <- app.set("typed")
+            _    <- live.offer(Form(Held(), 2))
+            held <- nameOf(live)
+        yield assert(held == "typed", s"held $held")
+    }
+
+    "an instance no run can reach again reads a constant prop as it is, with no signal" in {
+        val read = new AtomicReference(Chunk.empty[Prop[String]])
+        val rec  = new RecordingExchange
+        val ui   = div(labeled(Labeled("plain"), read), labeled(Labeled("kept"), read).keyed("k"))
+        painted(ui, rec) { (html, _) =>
+            assert(html.contains("plain") && html.contains("kept"), html)
+            assert(read.get.nonEmpty && read.get.forall(!_.isInstanceOf[Signal[?]]), s"read: ${read.get}")
+        }
+    }
+
+    "a keyed instance in a region that runs again reads its props as a signal that follows the latest run" in {
+        val read = new AtomicReference(Chunk.empty[Prop[String]])
+        val rec  = new RecordingExchange
+        for
+            tick <- Signal.initRef(0)
+            ui = div(tick.render(n => labeled(Labeled(s"run $n"), read).keyed("k")))
+            seen <- painted(ui, rec) { (_, _) =>
+                for
+                    _ <- assertEventually(tick.waiters.map(_ == 1))
+                    _ <- tick.set(1)
+                    _ <- assertEventually(tick.waiters.map(_ == 1))
+                    label = read.get.head.asInstanceOf[Signal[String]]
+                    _   <- assertEventually(label.current.map(_ == "run 1"))
+                    now <- label.current
+                yield (read.get.size, read.get.head.isInstanceOf[Signal[?]], now)
+            }
+        yield assert(seen == (1, true, "run 1"))
+        end for
+    }
+
+    "a mount inside a kept instance drawn in the Solid shape keeps its instance and state while the host runs again with new props" in {
+        val instances                     = new Instances
+        val read                          = new AtomicReference(Chunk.empty[Prop[String]])
+        val rec                           = new RecordingExchange
+        def host(n: Int)(using Frame): UI =
+            UI.mountedWith(Labeled(s"run $n")) { live =>
+                val label = live(_.label)
+                discard(read.updateAndGet(_.append(label)))
+                div(span(label), UI.mounted(Signal.initRef(0).map(instances.draw)))
+            }.keyed("host")
+        for
+            tick <- Signal.initRef(0)
+            ui = div(tick.render(host))
+            held <- painted(ui, rec) { (_, _) =>
+                for
+                    first <- drawn(instances)
+                    _     <- parked(first)
+                    _     <- first.set(5)
+                    _     <- parked(first)
+                    _     <- tick.set(1)
+                    _     <- assertEventually(tick.waiters.map(_ == 1))
+                    label = read.get.head.asInstanceOf[Signal[String]]
+                    _     <- assertEventually(label.current.map(_ == "run 1"))
+                    value <- first.get
+                yield (instances.seen.size, read.get.size, value)
+            }
+        yield assert(held == (1, 1, 5), s"(inner instances, host draws, inner value): $held")
+        end for
+    }
+
+    // How often an instance's props were resolved: each resolve binds the instance's own ref into its unbound ownable field.
+    private val resolves = new java.util.concurrent.atomic.AtomicInteger(0)
+
+    private case class Counted(bound: Maybe[Prop[String]] = Absent, start: Maybe[String] = Present("own"))
+        extends UI.Ownable[String]:
+        def withHearer(f: String => UI.Action): Counted = this
+        def bind(v: Prop[String]): Counted              =
+            discard(resolves.incrementAndGet()); copy(bound = Present(v))
+    end Counted
+
+    private case class Pair(a: Prop[String], b: Prop[String], held: Counted) derives CanEqual
+
+    "a run that changes one field resolves the props once and leaves a field it did not change alone" in {
+        val rec  = new RecordingExchange
+        val read = new AtomicReference(Chunk.empty[Prop[String]])
+        for
+            tick <- Signal.initRef(0)
+            same <- Signal.initRef("same")
+            host = (n: Int) =>
+                UI.mountedWith(Pair(s"run $n", same, Counted())) { live =>
+                    val a = live(_.a)
+                    discard(read.updateAndGet(_.append(a)))
+                    div(span(a), span("b").aria("label", live(_.b)))
+                }.keyed("host")
+            ui = div(tick.render(host))
+            seen <- painted(ui, rec) { (_, _) =>
+                for
+                    _      <- assertEventually(tick.waiters.map(_ == 1))
+                    before <- rec.ops.map(_.size)
+                    first = resolves.get
+                    _ <- tick.set(1)
+                    _ <- assertEventually(tick.waiters.map(_ == 1))
+                    a = read.get.head.asInstanceOf[Signal[String]]
+                    _   <- assertEventually(a.current.map(_ == "run 1"))
+                    ops <- rec.ops.map(_.drop(before))
+                yield (resolves.get - first, ops.collect { case a @ RecordingExchange.Op.Attr(_, "aria-label", _, _) => a })
+            }
+        yield assert(seen == (1, Chunk.empty), s"(resolves in the run, patches of the unchanged field): $seen")
+        end for
+    }
+
+    "in a kept instance a mount without a key is held by its place, and one in a region inside it is new with each run of that region" in {
+        val rec = new RecordingExchange
+        for
+            tick  <- Signal.initRef(0)
+            local <- Signal.initRef(0)
+            runs  <- AtomicRef.init(Map.empty[String, Int])
+            count = (name: String) => runs.getAndUpdate(m => m.updated(name, m.getOrElse(name, 0) + 1)).andThen(span(name))
+            host  = (n: Int) =>
+                UI.mountedWith(Labeled(s"run $n")) { live =>
+                    div(span(live(_.label)), UI.mounted(count("placed")), local.render(_ => UI.mounted(count("in-region"))))
+                }.keyed("host")
+            ui = div(tick.render(host))
+            counts <- painted(ui, rec) { (_, _) =>
+                for
+                    _      <- assertEventually(runs.get.map(_.size == 2))
+                    _      <- tick.set(1)
+                    _      <- assertEventually(tick.waiters.map(_ == 1))
+                    before <- runs.get.map(_.getOrElse("in-region", 0))
+                    _      <- local.set(1)
+                    _      <- assertEventually(runs.get.map(_.getOrElse("in-region", 0) > before))
+                    _      <- assertEventually(local.waiters.map(_ == 1))
+                    c      <- runs.get
+                yield (c.getOrElse("placed", 0), c.getOrElse("in-region", 0) > before)
+            }
+        yield assert(counts == (1, true), s"(placed runs, in-region ran again): $counts")
+        end for
+    }
+
     // ---- whileMounted on an element ----
 
     "an element's effect does not run in a static render" in {

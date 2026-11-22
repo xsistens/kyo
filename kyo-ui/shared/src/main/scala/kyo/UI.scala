@@ -111,6 +111,179 @@ object UI:
             Foreach[A, C](signal, Present(key), render, indexed = true)
     end extension
 
+    // ---- Props ----
+
+    /** A value a component reads that may change while it is shown: a constant, or a signal.
+      *
+      * A setter takes one, so a caller writes `.label("Save")` or `.label(name)` with no wrapper, and a default reads
+      * `label: Prop[String] = ""`. A component reads it where it is used, the way Solid reads a prop: a constant is a plain
+      * value and costs no subscription, a signal draws in one region of its own. The operations in [[Prop$ Prop]] keep that
+      * split, so code that reads a prop is written once for both cases:
+      *
+      * {{{
+      * Prop.render(busy)(on => if on then spinner else UI.empty)      // a region only where busy is a signal
+      * Prop.map(Prop.zip(disabled, busy))(_ || _)                     // a constant where both are
+      * }}}
+      *
+      * Drawing goes through `render`, never through `map` into a `Signal[UI]`: a region made by `render` compares the value it
+      * was drawn from, while two trees built from one value are never equal (each holds fresh handler closures). A two-way
+      * binding is a [[kyo.SignalRef]] in the prop, found again by its runtime class with `writable`.
+      *
+      * A text or element child takes a prop directly (`span(label)`), through the conversions on
+      * [[kyo.UI.Ast.HtmlChildVal]].
+      *
+      * The signal comes first in the union, and that order is load-bearing. When a parameter typed `Prop[A]` takes an argument, the
+      * compiler solves `A` against the union's branches in order and keeps the first unless a later one constrains less; `Signal` is
+      * invariant, so neither does. Written `A | Signal[A]`, a bare signal, or a union whose alias was lost (a pattern binder), would
+      * make `A` the signal or the whole union, and the function after it would receive that. Signal first, `A` is the element in
+      * every case. `PropTest` ("the element type comes from the argument") holds each case, since this rests on how the compiler
+      * breaks the tie rather than on the language spec.
+      */
+    type Prop[A] = Signal[A] | A
+
+    /** The operations of a [[Prop]], as functions over it, not extensions: a prop is any value as well, so an extension on it
+      * would apply to every value and hide the extensions a value already has (kyo's own `map` on `A < S` among them).
+      */
+    object Prop:
+
+        /** The prop as a signal: a signal as it is, a constant as a constant signal. For combining with other signals; a
+          * component that only reads the prop uses [[render]] or [[map]], which make no signal for a constant.
+          */
+        def signal[A](p: Prop[A])(using CanEqual[A, A], Frame): Signal[A] = p match
+            case s: Signal[?] => s.asInstanceOf[Signal[A]]
+            case a            => Signal.initConst(a.asInstanceOf[A])
+
+        /** Drawn from the prop: a constant draws once with no region, a signal in one region compared by its value. */
+        def render[A](p: Prop[A])(f: A => UI)(using Frame): UI = p match
+            case s: Signal[?] => UI.render(s.asInstanceOf[Signal[A]])(f) // by name: here `render` is this method
+            case a            => f(a.asInstanceOf[A])
+
+        /** The prop through `f`, for a value that is not drawn: a constant gives a constant, a signal a mapped signal. */
+        def map[A, B](p: Prop[A])(f: A => B)(using CanEqual[B, B], Frame): Prop[B] = p match
+            case s: Signal[?] => s.asInstanceOf[Signal[A]].map(f)
+            case a            => f(a.asInstanceOf[A])
+
+        /** The prop's value now, for a handler that reads it when its event comes: a constant as it is, with no signal made
+          * for it, a signal its current value.
+          */
+        def current[A](p: Prop[A])(using Frame): A < Sync = p match
+            case s: Signal[?] => s.asInstanceOf[Signal[A]].current
+            case a            => a.asInstanceOf[A]
+
+        /** Both props as one: two constants stay a constant, anything else is one combined signal, never one region inside
+          * another.
+          */
+        def zip[A, B](p: Prop[A], q: Prop[B])(using CanEqual[A, A], CanEqual[B, B], Frame): Prop[(A, B)] = (p, q) match
+            case (_: Signal[?], _) | (_, _: Signal[?]) => signal(p).combineLatest(signal(q))
+            case (a, b)                                => (a.asInstanceOf[A], b.asInstanceOf[B])
+
+        /** The ref a reader's change is written into, when the prop binds two way: a [[kyo.SignalRef]] by its runtime class.
+          * Any other signal, and a constant, binds one way. `ref.readOnly` is how a caller opts out.
+          */
+        def writable[A](p: Prop[A]): Maybe[SignalRef[A]] = p match
+            case r: SignalRef[?] => Present(r.asInstanceOf[SignalRef[A]])
+            case _               => Absent
+    end Prop
+
+    /** The props of one instance of a [[kyo.UI.mountedWith]] node, as its draw reads them. The draw runs once per instance, and
+      * each place in it reads the field it shows:
+      *
+      * {{{
+      * UI.mountedWith(props) { live =>
+      *     button(live(_.label)).onClick(live.call(_.onClick).flatMap(f => f()))
+      * }
+      * }}}
+      *
+      * Where the engine can hand the instance new props, a keyed node in a region that can run again, `runs` holds the props of
+      * the latest run there, and `apply` follows them: a field that is a constant on every run reads as a signal then, since the
+      * next run may bring another one. Anywhere else no run can follow the first, so `apply` gives the field as the node was
+      * called with it, and a constant stays a constant with no subscription. `call` reads a field when an event comes, so a
+      * callback is the latest run's either way and costs nothing until then.
+      */
+    final class Live[P] private[kyo] (first: P, runsRef: Maybe[SignalRef[kyo.internal.Owning.Run[P]]], owning: kyo.internal.Owning[P]):
+
+        /** Props with no ownable prop resolved: a node drawn in place, which a host binds itself. */
+        private[kyo] def this(first: P, runsRef: Maybe[SignalRef[kyo.internal.Owning.Run[P]]]) =
+            this(first, runsRef, kyo.internal.Owning.none[P])
+
+        // The props as the draw reads them where no run can follow the first: resolved once, here.
+        private val shown: P = if runsRef.isEmpty then owning.resolve(first) else first
+
+        // The latest run, where the engine can hand this instance new props: its props as given and as resolved.
+        private val runs: Maybe[Signal[kyo.internal.Owning.Run[P]]] = runsRef
+
+        /** Hands this instance the props of a new run: an ownable prop the run stops binding hands its value to the instance first,
+          * then the new props, resolved once here, are what every field follows. Equal props change nothing.
+          */
+        private[kyo] def offer(next: P)(using CanEqual[P, P], Frame): Unit < Sync =
+            runsRef match
+                case Present(ref) =>
+                    ref.get.map { run =>
+                        if run.props == next then Kyo.unit
+                        else owning.carry(run.props, next).andThen(ref.set(kyo.internal.Owning.Run(next, owning.resolve(next))))
+                    }
+                case Absent => Kyo.unit
+        end offer
+
+        /** The field `field` picks, following the latest run where one can follow, else as the node was called with it. A run that
+          * leaves the field as it was (the same constant, the same signal) changes nothing for it.
+          */
+        def apply[A](field: P => Prop[A])(using CanEqual[A, A], Frame): Prop[A] =
+            runs match
+                case Present(signal) =>
+                    // The field's own identity: a constant compares as its value, a signal as the instance it is.
+                    given CanEqual[Prop[A], Prop[A]] = CanEqual.derived
+                    signal.map(run => field(run.resolved)).switchMap(Prop.signal(_))
+                case Absent => field(shown)
+
+        /** An optional field as one prop of an option: `Absent` where the run sets none, the field's value where it does, so one
+          * read gives `Maybe[A]` (`props(_.label).read` for a `label: Maybe[Prop[String]]`), and a signal inside it is followed
+          * like a signal anywhere.
+          */
+        @targetName("applyMaybe")
+        def apply[A](field: P => Maybe[Prop[A]])(using CanEqual[A, A], Frame): Prop[Maybe[A]] =
+            def flat(m: Maybe[Prop[A]]): Prop[Maybe[A]] = m match
+                case Present(a) => Prop.map(a)(Present(_))
+                case _          => Absent
+            runs match
+                case Present(signal) =>
+                    // As in `apply`: a field the run leaves as it was changes nothing for it.
+                    given CanEqual[Maybe[Prop[A]], Maybe[Prop[A]]] = CanEqual.derived
+                    signal.map(run => field(run.resolved)).switchMap(m => Prop.signal(flat(m)))
+                case Absent => flat(field(shown))
+            end match
+        end apply
+
+        /** The field `field` picks, read now: from the latest run where one can follow, else as the node was called with it. */
+        def call[A](field: P => A)(using Frame): A < Sync =
+            runs match
+                case Present(signal) => signal.current.map(run => field(run.resolved))
+                case Absent          => field(shown)
+    end Live
+
+    /** A prop a component instance holds itself where the caller binds none: a checked state, a value, an open panel.
+      *
+      * A component declares one in its props with where its own value starts, and reads it like any other prop: the engine binds
+      * the instance's own ref wherever a run leaves it unbound, made once per instance, and a run that stops binding it hands the
+      * value it showed to that ref first, so the instance carries on from it. A caller's binding (a ref two way, a signal one way, a
+      * constant) is the prop wherever the caller gives one.
+      */
+    trait Ownable[A]:
+        /** What the caller bound, `Absent` where it bound nothing. */
+        def bound: Maybe[Prop[A]]
+
+        /** Where the instance's own value starts, `Absent` where the component keeps none of its own for this prop. */
+        def start: Maybe[A]
+
+        /** This prop bound as the caller says: a ref two way, any other signal one way, a constant. The engine binds the instance's
+          * own ref with it in place of nothing, as it hands the props to a draw.
+          */
+        def bind(v: Prop[A]): Ownable[A]
+
+        /** This prop with `f` hearing every change the reader makes, in place of whoever heard it before. `f` runs as given. */
+        def withHearer(f: A => Action): Ownable[A]
+    end Ownable
+
     // ---- Factory constructors ----
 
     /** The empty UI: an [[kyo.UI.Ast.Fragment]] with no children, rendering nothing. Useful as a neutral element or a conditional
@@ -377,7 +550,9 @@ object UI:
       * `draw` runs in the render pass, so what it returns is on the page from the first paint: a static rendering shows it, a live client
       * shows it with no placeholder in between, and it takes events from that paint on. There is nothing to wait for, so the node has no
       * `.placeholder`. A pass that shows the node again shows the same instance when it is [[kyo.UI.MountedOps.keyed]] or
-      * [[kyo.UI.MountedOps.keyedOnSite]]; a node without a key gets a fresh instance whenever its enclosing reactive region re-renders. A static rendering draws too, and keeps nothing.
+      * [[kyo.UI.MountedOps.keyedOnSite]]; a node without a key gets a fresh instance whenever its enclosing reactive region re-renders.
+      * In what a drawn component draws, with no region between, its place is its identity: it lives as long as that component's instance,
+      * however often a region around the component runs. A static rendering draws too, and keeps nothing.
       *
       * Inside `draw`, [[kyo.UI.id]] names an element so that the static rendering and the live one agree, and [[kyo.UI.whileMounted]] starts
       * what has to run on a live page: a feed, an observer, a timer.
@@ -388,13 +563,13 @@ object UI:
     def mounted(draw: UI < Sync)(using Frame): Drawn =
         Drawn(draw, key = Absent, errorRender = Absent)
 
-    /** [[mounted]] for a component whose configuration, `props`, can change while its instance lives. `draw` runs once per instance and gets
-      * the props as a signal: a keyed instance that a region running again keeps is handed the props of the latest run there, and what
-      * reads them follows, while what `draw` allocates (open state, a highlight, an id) is made once and stays. Without a key the instance is
-      * new with every run anyway, so this is for a node that is `.keyed` or `.keyedOnSite`, which is how a component keeps its state across its caller's
-      * re-renders. Props compare by `==`: equal props reach no one.
+    /** [[mounted]] for a component whose configuration, `props`, can change while its instance lives. `draw` runs once per instance and
+      * reads the props through a [[Live]]: a keyed instance that a region running again keeps is handed the props of the latest run there,
+      * and what reads them follows, while what `draw` allocates (open state, a highlight, an id) is made once and stays. An instance no run
+      * can reach again, one without a key or one in no region that runs again, reads its props as it was called with them, so a constant
+      * prop costs it no subscription. Props compare by `==`: equal props reach no one.
       */
-    def mountedWith[P](props: P)(draw: Signal[P] => UI < Sync)(using CanEqual[P, P], Frame): Drawn =
+    def mountedWith[P](props: P)(draw: Live[P] => UI < Sync)(using CanEqual[P, P], scala.deriving.Mirror.ProductOf[P], Frame): Drawn =
         Drawn(UI.empty, key = Absent, errorRender = Absent, props = Present(new kyo.internal.PropsDraw(props, draw)))
 
     /** Embeds a component that waits for its UI: loading data, a round trip, anything that suspends.
@@ -405,7 +580,8 @@ object UI:
       * error node) while the enclosing region stays alive.
       *
       * Identity decides when the effect runs again. A node without a key gets a fresh instance whenever its enclosing reactive region
-      * re-renders. A node with [[kyo.UI.MountedOps.keyed]] keeps its instance across re-renders of every region around it, as long as
+      * re-renders; in what a drawn component draws, with no region between, its place keeps it for as long as that component's instance
+      * lives. A node with [[kyo.UI.MountedOps.keyed]] keeps its instance across re-renders of every region around it, as long as
       * each re-render shows it from the same `.keyed` call with an equal key in the same list row; that identity shown twice at once is
       * reported as a duplicate. A node with [[kyo.UI.MountedOps.keyedOnSite]] keeps it as long as each re-render shows it from the same
       * site in the same list row, as the same call in that order where one site is called more than once in its region.
@@ -1558,6 +1734,27 @@ object UI:
             def children: Chunk[UI]
             private[kyo] def withAttrs(a: Attrs): Self
 
+            /** The element with `f` applied where `cond` holds, and as it is where not, so a setter that depends on a condition
+              * stays in the chain: `button.when(disabled)(_.disabled(true)).when(blurs)(_.onBlur(blur))`.
+              *
+              * Inside a `UI.reactive` block `f` is a lambda, so a `.read` in it is refused; read into a `val` first, or pass the
+              * prop to the setter, which takes it as a channel.
+              */
+            def when(cond: Boolean)(f: Self => Self): Self =
+                // Unsafe: every element is its own `Self` (each case class fixes `type Self` to itself).
+                val self = this.asInstanceOf[Self]
+                if cond then f(self) else self
+            end when
+
+            /** The element with `f` applied to the value where `v` holds one, and as it is where not, so an optional setting
+              * stays in the chain: `el.when(id)(_.id(_)).when(name)(_.aria("label", _))`.
+              */
+            def when[A](v: Maybe[A])(f: (Self, A) => Self): Self =
+                // Unsafe: every element is its own `Self` (each case class fixes `type Self` to itself).
+                val self = this.asInstanceOf[Self]
+                v.fold(self)(a => f(self, a))
+            end when
+
             /** Shared bodies of the declarative reactive-channel setters (aria/title/placeholder/href/src →
               * reactiveAttrs; disabled/readOnly/hidden → reactiveBoolAttrs; cssClass → reactiveClasses).
               * `inline` so each compiles to the bare `withAttrs(attrs.copy(...))`, adding no dispatch of its own.
@@ -1621,12 +1818,14 @@ object UI:
                     whileMountedKey = Present(key),
                     whileMountedSite = summon[UI.MountSite]
                 ))
-            def hidden(v: Boolean): Self = withAttrs(attrs.copy(hidden = Present(v)))
 
-            /** Reactive `hidden`: toggles the attribute IN PLACE on emission, so showing and hiding keeps the
-              * subtree (its focus, caret, scroll position and running transitions) instead of repainting it.
+            /** `hidden`, constant or reactive through one setter: a `Boolean` sets it statically, a `Signal[Boolean]` toggles the
+              * attribute IN PLACE on emission, so showing and hiding keeps the subtree (its focus, caret, scroll position and running
+              * transitions) instead of repainting it. One setter, so a read in a `UI.reactive` block passed here is a channel.
               */
-            def hidden(v: Signal[Boolean]): Self = withReactiveBoolAttr("hidden", v)
+            def hidden(v: Boolean | Signal[Boolean]): Self = v match
+                case s: Signal[Boolean] @unchecked => withReactiveBoolAttr("hidden", s)
+                case b: Boolean                    => withAttrs(attrs.copy(hidden = Present(b)))
 
             // Visual
             def style(v: Style): Self               = withAttrs(attrs.copy(uiStyle = attrs.uiStyle ++ v))
@@ -1650,31 +1849,65 @@ object UI:
               * says the style is inline declarations, which is what a measured size or offset is; pseudo-state rules in
               * its values are not applied (bind them with `style(Signal)`, or statically). A property this channel sets
               * belongs to it: the static `style` of the same property is overridden while the channel holds it, and gone
-              * once the channel drops it.
+              * once the channel drops it. A constant has nothing to follow: it is written as `style(v)` writes it, with no
+              * channel, so a caller whose style may be either form hands it over in one call.
               */
-            def inlineStyle(v: Signal[Style]): Self = withReactiveStyle(v)
+            def inlineStyle(v: Prop[Style]): Self = v match
+                case s: Signal[Style] @unchecked => withReactiveStyle(s)
+                case c: Style                    => style(c)
 
             // ARIA attributes
-            /** Sets a single `aria-*` attribute (the `name` is the suffix after `aria-`). */
-            def aria(name: String, value: String): Self =
-                withAttrs(attrs.copy(ariaAttrs = attrs.ariaAttrs.updated(name, value)))
+            /** Sets a single `aria-*` attribute (the `name` is the suffix after `aria-`), constant or reactive through one setter: a
+              * `String` is a plain attribute, a `Signal[String]` patches `aria-$name` IN PLACE on emission, with no re-render (for a
+              * locale-driven accessible name or a state that must change without re-mounting). One setter, so a read in a
+              * `UI.reactive` block passed here is a channel and not a read of the block.
+              */
+            def aria(name: String, v: Prop[String]): Self = v match
+                case s: Signal[String] @unchecked => withReactiveAttr(s"aria-$name", s)
+                case t: String                    => withAttrs(attrs.copy(ariaAttrs = attrs.ariaAttrs.updated(name, t)))
+
+            /** `aria-*` from an optional prop: `Present` sets it as [[aria]] does, constant or reactive, and `Absent` sets nothing, so
+              * an optional accessible name stays in the chain: `el.aria("label", access.name)`.
+              */
+            @targetName("ariaMaybe")
+            def aria(name: String, v: Maybe[Prop[String]]): Self =
+                // Unsafe: every element is its own `Self` (each case class fixes `type Self` to itself).
+                v.fold(this.asInstanceOf[Self])(aria(name, _))
+
+            /** An `aria-*` state that is said only while it holds: `aria-$name="true"` while `on`, and no attribute while not, where
+              * the absent attribute and `"false"` mean the same (`aria-disabled`, `aria-busy`, `aria-invalid`). A `Boolean` writes it
+              * or leaves it out; a `Signal[Boolean]` sets and removes it in place on emission, with no re-render. Where `"false"`
+              * says something of its own (`aria-pressed`, `aria-expanded`), use [[aria]] with the value.
+              */
+            def ariaFlag(name: String, on: Boolean | Signal[Boolean]): Self = on match
+                case b: Boolean =>
+                    if b then aria(name, "true") else withAttrs(attrs.copy(ariaAttrs = attrs.ariaAttrs - name))
+                case s: Signal[Boolean] @unchecked =>
+                    given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
+                    val said: Signal[Maybe[String]]              = s.map(b => if b then Present("true") else Absent)(using summon, frame)
+                    withAttrs(attrs.copy(
+                        ariaAttrs = attrs.ariaAttrs - name,
+                        reactiveMaybeAttrs = attrs.reactiveMaybeAttrs.updated(s"aria-$name", said)
+                    ))
 
             /** Sets several `aria-*` attributes at once from name/value pairs. */
             def aria(pairs: (String, String)*): Self =
                 withAttrs(attrs.copy(ariaAttrs = attrs.ariaAttrs ++ pairs))
 
-            /** REACTIVE `aria-*`: the `aria-$name` attribute tracks `sig`, patched IN PLACE on emission, NOT a
-              * re-render (unlike the `Reactive[Self]`-returning value overloads like `disabled(Signal[Boolean])`).
-              * For a locale-driven accessible name/description that must re-translate without re-mounting.
+            /** The native `title` (tooltip), constant or reactive through one setter: a constant is the element's `title`, and a
+              * signal is the `title` attribute's channel, patched in place on emission with no re-render.
               */
-            def aria(name: String, sig: Signal[String]): Self =
-                withReactiveAttr(s"aria-$name", sig)
+            def title(v: Prop[String]): Self = v match
+                case s: Signal[String] @unchecked => withReactiveAttr("title", s)
+                case t: String                    => jsProp("title", t)
 
-            /** REACTIVE native `title` (tooltip): the `title` attribute tracks `sig`, patched in place on
-              * emission, with no re-render.
+            /** `title` from an optional prop: `Present` sets it as [[title]] does, constant or reactive, and `Absent` sets nothing,
+              * so an optional tooltip stays in the chain: `el.title(tooltip)`.
               */
-            def title(sig: Signal[String]): Self =
-                withReactiveAttr("title", sig)
+            @targetName("titleMaybe")
+            def title(v: Maybe[Prop[String]]): Self =
+                // Unsafe: every element is its own `Self` (each case class fixes `type Self` to itself).
+                v.fold(this.asInstanceOf[Self])(title(_))
 
             /** Sets the WAI-ARIA `role` attribute (emitted as the bare `role="..."` HTML attribute).
               *
@@ -2148,6 +2381,20 @@ object UI:
               */
             implicit def liftSignalString(sig: Signal[String])(using Frame): HtmlChildVal =
                 new HtmlChildVal(Reactive[Text](sig.map(s => Text(s)), Present(Reactive.Source.Lifted(sig))))
+
+            /** A text [[kyo.UI.Prop]] as a child: a constant is a text node, a signal a reactive one, as `liftString` and
+              * `liftSignalString` make them. A plain `String` or `Signal[String]` still takes those, which are more specific.
+              */
+            implicit def liftPropString(p: Prop[String])(using Frame): HtmlChildVal = p match
+                case s: Signal[?] => liftSignalString(s.asInstanceOf[Signal[String]])
+                case s            => liftString(s.asInstanceOf[String])
+
+            /** A [[kyo.UI.Prop]] of an element type as a child: a constant is the element, a signal a reactive node, as `lift` and
+              * `liftSignal` make them.
+              */
+            implicit def liftPropUI[A <: UI](p: Prop[A])(using Frame, AsHtmlChild[A]): HtmlChildVal = p match
+                case s: Signal[?] => liftSignal(s.asInstanceOf[Signal[A]])
+                case a            => new HtmlChildVal(a.asInstanceOf[A])
         end HtmlChildVal
 
         /** Layout marker for block-flow elements (`div`, `p`, headings, ...). */
@@ -2193,17 +2440,17 @@ object UI:
         /** Capability marker for elements that can receive keyboard focus. */
         sealed trait Focusable extends Element
 
-        /** Capability trait for elements exposing a `disabled` setter (plain `Boolean` and reactive `Signal[Boolean]` overloads). */
+        /** Capability trait for elements exposing a `disabled` setter: one setter over `Boolean | Signal[Boolean]`, so a read in a `UI.reactive` block passed to it is a channel. */
         sealed trait HasDisabled extends Element:
             def disabled: Maybe[Boolean]
-            def disabled(v: Boolean): Self
+            private[kyo] def withDisabled(v: Boolean): Self
 
             /** Constant OR reactive disabled through one union setter. A `Boolean` sets it statically; a
               * `Signal[Boolean]` toggles `disabled` IN PLACE on emission (setAttribute("")/removeAttribute)
               * via the boolean-attribute channel with no re-render, still chainable.
               */
             def disabled(v: Boolean | Signal[Boolean]): Self = v match
-                case b: Boolean                    => disabled(b)
+                case b: Boolean                    => withDisabled(b)
                 case s: Signal[Boolean] @unchecked => withReactiveBoolAttr("disabled", s)
         end HasDisabled
 
@@ -2212,7 +2459,7 @@ object UI:
             def value: Maybe[Bound[String]]
             def placeholder: Maybe[String]
             def readOnly: Maybe[Boolean]
-            def readOnly(v: Boolean): Self
+            private[kyo] def withReadOnly(v: Boolean): Self
             def onInput: Maybe[String => Action]
             def onChange: Maybe[String => Action]
 
@@ -2272,7 +2519,7 @@ object UI:
               * channel: no re-render, so caret/focus survive.
               */
             def readOnly(v: Boolean | Signal[Boolean]): Self = v match
-                case b: Boolean                    => readOnly(b)
+                case b: Boolean                    => withReadOnly(b)
                 case s: Signal[Boolean] @unchecked => withReactiveBoolAttr("readonly", s)
         end TextInput
 
@@ -2420,6 +2667,8 @@ object UI:
             // present while true (disabled/readOnly(sig)); reactiveClasses: classList.toggle (cssClass(name, sig)).
             reactiveAttrs: Map[String, Signal[String]] = Map.empty,
             reactiveBoolAttrs: Map[String, Signal[Boolean]] = Map.empty,
+            // Attributes a signal may leave out (ariaFlag(sig)): the value while Present, no attribute while Absent.
+            reactiveMaybeAttrs: Map[String, Signal[Maybe[String]]] = Map.empty,
             reactiveClasses: Map[String, Signal[Boolean]] = Map.empty,
             // The inline-style channel (inlineStyle(sig)): its declarations are written inline at render and patched with
             // HtmlOp.SetStyleByPath on emission.
@@ -2427,7 +2676,8 @@ object UI:
         ):
             /** Whether any reactive channel is bound here. Every element of a render asks, so it allocates nothing; [[kyo.internal.Channels.of]] is the channels themselves. */
             def hasChannels: Boolean =
-                reactiveAttrs.nonEmpty || reactiveBoolAttrs.nonEmpty || reactiveClasses.nonEmpty || reactiveStyle.nonEmpty
+                reactiveAttrs.nonEmpty || reactiveMaybeAttrs.nonEmpty || reactiveBoolAttrs.nonEmpty || reactiveClasses.nonEmpty ||
+                    reactiveStyle.nonEmpty
         end Attrs
 
         // ---- Non-element AST cases ----
@@ -2847,7 +3097,7 @@ object UI:
             def apply(cs: HtmlChildVal*): Fieldset = copy(children = children ++ Chunk.from(cs.map(_.value)))
 
             /** Disables every control inside the group, however deeply nested, without the controls declaring anything themselves. */
-            def disabled(v: Boolean): Fieldset = copy(disabled = Present(v))
+            private[kyo] def withDisabled(v: Boolean): Fieldset = copy(disabled = Present(v))
         end Fieldset
 
         /** `<legend>`: the caption of the [[Fieldset]] it is the first child of. An ordinary block element whose meaning comes from that
@@ -2879,8 +3129,8 @@ object UI:
 
             def value(v: String | Signal[String]): Textarea         = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
             def placeholder(v: String): Textarea                    = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
-            def readOnly(v: Boolean): Textarea                      = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
-            def disabled(v: Boolean): Textarea                      = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
+            private[kyo] def withReadOnly(v: Boolean): Textarea     = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            private[kyo] def withDisabled(v: Boolean): Textarea     = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
             def onInput(f: String => Action): Textarea              = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
             def onChange(f: String => Action): Textarea             = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def onBlur(f: (MouseEvent, String) => Action): Textarea = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
@@ -2898,10 +3148,10 @@ object UI:
             type Self = Select
             def withAttrs(a: Attrs): Select = copy(attrs = a)
 
-            def apply(cs: HtmlChildVal*): Select          = copy(children = children ++ Chunk.from(cs.map(_.value)))
-            def value(v: String | Signal[String]): Select = copy(value = Present(Bound(v)))
-            def disabled(v: Boolean): Select              = copy(disabled = Present(v))
-            def onChange(f: String => Action): Select     = copy(onChange = Present(f))
+            def apply(cs: HtmlChildVal*): Select              = copy(children = children ++ Chunk.from(cs.map(_.value)))
+            def value(v: String | Signal[String]): Select     = copy(value = Present(Bound(v)))
+            private[kyo] def withDisabled(v: Boolean): Select = copy(disabled = Present(v))
+            def onChange(f: String => Action): Select         = copy(onChange = Present(f))
         end Select
 
         final case class Hr(attrs: Attrs = Attrs())(using val frame: Frame) extends Block with Void:
@@ -2976,8 +3226,8 @@ object UI:
             type Self = Button
             def withAttrs(a: Attrs): Button = copy(attrs = a)
 
-            def apply(cs: HtmlChildVal*): Button = copy(children = children ++ Chunk.from(cs.map(_.value)))
-            def disabled(v: Boolean): Button     = copy(disabled = Present(v))
+            def apply(cs: HtmlChildVal*): Button              = copy(children = children ++ Chunk.from(cs.map(_.value)))
+            private[kyo] def withDisabled(v: Boolean): Button = copy(disabled = Present(v))
         end Button
 
         // ---- Boolean inputs (checked + onChange: Boolean) ----
@@ -2992,7 +3242,7 @@ object UI:
             def withAttrs(a: Attrs): Checkbox = copy(attrs = a)
 
             def checked(v: Boolean | Signal[Boolean]): Checkbox = copy(checked = Present(Bound(v)))
-            def disabled(v: Boolean): Checkbox                  = copy(disabled = Present(v))
+            private[kyo] def withDisabled(v: Boolean): Checkbox = copy(disabled = Present(v))
             def onChange(f: Boolean => Action): Checkbox        = copy(onChange = Present(f))
 
             /** Sets the DOM `indeterminate` property, a visual tri-state distinct from `checked` (the checkbox shows a dash, not a tick). */
@@ -3017,7 +3267,7 @@ object UI:
             def withAttrs(a: Attrs): Radio = copy(attrs = a)
 
             def checked(v: Boolean | Signal[Boolean]): Radio = copy(checked = Present(Bound(v)))
-            def disabled(v: Boolean): Radio                  = copy(disabled = Present(v))
+            private[kyo] def withDisabled(v: Boolean): Radio = copy(disabled = Present(v))
             def onChange(f: Boolean => Action): Radio        = copy(onChange = Present(f))
             def name(v: String): Radio                       = copy(name = Present(v))
         end Radio
@@ -3055,8 +3305,8 @@ object UI:
 
             def value(v: String | Signal[String]): Input         = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
             def placeholder(v: String): Input                    = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
-            def readOnly(v: Boolean): Input                      = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
-            def disabled(v: Boolean): Input                      = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
+            private[kyo] def withReadOnly(v: Boolean): Input     = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            private[kyo] def withDisabled(v: Boolean): Input     = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
             def onInput(f: String => Action): Input              = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
             def onChange(f: String => Action): Input             = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def onBlur(f: (MouseEvent, String) => Action): Input = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
@@ -3081,12 +3331,12 @@ object UI:
             def inputFilter: Maybe[InputFilter]                   = textInputAttrs.inputFilter
             def inputMask: Maybe[String]                          = textInputAttrs.inputMask
 
-            def value(v: String | Signal[String]): PasswordInput = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
-            def placeholder(v: String): PasswordInput            = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
-            def readOnly(v: Boolean): PasswordInput              = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
-            def disabled(v: Boolean): PasswordInput              = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Action): PasswordInput      = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Action): PasswordInput     = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def value(v: String | Signal[String]): PasswordInput     = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
+            def placeholder(v: String): PasswordInput                = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
+            private[kyo] def withReadOnly(v: Boolean): PasswordInput = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            private[kyo] def withDisabled(v: Boolean): PasswordInput = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
+            def onInput(f: String => Action): PasswordInput          = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): PasswordInput         = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def onBlur(f: (MouseEvent, String) => Action): PasswordInput =
                 copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
             def inputFilter(v: InputFilter): PasswordInput = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
@@ -3110,12 +3360,12 @@ object UI:
             def inputFilter: Maybe[InputFilter]                   = textInputAttrs.inputFilter
             def inputMask: Maybe[String]                          = textInputAttrs.inputMask
 
-            def value(v: String | Signal[String]): EmailInput = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
-            def placeholder(v: String): EmailInput            = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
-            def readOnly(v: Boolean): EmailInput              = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
-            def disabled(v: Boolean): EmailInput              = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Action): EmailInput      = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Action): EmailInput     = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def value(v: String | Signal[String]): EmailInput     = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
+            def placeholder(v: String): EmailInput                = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
+            private[kyo] def withReadOnly(v: Boolean): EmailInput = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            private[kyo] def withDisabled(v: Boolean): EmailInput = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
+            def onInput(f: String => Action): EmailInput          = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): EmailInput         = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def onBlur(f: (MouseEvent, String) => Action): EmailInput = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
             def inputFilter(v: InputFilter): EmailInput               = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): EmailInput                      = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
@@ -3140,8 +3390,8 @@ object UI:
 
             def value(v: String | Signal[String]): TelInput         = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
             def placeholder(v: String): TelInput                    = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
-            def readOnly(v: Boolean): TelInput                      = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
-            def disabled(v: Boolean): TelInput                      = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
+            private[kyo] def withReadOnly(v: Boolean): TelInput     = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            private[kyo] def withDisabled(v: Boolean): TelInput     = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
             def onInput(f: String => Action): TelInput              = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
             def onChange(f: String => Action): TelInput             = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def onBlur(f: (MouseEvent, String) => Action): TelInput = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
@@ -3168,8 +3418,8 @@ object UI:
 
             def value(v: String | Signal[String]): UrlInput         = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
             def placeholder(v: String): UrlInput                    = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
-            def readOnly(v: Boolean): UrlInput                      = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
-            def disabled(v: Boolean): UrlInput                      = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
+            private[kyo] def withReadOnly(v: Boolean): UrlInput     = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            private[kyo] def withDisabled(v: Boolean): UrlInput     = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
             def onInput(f: String => Action): UrlInput              = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
             def onChange(f: String => Action): UrlInput             = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def onBlur(f: (MouseEvent, String) => Action): UrlInput = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
@@ -3194,12 +3444,12 @@ object UI:
             def inputFilter: Maybe[InputFilter]                   = textInputAttrs.inputFilter
             def inputMask: Maybe[String]                          = textInputAttrs.inputMask
 
-            def value(v: String | Signal[String]): SearchInput = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
-            def placeholder(v: String): SearchInput            = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
-            def readOnly(v: Boolean): SearchInput              = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
-            def disabled(v: Boolean): SearchInput              = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Action): SearchInput      = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Action): SearchInput     = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def value(v: String | Signal[String]): SearchInput     = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
+            def placeholder(v: String): SearchInput                = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
+            private[kyo] def withReadOnly(v: Boolean): SearchInput = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            private[kyo] def withDisabled(v: Boolean): SearchInput = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
+            def onInput(f: String => Action): SearchInput          = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): SearchInput         = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def onBlur(f: (MouseEvent, String) => Action): SearchInput = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
             def inputFilter(v: InputFilter): SearchInput = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): SearchInput        = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
@@ -3224,12 +3474,12 @@ object UI:
             def onChange: Maybe[String => Action]                 = textInputAttrs.onChange
             def onBlurText: Maybe[(MouseEvent, String) => Action] = textInputAttrs.onBlurText
 
-            def value(v: String | Signal[String]): NumberInput = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
-            def placeholder(v: String): NumberInput            = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
-            def readOnly(v: Boolean): NumberInput              = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
-            def disabled(v: Boolean): NumberInput              = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Action): NumberInput      = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Action): NumberInput     = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def value(v: String | Signal[String]): NumberInput     = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
+            def placeholder(v: String): NumberInput                = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
+            private[kyo] def withReadOnly(v: Boolean): NumberInput = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            private[kyo] def withDisabled(v: Boolean): NumberInput = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
+            def onInput(f: String => Action): NumberInput          = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): NumberInput         = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def onBlur(f: (MouseEvent, String) => Action): NumberInput = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
             def min(v: Double): NumberInput                            = copy(min = Present(v))
             def max(v: Double): NumberInput                            = copy(max = Present(v))
@@ -3246,10 +3496,10 @@ object UI:
             onChange: Maybe[String => Action] = Absent
         )(using val frame: Frame) extends Inline with Interactive with PickerInput with Void:
             type Self = DateInput
-            def withAttrs(a: Attrs): DateInput               = copy(attrs = a)
-            def value(v: String | Signal[String]): DateInput = copy(value = Present(Bound(v)))
-            def disabled(v: Boolean): DateInput              = copy(disabled = Present(v))
-            def onChange(f: String => Action): DateInput     = copy(onChange = Present(f))
+            def withAttrs(a: Attrs): DateInput                   = copy(attrs = a)
+            def value(v: String | Signal[String]): DateInput     = copy(value = Present(Bound(v)))
+            private[kyo] def withDisabled(v: Boolean): DateInput = copy(disabled = Present(v))
+            def onChange(f: String => Action): DateInput         = copy(onChange = Present(f))
         end DateInput
 
         final case class TimeInput(
@@ -3259,10 +3509,10 @@ object UI:
             onChange: Maybe[String => Action] = Absent
         )(using val frame: Frame) extends Inline with Interactive with PickerInput with Void:
             type Self = TimeInput
-            def withAttrs(a: Attrs): TimeInput               = copy(attrs = a)
-            def value(v: String | Signal[String]): TimeInput = copy(value = Present(Bound(v)))
-            def disabled(v: Boolean): TimeInput              = copy(disabled = Present(v))
-            def onChange(f: String => Action): TimeInput     = copy(onChange = Present(f))
+            def withAttrs(a: Attrs): TimeInput                   = copy(attrs = a)
+            def value(v: String | Signal[String]): TimeInput     = copy(value = Present(Bound(v)))
+            private[kyo] def withDisabled(v: Boolean): TimeInput = copy(disabled = Present(v))
+            def onChange(f: String => Action): TimeInput         = copy(onChange = Present(f))
         end TimeInput
 
         final case class ColorInput(
@@ -3272,10 +3522,10 @@ object UI:
             onChange: Maybe[String => Action] = Absent
         )(using val frame: Frame) extends Inline with Interactive with PickerInput with Void:
             type Self = ColorInput
-            def withAttrs(a: Attrs): ColorInput               = copy(attrs = a)
-            def value(v: String | Signal[String]): ColorInput = copy(value = Present(Bound(v)))
-            def disabled(v: Boolean): ColorInput              = copy(disabled = Present(v))
-            def onChange(f: String => Action): ColorInput     = copy(onChange = Present(f))
+            def withAttrs(a: Attrs): ColorInput                   = copy(attrs = a)
+            def value(v: String | Signal[String]): ColorInput     = copy(value = Present(Bound(v)))
+            private[kyo] def withDisabled(v: Boolean): ColorInput = copy(disabled = Present(v))
+            def onChange(f: String => Action): ColorInput         = copy(onChange = Present(f))
         end ColorInput
 
         // ---- Special inputs ----
@@ -3290,13 +3540,13 @@ object UI:
             onChange: Maybe[Double => Action] = Absent
         )(using val frame: Frame) extends Inline with Interactive with Focusable with HasDisabled with Void:
             type Self = RangeInput
-            def withAttrs(a: Attrs): RangeInput               = copy(attrs = a)
-            def value(v: Double | Signal[Double]): RangeInput = copy(value = Present(Bound(v)))
-            def min(v: Double): RangeInput                    = copy(min = Present(v))
-            def max(v: Double): RangeInput                    = copy(max = Present(v))
-            def step(v: Double): RangeInput                   = copy(step = Present(if v <= 0 then 1.0 else v))
-            def disabled(v: Boolean): RangeInput              = copy(disabled = Present(v))
-            def onChange(f: Double => Action): RangeInput     = copy(onChange = Present(f))
+            def withAttrs(a: Attrs): RangeInput                   = copy(attrs = a)
+            def value(v: Double | Signal[Double]): RangeInput     = copy(value = Present(Bound(v)))
+            def min(v: Double): RangeInput                        = copy(min = Present(v))
+            def max(v: Double): RangeInput                        = copy(max = Present(v))
+            def step(v: Double): RangeInput                       = copy(step = Present(if v <= 0 then 1.0 else v))
+            private[kyo] def withDisabled(v: Boolean): RangeInput = copy(disabled = Present(v))
+            def onChange(f: Double => Action): RangeInput         = copy(onChange = Present(f))
         end RangeInput
 
         final case class FileInput(
@@ -3307,9 +3557,9 @@ object UI:
             onChange: Maybe[String => Action] = Absent
         )(using val frame: Frame) extends Inline with Interactive with Focusable with HasDisabled with Void:
             type Self = FileInput
-            def withAttrs(a: Attrs): FileInput     = copy(attrs = a)
-            def accept(vs: FileAccept*): FileInput = copy(accept = Present(Chunk.from(vs)))
-            def disabled(v: Boolean): FileInput    = copy(disabled = Present(v))
+            def withAttrs(a: Attrs): FileInput                   = copy(attrs = a)
+            def accept(vs: FileAccept*): FileInput               = copy(accept = Present(Chunk.from(vs)))
+            private[kyo] def withDisabled(v: Boolean): FileInput = copy(disabled = Present(v))
 
             /** Allow selecting more than one file (renders the HTML `multiple` attribute). */
             def multiple(v: Boolean): FileInput          = copy(multiple = Present(v))
@@ -3335,7 +3585,15 @@ object UI:
             type Self = Anchor
             def withAttrs(a: Attrs): Anchor      = copy(attrs = a)
             def apply(cs: HtmlChildVal*): Anchor = copy(children = children ++ Chunk.from(cs.map(_.value)))
-            def href(v: Href): Anchor            = copy(href = Present(v))
+
+            /** Where the link points, constant or reactive through one setter: a `Signal[Href]` is patched in place, so the link
+              * keeps its node (and any focus on it).
+              */
+            def href(v: Href | Signal[Href]): Anchor = v match
+                case s: Signal[Href] @unchecked =>
+                    given Frame = frame
+                    withReactiveAttr("href", s.map(Href.attrValue))
+                case h: Href => copy(href = Present(h))
 
             /** Saves what `href` points at under `filename` instead of navigating to it (the HTML `download` attribute). Browsers
               * honor it for same-origin, `data:` and `blob:` URLs; a cross-origin href navigates instead. An empty `filename` leaves the
@@ -3344,12 +3602,7 @@ object UI:
               * A clicked download anchor keeps the browser's default: neither a kyo click handler nor client-side routing turns it
               * into an in-page action.
               */
-            def download(filename: String): Anchor = copy(download = Present(filename))
-
-            /** Reactive `href`: patched in place, so the link keeps its node (and any focus on it). */
-            def href(v: Signal[Href]): Self =
-                given Frame = frame
-                withReactiveAttr("href", v.map(Href.attrValue))
+            def download(filename: String): Anchor    = copy(download = Present(filename))
             def href(v: Href, target: Target): Anchor = copy(href = Present(v), target = Present(target))
             def target(v: Target): Anchor             = copy(target = Present(v))
         end Anchor
@@ -3389,11 +3642,14 @@ object UI:
         )(using val frame: Frame) extends Block with Void:
             type Self = Iframe
             def withAttrs(a: Attrs): Iframe = copy(attrs = a)
-            def src(v: String): Iframe      = copy(src = Present(v))
 
-            /** Reactive `src`: patched in place, since re-rendering an iframe would reload the framed document. */
-            def src(v: Signal[String]): Self = withReactiveAttr("src", v)
-            def title(v: String): Iframe     = copy(frameTitle = Present(v))
+            /** The framed document, constant or reactive through one setter: a `Signal[String]` is patched in place, since
+              * re-rendering an iframe would reload the framed document.
+              */
+            def src(v: String | Signal[String]): Iframe = v match
+                case s: Signal[String] @unchecked => withReactiveAttr("src", s)
+                case t: String                    => copy(src = Present(t))
+            def title(v: String): Iframe = copy(frameTitle = Present(v))
         end Iframe
 
         // ---- Custom dropdown (div-based overlay, NOT native <select>) ----
@@ -3406,12 +3662,12 @@ object UI:
             onChange: Maybe[String => Action] = Absent
         )(using val frame: Frame) extends Block with Interactive with PickerInput:
             type Self = Dropdown
-            def children: Chunk[UI]                     = Chunk.empty
-            def withAttrs(a: Attrs): Dropdown           = copy(attrs = a)
-            def value(v: String): Dropdown              = copy(value = Present(Bound.Const(v)))
-            def value(v: SignalRef[String]): Dropdown   = copy(value = Present(Bound.Ref(v)))
-            def disabled(v: Boolean): Dropdown          = copy(disabled = Present(v))
-            def onChange(f: String => Action): Dropdown = copy(onChange = Present(f))
+            def children: Chunk[UI]                             = Chunk.empty
+            def withAttrs(a: Attrs): Dropdown                   = copy(attrs = a)
+            def value(v: String): Dropdown                      = copy(value = Present(Bound.Const(v)))
+            def value(v: SignalRef[String]): Dropdown           = copy(value = Present(Bound.Ref(v)))
+            private[kyo] def withDisabled(v: Boolean): Dropdown = copy(disabled = Present(v))
+            def onChange(f: String => Action): Dropdown         = copy(onChange = Present(f))
         end Dropdown
 
     end Ast

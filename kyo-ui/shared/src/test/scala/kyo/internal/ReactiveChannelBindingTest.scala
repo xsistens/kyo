@@ -62,8 +62,36 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
             Channel("class", UI.div(UI.span("x").cssClass("hot", ref: Signal[Boolean])), ref.set(true).unit, ref.waiters)
         )
 
+    /** An aria flag: off is no attribute, so moving it on is one attribute patch, as for the others. */
+    private def ariaFlagChannel(using Frame): Channel < Sync =
+        Signal.initRef(false).map(ref =>
+            Channel("aria-flag", UI.div(UI.span("x").ariaFlag("disabled", ref: Signal[Boolean])), ref.set(true).unit, ref.waiters)
+        )
+
     private def channels(using Frame): Seq[Channel] < Sync =
-        Kyo.foreach(Chunk(attrChannel, boolChannel, classChannel))(identity).map(_.toSeq)
+        Kyo.foreach(Chunk(attrChannel, boolChannel, classChannel, ariaFlagChannel))(identity).map(_.toSeq)
+
+    "an aria flag writes \"true\" while on and takes the attribute away while off, in place" in {
+        Scope.run {
+            Kyo.foreachDiscard(Chunk(true, false)) { fast =>
+                val exchange = new RecordingExchange(synchronous = fast)
+                def ops      = exchange.recorded.collect {
+                    case op: Op.Attr     => s"set ${op.name}=${op.value}"
+                    case op: Op.BoolAttr => s"${if op.value then "on" else "off"} ${op.name}"
+                }
+                for
+                    on   <- Signal.initRef(true)
+                    root <- ReactiveUI.normalize(UI.div(UI.span("x").ariaFlag("disabled", on: Signal[Boolean])), Seq.empty)
+                    _    <- ReactiveUI.subscribe(root, exchange)
+                    _    <- on.set(false)
+                    _    <- assertEventually(Sync.defer(ops.size == 1))
+                    _    <- on.set(true)
+                    _    <- assertEventually(Sync.defer(ops.size == 2))
+                yield assert(ops == Seq("off aria-disabled", "set aria-disabled=true"), s"fast=$fast: $ops")
+                end for
+            }
+        }
+    }
 
     "every channel patches inside the writer's set, with no scheduler hop" in {
         Scope.run {

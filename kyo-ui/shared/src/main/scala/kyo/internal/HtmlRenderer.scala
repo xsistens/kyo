@@ -168,7 +168,7 @@ private[kyo] object HtmlRenderer:
                 (ReactiveRegion.Namespace.Html, ReactiveRegion.ParentContext.Other)
             case other => (ReactiveRegion.namespace(other), ReactiveRegion.contentParent(other))
         // A row is a range of its own, as the session walks a rebuilt row; its key tells its calls apart from the other rows' anyway.
-        DrawContext.inRange(renderTo(
+        DrawContext.inRegion(renderTo(
             sb,
             ui,
             path.toVector,
@@ -551,7 +551,7 @@ private[kyo] object HtmlRenderer:
                 val current = SignalNow(r.signal)(using r.frame, summon[SignalNow.Locals], summon[AllowUnsafe])
                 val host    = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(current))
                 openInitialHost(sb, host)
-                DrawContext.inRange(renderTo(
+                DrawContext.inRegion(renderTo(
                     sb,
                     current,
                     path,
@@ -578,7 +578,7 @@ private[kyo] object HtmlRenderer:
                         val host    = ReactiveRegion.renderHost(region, parentContext, content)
                         openInitialHost(sb, host)
                         val keyed = keyFn.nonEmpty
-                        DrawContext.inRange(rendered.foreach { (key, child) =>
+                        DrawContext.inRegion(rendered.foreach { (key, child) =>
                             DrawContext.inRow(key)(renderTo(
                                 sb,
                                 child,
@@ -638,7 +638,7 @@ private[kyo] object HtmlRenderer:
                 val placeholder = m.placeholderUI.getOrElse(UI.empty(using m.frame))
                 val host        = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(placeholder))
                 openInitialHost(sb, host, ReactiveRegion.mountSlotFlags(m.key, m.frame))
-                DrawContext.inRange(renderTo(
+                DrawContext.inRegion(renderTo(
                     sb,
                     placeholder,
                     path,
@@ -690,10 +690,10 @@ private[kyo] object HtmlRenderer:
             case Absent         =>
                 MountDispatch.drawingNow.drawnNow(inner, d, occurrence) match
                     case DrawSlot.Live(instance, _) =>
-                        DrawContext.inContent(instance.children.idBase)(
+                        DrawContext.inContent(instance.children.idBase, d, inner)(
                             inRange(instance.shownNow(d), ReactiveRegion.mountSlotFlags(d.key, d.frame), Absent)
                         )
-                    case DrawSlot.Fresh(draw, _) => DrawContext.inContent(draw.base) {
+                    case DrawSlot.Fresh(draw, _) => DrawContext.inContent(draw.base, d, inner) {
                             // A failed draw shows the node's own error view here; the instance reports it with the boundaries around it.
                             val content = draw.content(MountedSpec(d, path, Nil))
                             // A walk of its own over the same content, so it counts from the start as the render does.
@@ -1013,7 +1013,7 @@ private[kyo] object HtmlRenderer:
 
     /** Whether an attribute channel writes `name`, so that the static value of that name is not written. */
     private def ownsAttr(attrs: Attrs, name: String): Boolean =
-        attrs.reactiveAttrs.contains(name)
+        attrs.reactiveAttrs.contains(name) || attrs.reactiveMaybeAttrs.contains(name)
 
     private def encodedDragSource(source: Drag.Source)(using Frame): String =
         DragProtocol.encodedSourceConfig(source, DragProtocol.Limits.default) match
@@ -1037,14 +1037,22 @@ private[kyo] object HtmlRenderer:
         ci.inputMask.foreach(m => w(sb, s""" data-kyo-mask="${esc(m)}""""))
     end renderInputConstraints
 
-    /** Emits each reactive attribute's current value as an ordinary `name="value"` so SSR carries it; the client
-      * then patches it in place (HtmlOp.SetAttrByPath). Sorted for deterministic output.
+    /** Emits each reactive attribute's current value as an ordinary `name="value"` so SSR carries it, and each attribute a signal may
+      * leave out while it holds one; the client then patches it in place (HtmlOp.SetAttrByPath, and SetBoolAttrByPath off for one
+      * left out). Sorted by name, the two kinds together, for deterministic output.
       */
     private def renderReactiveAttrs(sb: StringBuilder, attrs: Attrs)(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
-        if attrs.reactiveAttrs.nonEmpty then
-            attrs.reactiveAttrs.toSeq.sortBy(_._1).foreach { (name, sig) =>
-                w(sb, s""" $name="${esc(SignalNow(sig))}"""")
-            }
+        if attrs.reactiveMaybeAttrs.isEmpty then
+            if attrs.reactiveAttrs.nonEmpty then
+                attrs.reactiveAttrs.toSeq.sortBy(_._1).foreach { (name, sig) =>
+                    w(sb, s""" $name="${esc(SignalNow(sig))}"""")
+                }
+        else
+            val held = attrs.reactiveAttrs.toSeq.map((n, s) => n -> Maybe(SignalNow(s))) ++
+                attrs.reactiveMaybeAttrs.toSeq.map((n, s) => n -> SignalNow(s))
+            held.sortBy(_._1).foreach((name, v) => v.foreach(value => w(sb, s""" $name="${esc(value)}"""")))
+        end if
+    end renderReactiveAttrs
 
     /** Emits each reactive boolean attribute as a bare present attribute while its signal is true (mirrors
       * `boolAttr`); the client toggles it in place (HtmlOp.SetBoolAttrByPath). Sorted for deterministic output.

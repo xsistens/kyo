@@ -95,6 +95,22 @@ class AttrsTest extends UITest:
         }
     }
 
+    "inlineStyle from a constant writes what style writes and binds no channel, from a signal it is the channel" in {
+        def html(ui: UI)(using Frame) = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
+        val st                        = Style.width(Length.Px(10)).height(Length.Px(20))
+        for
+            sig      <- Signal.initRef(st)
+            styled   <- html(UI.div.style(st))
+            constant <- html(UI.div.inlineStyle(st))
+            signaled <- html(UI.div.inlineStyle(sig))
+        yield
+            assert(constant == styled, s"constant $constant, style $styled")
+            assert(UI.div.inlineStyle(st).attrs.reactiveStyle.isEmpty && !UI.div.inlineStyle(st).attrs.hasChannels, "no channel")
+            assert(UI.div.inlineStyle(sig).attrs.reactiveStyle.nonEmpty, "a signal is the channel")
+            assert(signaled.contains("width: 10px") && signaled.contains("height: 20px"), s"signal written inline: $signaled")
+        end for
+    }
+
     "img takes its source and its alt as a constant or a signal, and a signal is the attribute's channel" in {
         def html(ui: UI)(using Frame) = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
         for
@@ -333,6 +349,40 @@ class AttrsTest extends UITest:
                 _ <- Browser.assertAttribute(Selector.id("s"), "value", "b")
             yield ()
         }
+    }
+
+    // ---- title ----
+
+    "title from a constant is the title attribute, from a signal a channel, from Absent nothing" in {
+        val constant: Prop[String]    = "Save the draft"
+        val none: Maybe[Prop[String]] = Absent
+        val el                        = UI.span
+        for
+            ref  <- Signal.initRef("Saved")
+            html <- kyo.internal.HtmlRenderer.render(UI.div(UI.span.title(constant)), Seq.empty)
+            live = UI.span.title(Present(ref): Maybe[Prop[String]])
+        yield
+            assert(html.contains("""title="Save the draft""""), html)
+            assert(live.attrs.reactiveAttrs.get("title").exists(_ eq ref), s"${live.attrs}")
+            assert(el.title(none) eq el)
+        end for
+    }
+
+    // ---- aria flag ----
+
+    "ariaFlag writes aria-<name>=\"true\" while on and no attribute while off, from a constant or a signal" in {
+        def html(ui: UI)(using Frame) = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
+        for
+            on     <- Signal.initRef(true)
+            off    <- Signal.initRef(false)
+            yes    <- html(UI.span.ariaFlag("disabled", true))
+            no     <- html(UI.span.ariaFlag("disabled", false))
+            sigYes <- html(UI.span.ariaFlag("disabled", on: Signal[Boolean]))
+            sigNo  <- html(UI.span.ariaFlag("disabled", off: Signal[Boolean]))
+        yield
+            assert(yes.contains("""aria-disabled="true"""") && sigYes.contains("""aria-disabled="true""""), s"$yes / $sigYes")
+            assert(!no.contains("aria-disabled") && !sigNo.contains("aria-disabled"), s"$no / $sigNo")
+        end for
     }
 
 end AttrsTest
