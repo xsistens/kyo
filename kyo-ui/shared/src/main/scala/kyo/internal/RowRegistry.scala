@@ -28,9 +28,10 @@ final private[kyo] class RowInstance(
   * A plain keyed row binds a class channel and a text: two callbacks on their signals' promises, each released by one call. On a
   * Scope finalizer each would be an effect of its own, an `Abort` handler around a deferred call, run by the finalizer's close and
   * await. So bare releases collect here and run in one pass; the finalizer keeps only what is not a bare release (a nested
-  * region's fiber, a mount), which for a plain row is nothing.
+  * region's fiber, a mount), which for a plain row is nothing. `group` is the row's release group, marked before any of it is
+  * released.
   */
-final private[kyo] class RowScope(val finalizer: Scope.Finalizer):
+final private[kyo] class RowScope(val finalizer: Scope.Finalizer, val group: ReleaseGroup):
     private[internal] var releases: List[() => Unit] = Nil
 
     def add(release: () => Unit)(using AllowUnsafe): Unit = releases = release :: releases
@@ -102,6 +103,7 @@ final private[kyo] class RowRegistry(
 
     private def release(scopes: Seq[RowScope])(using Frame): Unit < Async =
         for
+            _        <- Sync.Unsafe.defer(scopes.foreach(_.group.release()))
             failures <- Sync.Unsafe.defer(scopes.flatMap(_.releaseAll().toList))
             _        <- Kyo.foreachDiscard(failures)(t => Log.error("kyo-ui: a row's release failed", t))
             _        <- Kyo.foreachDiscard(scopes)(s => s.finalizer.close(Absent).andThen(s.finalizer.await))
@@ -295,9 +297,11 @@ private[kyo] object RowRegions:
                 val keyFn = keyFnMaybe.get // reusable guarantees a key function
                 val rows  = spec.rows
                 for
-                    _     <- Scope.ensure(rows.evictAll)
-                    watch <- regionMounts.register
-                    _     <- startOwnedFiber {
+                    // Rows outlive the emission that made them, so each is a group inside the list's, not inside an emission's.
+                    around <- ReleaseGroup.current.use(group => group.getOrElse(regionMounts.table.group))
+                    _      <- Scope.ensure(rows.evictAll)
+                    watch  <- regionMounts.register
+                    _      <- startOwnedFiber {
                         // A row owns a bare Finalizer, not a fiber: the registry closes and awaits it, and
                         // scoped children still die with it, since a nested region's or mount's release is
                         // registered on it. Subscribing inline rather than on a forked fiber makes a row that
@@ -308,7 +312,7 @@ private[kyo] object RowRegions:
                         def rowRunner(kids: Seq[ReactiveUI], pass: MountPass): RowScope < Async =
                             Sync.Unsafe.defer {
                                 val fin   = Scope.Finalizer.Unsafe.initInline()
-                                val scope = new RowScope(fin)
+                                val scope = new RowScope(fin, around.child())
                                 // A root, as `Scope.runUnowned`'s is: the registry owns the row, not the enclosing scope.
                                 rows.track(scope).andThen(ContextEffect.handle[Scope.Finalizer, Scope, Unit, Async](
                                     Tag[Scope],
@@ -316,9 +320,9 @@ private[kyo] object RowRegions:
                                     fork = (parent: Scope.Finalizer) => parent.forked,
                                     join = (parent: Scope.Finalizer, _: Scope.Finalizer, _: Scope.Finalizer) => parent
                                 ) {
-                                    Kyo.foreachDiscard(kids)(
+                                    ReleaseGroup.current.let(Present(scope.group))(Kyo.foreachDiscard(kids)(
                                         subscribeScoped(_, exchange, signalChangeTime, regionMounts, dispatch, pass, Present(scope))
-                                    )
+                                    ))
                                 }).andThen(scope)
                             }
 

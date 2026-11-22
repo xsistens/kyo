@@ -8,7 +8,7 @@ import kyo.UI.Ast.*
 
 private[kyo] object EventDispatch:
 
-    private[internal] type Handler = (Seq[String], UIEvent) => Boolean < Async
+    private[internal] type Handler = (Seq[String], UIEvent) => Boolean < (Async & Abort[Any])
 
     private[internal] type ValidatedHandler = (Seq[String], DragProtocol.ValidatedEvent) => Boolean < Async
 
@@ -22,9 +22,33 @@ private[kyo] object EventDispatch:
         reactiveChildren: Seq[ReactiveUI],
         staticHandlers: Seq[(Int, Handler)],
         mounts: MountDispatch
-    )(using Frame): Boolean < Async =
+    )(using Frame): Boolean < (Async & Abort[Any]) =
+        elem.attrs.onFailure match
+            case Present(rules) => Failures.within(FailureFrame.Rules(rules))(dispatchThrough(
+                    elem,
+                    myPath,
+                    at,
+                    targetPath,
+                    event,
+                    reactiveChildren,
+                    staticHandlers,
+                    mounts
+                ))
+            case Absent => dispatchThrough(elem, myPath, at, targetPath, event, reactiveChildren, staticHandlers, mounts)
+
+    /** [[dispatch]] with the element's `onFailure` rules in effect. A handler's failure goes to the rules and the dispatch goes on. */
+    private def dispatchThrough(
+        elem: Element,
+        myPath: Seq[String],
+        at: ReactiveRegion.RegionIdentity,
+        targetPath: Seq[String],
+        event: UIEvent,
+        reactiveChildren: Seq[ReactiveUI],
+        staticHandlers: Seq[(Int, Handler)],
+        mounts: MountDispatch
+    )(using Frame): Boolean < (Async & Abort[Any]) =
         if targetPath == myPath then
-            dispatchToElement(elem, event, isTarget = true, selfPath = myPath)
+            Failures.recover(true)(dispatchToElement(elem, event, isTarget = true, selfPath = myPath))
         else if targetPath.startsWith(myPath) && targetPath.size > myPath.size then
             val childSegment = targetPath(myPath.size)
             val childIdx     = childSegment.toIntOption
@@ -72,7 +96,7 @@ private[kyo] object EventDispatch:
                 // reported to the handler rather than acted on here: only the handler knows whether
                 // its click means something the control already means (see UI.MouseEvent.onControl).
                 targetOnControl = isClick && facts.controlBelow
-                bubble          = dispatchToElement(
+                bubble          = Failures.recover(true)(dispatchToElement(
                     elem,
                     event,
                     isTarget = false,
@@ -81,7 +105,7 @@ private[kyo] object EventDispatch:
                     submitOrigin = isClick && targetButtonSubmits.getOrElse(false),
                     enterSubmits = targetEnterSubmits,
                     controlTarget = targetOnControl
-                )
+                ))
                 result <- staticChild match
                     case Present(childHandle) =>
                         safeDispatch(childHandle, targetPath, event).map(keep => if keep then bubble else false)
@@ -98,6 +122,8 @@ private[kyo] object EventDispatch:
             end for
         else
             true
+        end if
+    end dispatchThrough
 
     /** Where a keydown records the element whose click it stands for, read by [[subscribe]]'s wrapper once
       * the keydown has finished bubbling.
@@ -148,29 +174,29 @@ private[kyo] object EventDispatch:
       * Skipped when the keydown already recorded an activation: that click reaches this form on its own
       * and submitting here as well would be the double all over again.
       */
-    private def submitDirectly(f: Form)(using Frame): Unit < Async =
+    private def submitDirectly(f: Form)(using Frame): Unit < (Async & Abort[Any]) =
         activationTarget.use {
             case Present(ref) => ref.get.map(recorded => if recorded.isDefined then Kyo.lift(()) else invoke(f.onSubmit))
             case Absent       => invoke(f.onSubmit)
         }
 
-    /** Invoke a Maybe[Any < Async] handler, discarding the result. */
-    private def invoke(handler: Maybe[Any < Async])(using Frame): Unit < Async =
+    /** Invoke a Maybe[UI.Action] handler, discarding the result. */
+    private def invoke(handler: Maybe[UI.Action])(using Frame): Unit < (Async & Abort[Any]) =
         if handler.isEmpty then () else handler.get.unit
 
-    /** Invoke a Maybe[A => Any < Async] handler with a value, discarding the result. */
-    private def invokeWith[A](handler: Maybe[A => Any < Async], value: A)(using Frame): Unit < Async =
+    /** Invoke a Maybe[A => UI.Action] handler with a value, discarding the result. */
+    private def invokeWith[A](handler: Maybe[A => UI.Action], value: A)(using Frame): Unit < (Async & Abort[Any]) =
         if handler.isEmpty then () else handler.get(value).unit
 
     /** Dispatch an event safely, logging and recovering from handler errors without stopping the bubble chain. */
-    private[internal] def safeDispatch(handle: (Seq[String], UIEvent) => Boolean < Async, path: Seq[String], event: UIEvent)(using
+    private[internal] def safeDispatch(handle: Handler, path: Seq[String], event: UIEvent)(using
         Frame
     ): Boolean < Async =
         DragCommands.current.use { context =>
             val decisions = context.flatMap(_.decisions)
-            Abort.recover[Throwable](
+            Abort.recover[Any](
                 onFail = err =>
-                    Log.error(s"Handler error during ${event.getClass.getSimpleName} at ${path.mkString(".")}: ${err.getMessage}")
+                    Log.error(s"Handler error during ${event.getClass.getSimpleName} at ${path.mkString(".")}: $err")
                         .andThen(markDecisionFailure(event, decisions))
                         .andThen(true), // continue bubbling
                 onPanic = thr =>
@@ -204,7 +230,7 @@ private[kyo] object EventDispatch:
             case _                       => true
 
     /** Cycle a Select to the next or previous option. Updates SignalRef and fires onChange. */
-    private def cycleSelectOption(sel: Select, forward: Boolean)(using Frame): Unit < Async =
+    private def cycleSelectOption(sel: Select, forward: Boolean)(using Frame): Unit < (Async & Abort[Any]) =
         val options = sel.children.toSeq.collect { case opt: Opt => opt }
         val values  = options.flatMap(_.value.toList)
         if values.isEmpty then Kyo.lift(())
@@ -271,9 +297,9 @@ private[kyo] object EventDispatch:
       * bubble, so this yields `true` (keep bubbling) without running `body`. Only the target is guarded: an
       * ancestor on the bubble path is not inert just because the target was.
       */
-    private def unlessInert(isTarget: Boolean, inert: => Boolean < Sync)(body: => Boolean < Async)(using
+    private def unlessInert(isTarget: Boolean, inert: => Boolean < Sync)(body: => Boolean < (Async & Abort[Any]))(using
         Frame
-    ): Boolean < Async =
+    ): Boolean < (Async & Abort[Any]) =
         if !isTarget then body
         else inert.map(i => if i then true else body)
 
@@ -467,7 +493,7 @@ private[kyo] object EventDispatch:
         controlTarget: Boolean = false
     )(
         using Frame
-    ): Boolean < Async =
+    ): Boolean < (Async & Abort[Any]) =
         val attrs = elem.attrs
         event match
             case ev: UIEvent.Click =>
@@ -695,7 +721,7 @@ private[kyo] object EventDispatch:
                 else
                     DragCommands.current.use {
                         case Present(DragCommands.Dispatch(DragCommands.Payload.Event(value), _)) =>
-                            invokeDrag(attrs.onDragStart, attrs.onDragStartEvt.map(_(value)), "drag start")
+                            invokeDrag(attrs.onDragStart, attrs.onDragStartEvt.map(_(value)))
                                 .andThen(keepBubbling(elem, attrs.onDragStart.nonEmpty || attrs.onDragStartEvt.nonEmpty))
                         case _ => true
                     }
@@ -704,13 +730,13 @@ private[kyo] object EventDispatch:
                 else
                     DragCommands.current.use {
                         case Present(DragCommands.Dispatch(DragCommands.Payload.End(value), _)) =>
-                            invokeDrag(attrs.onDragEnd, attrs.onDragEndEvt.map(_(value)), "drag end")
+                            invokeDrag(attrs.onDragEnd, attrs.onDragEndEvt.map(_(value)))
                                 .andThen(keepBubbling(elem, attrs.onDragEnd.nonEmpty || attrs.onDragEndEvt.nonEmpty))
                         case _ => true
                     }
-            case _: UIEvent.DragEnter => dispatchDragEvent(elem, attrs.onDragEnter, attrs.onDragEnterEvt, "drag enter")
-            case _: UIEvent.DragLeave => dispatchDragEvent(elem, attrs.onDragLeave, attrs.onDragLeaveEvt, "drag leave")
-            case _: UIEvent.DragOver  => dispatchDragEvent(elem, attrs.onDragOver, attrs.onDragOverEvt, "drag over")
+            case _: UIEvent.DragEnter => dispatchDragEvent(elem, attrs.onDragEnter, attrs.onDragEnterEvt)
+            case _: UIEvent.DragLeave => dispatchDragEvent(elem, attrs.onDragLeave, attrs.onDragLeaveEvt)
+            case _: UIEvent.DragOver  => dispatchDragEvent(elem, attrs.onDragOver, attrs.onDragOverEvt)
             case _: UIEvent.Drop      =>
                 DragCommands.current.use {
                     case Present(DragCommands.Dispatch(DragCommands.Payload.Event(value), decisions)) =>
@@ -742,32 +768,26 @@ private[kyo] object EventDispatch:
         end match
     end dispatchToElement
 
-    private def invokeDrag(action: Maybe[Any < Async], typed: Maybe[Any < Async], label: String)(using Frame): Unit < Async =
-        def safe(handler: Maybe[Any < Async]): Unit < Async =
-            handler.fold((): Unit < Async) { effect =>
-                Abort.recover[Throwable](
-                    err => Log.error(s"Handler error during $label: ${err.getMessage}"),
-                    panic => Log.error(s"Handler panic during $label: ${panic.getMessage}")
-                )(effect.unit)
-            }
+    private def invokeDrag(action: Maybe[UI.Action], typed: Maybe[UI.Action])(using Frame): Unit < Async =
+        def safe(handler: Maybe[UI.Action]): Unit < Async =
+            handler.fold((): Unit < Async)(effect => Failures.recover(())(effect.unit))
         safe(action).andThen(safe(typed))
     end invokeDrag
 
     private def dispatchDragEvent(
         elem: Element,
-        action: Maybe[Any < Async],
-        typed: Maybe[Drag.Event => Any < Async],
-        label: String
+        action: Maybe[UI.Action],
+        typed: Maybe[Drag.Event => UI.Action]
     )(using Frame): Boolean < Async =
         DragCommands.current.use {
             case Present(DragCommands.Dispatch(DragCommands.Payload.Event(value), _)) =>
-                invokeDrag(action, typed.map(_(value)), label)
+                invokeDrag(action, typed.map(_(value)))
                     .andThen(keepBubbling(elem, action.nonEmpty || typed.nonEmpty))
             case _ => true
         }
 
     private def invokeDecision(
-        handler: Maybe[Drag.Decision < Async],
+        handler: Maybe[Drag.Decision < (Async & Abort[Any])],
         decisions: Maybe[AtomicRef[DragCommands.DecisionState]],
         failure: String
     )(using Frame): Unit < Async =
@@ -775,11 +795,10 @@ private[kyo] object EventDispatch:
             for
                 result <- Abort.run[Any](effect)
                 _      <- result match
-                    case Result.Success(decision) => recordDecision(decisions, decision)
-                    case Result.Failure(err)      =>
-                        Log.error(s"Drag decision handler error: $err").andThen(failDecision(decisions, failure))
-                    case Result.Panic(panic) =>
-                        Log.error(s"Drag decision handler panic: ${panic.getMessage}").andThen(failDecision(decisions, failure))
+                    case Result.Success(decision)     => recordDecision(decisions, decision)
+                    case Result.Panic(_: Interrupted) => failDecision(decisions, failure)
+                    case Result.Failure(err)          => failDecision(decisions, failure).andThen(Failures.recover(())(Abort.fail(err)))
+                    case Result.Panic(panic)          => failDecision(decisions, failure).andThen(Failures.recover(())(Abort.panic(panic)))
             yield ()
         }
 

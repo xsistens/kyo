@@ -246,6 +246,21 @@ class UIAttachedTest extends kyo.test.Test[Any]:
         }
     }
 
+    "a failure the hook leaves goes to the onFailure rules around the element" in {
+        Scope.run {
+            for
+                clicks  <- AtomicInt.init
+                handled <- Promise.init[Any, Any]
+                ui = UI.div(
+                    barrier(clicks),
+                    UI.div.id("failing").onAttached(_ => Abort.fail("broken"))
+                ).onFailure { case failure => UI.Reaction.Run(handled.completeDiscard(Result.succeed(failure))) }
+                _       <- mount(ui)
+                failure <- handled.get
+            yield assert(failure.toString == "broken", s"failure: $failure")
+        }
+    }
+
     "two mounts on one page each start only the hooks of their own elements" in {
         val log = recorder()
         Scope.run {

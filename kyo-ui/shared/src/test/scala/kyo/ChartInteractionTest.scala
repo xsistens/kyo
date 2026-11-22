@@ -75,9 +75,12 @@ class ChartInteractionTest extends kyo.test.Test[Any]:
         root.children.collect:
             case r: Reactive[?] => r
 
-    /** Run an `Any < Async` action as a test effect and return Unit. */
-    private def runAction(action: Any < Async)(using Frame): Unit < Async =
-        action.map(_ => ())
+    /** Run a handler's action as a test effect; a failure fails the test. */
+    private def runAction(action: UI.Action)(using Frame): Unit < Async =
+        Abort.run[Any](action).map {
+            case Result.Success(_) => ()
+            case failed            => throw new AssertionError(s"the handler failed: $failed")
+        }
 
     // ---- Test 1: each mark shape carries Present onHover and onClick handlers ----
 

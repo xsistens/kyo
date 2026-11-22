@@ -2,8 +2,7 @@ package kyo
 
 import kyo.internal.HtmlRenderer
 import kyo.internal.MountDispatch
-import kyo.internal.MountState
-import kyo.internal.MountSupervision
+import kyo.internal.MountedSpec
 import kyo.internal.MouseEventData
 import kyo.internal.ReactiveRegion
 import kyo.internal.ReactiveUI
@@ -83,17 +82,27 @@ class MountedTest extends kyo.test.Test[Any]:
 
     private def mount[A](ui: UI, keepsRows: Boolean = false, beforePaint: (Seq[String], String) => Unit < Async = (_, _) => ())(
         f: (Recorder, (Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope)
-    )(using Frame): A < Async =
+    )(using Frame, kyo.test.AssertScope): A < Async =
+        mountSession(ui, keepsRows, beforePaint)((recorder, sub) => f(recorder, sub.handle))
+
+    /** [[mount]] with the whole subscription. Once the session has ended, no verdict on an interrupted effect waits any more. */
+    private def mountSession[A](ui: UI, keepsRows: Boolean = false, beforePaint: (Seq[String], String) => Unit < Async = (_, _) => ())(
+        f: (Recorder, ReactiveUI.Subscription) => A < (Async & Scope)
+    )(using Frame, kyo.test.AssertScope): A < Async =
         Scope.run {
             val recorder = new Recorder(keepsRows, beforePaint)
             for
                 _    <- recorder.initial(ui)
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 sub  <- ReactiveUI.subscribe(root, recorder)
-                a    <- f(recorder, sub.handle)
-            yield a
+                a    <- f(recorder, sub)
+            yield (a, sub.mountSession)
             end for
-        }
+        }.map((a, session) => assertEventually(pendingVerdicts(session).map(_ == 0)).andThen(a))
+
+    /** The verdicts on interrupted effects that wait for a cut in `session` now. */
+    private def pendingVerdicts(session: kyo.internal.MountSession)(using Frame): Long < Sync =
+        Sync.defer(session.counters.pendingVerdicts.get)
 
     private def showsEventually(recorder: Recorder, path: Seq[String], text: String)(using Frame, kyo.test.AssertScope): Unit < Async =
         assertEventually(recorder.shown(path).map(_.contains(text)))
@@ -504,15 +513,17 @@ class MountedTest extends kyo.test.Test[Any]:
     "an event registration that ends leaves a later one at the same path in place" in {
         for
             dispatch <- MountDispatch.init
-            cell     <- Signal.initRef[MountState](MountState.Pending(Absent))
             path = Seq("0", "1")
             at   = ReactiveRegion.RegionIdentity(path, 1)
             node = UI.mounted(Kyo.lift(UI.empty))
-            _     <- dispatch.register(at, cell)
-            _     <- dispatch.register(at, cell)
-            _     <- dispatch.unregister(at, cell)
-            found <- dispatch.lookup(at)
-        yield assert(found.exists(_ eq cell))
+            (table, _) <- kyo.internal.MountTable.root(Seq.empty)
+            instance   <- kyo.internal.MountInstance.start(MountedSpec(node, path, Nil), Absent, Nil, table)
+            _          <- dispatch.register(at, instance)
+            _          <- dispatch.register(at, instance)
+            _          <- dispatch.unregister(at, instance)
+            found      <- dispatch.instance(at)
+            _          <- instance.teardown
+        yield assert(found.exists(_ eq instance))
     }
 
     "two mounts at one path, one the content of the other, made under one frame, are each found by their own content" in {
@@ -523,17 +534,20 @@ class MountedTest extends kyo.test.Test[Any]:
         val outerAt                = ReactiveRegion.RegionIdentity(path, 1)
         val innerAt                = ReactiveRegion.RegionIdentity(path, 3)
         for
-            dispatch <- MountDispatch.init
-            outer    <- Signal.initRef[kyo.internal.MountState](kyo.internal.MountState.Pending(Absent))
-            inner    <- Signal.initRef[kyo.internal.MountState](kyo.internal.MountState.Pending(Absent))
-            _        <- dispatch.register(outerAt, outer)
-            before   <- dispatch.lookup(innerAt)
-            _        <- dispatch.register(innerAt, inner)
-            o        <- dispatch.lookup(outerAt)
-            i        <- dispatch.lookup(innerAt)
+            dispatch   <- MountDispatch.init
+            (table, _) <- kyo.internal.MountTable.root(Seq.empty)
+            outer      <- kyo.internal.MountInstance.start(MountedSpec(outerNode, path, Nil), Absent, Nil, table)
+            inner      <- kyo.internal.MountInstance.start(MountedSpec(innerNode, path, Nil), Absent, Nil, table)
+            _          <- dispatch.register(outerAt, outer)
+            before     <- dispatch.instance(innerAt)
+            _          <- dispatch.register(innerAt, inner)
+            o          <- dispatch.instance(outerAt)
+            i          <- dispatch.instance(innerAt)
+            _          <- inner.teardown
+            _          <- outer.teardown
         yield
             assert(outerNode.frame == innerNode.frame)
-            assert(before.isEmpty, "the inner mount found the outer one's cell before its own registered")
+            assert(before.isEmpty, "the inner mount found the outer one's instance before its own registered")
             assert(o.exists(_ eq outer) && i.exists(_ eq inner))
         end for
     }
@@ -987,8 +1001,8 @@ class MountedTest extends kyo.test.Test[Any]:
     }
 
     "a failure is final: a later publish does not replace it" in {
-        val failed = MountState.Failed(UI.Ast.Text("first")(using Frame.internal))
-        val after  = MountSupervision.publish(UI.Ast.Text("late")(using Frame.internal))(failed)
+        val failed = kyo.internal.MountState.Failed(UI.Ast.Text("first")(using Frame.internal))
+        val after  = kyo.internal.MountSupervision.publish(UI.Ast.Text("late")(using Frame.internal))(failed)
         assert(after == failed)
     }
 
@@ -1465,6 +1479,488 @@ class MountedTest extends kyo.test.Test[Any]:
         yield assert(counts == Map("A" -> 1, "B" -> 1) && total == 2, s"runs per card: $counts, effect starts of A: $total")
     }
 
+    /** Keeps the messages logged at error level, so a test can tell whether a mount reported a failure. */
+    private class ErrorLog extends Log.Unsafe.ConsoleLogger("MountedTest", Log.Level.error):
+        // Unsafe: written by the log's dispatch, read by the test after the releases it waits for are done.
+        private val messages = AtomicRef.Unsafe.init(Chunk.empty[String])(using AllowUnsafe.embrace.danger)
+
+        override def emit(event: Log.Event)(using allow: AllowUnsafe): Unit =
+            if event.level == Log.Level.error then discard(messages.getAndUpdate(_.append(event.message)))
+
+        def logged(using Frame): Chunk[String] < Async = Log.flush.andThen(Sync.Unsafe.defer(messages.get()))
+    end ErrorLog
+
+    // A fiber that waits on a promise interrupts that promise when it is interrupted itself, so an effect awaiting a promise another
+    // mount's effect awaits too sees that mount's release as an interrupt of its own. `released` is set once the instance's release
+    // has run its effect's finalizers, which comes after the effect's outcome is handled.
+    private def awaiting(shared: Promise[Unit, Any], entered: Latch, released: AtomicBoolean, name: String)(using
+        Frame
+    ): UI < (Async & Scope) =
+        Scope.ensure(released.set(true)).andThen(entered.release).andThen(shared.get).andThen(span(s"$name:done"))
+
+    "a mount whose effect is interrupted by the release of another mount shows its error view" in {
+        for
+            shared    <- Promise.init[Unit, Any]
+            entered   <- Latch.init(2)
+            releasedA <- AtomicBoolean.init(false)
+            releasedB <- AtomicBoolean.init(false)
+            showA     <- Signal.initRef(true)
+            ui = div(
+                showA.render(s => if s then div(UI.mounted(awaiting(shared, entered, releasedA, "A")).keyed("A")) else span("gone")),
+                div(UI.mounted(awaiting(shared, entered, releasedB, "B")).keyed("B"))
+            )
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _     <- entered.await
+                    _     <- showA.set(false)
+                    _     <- assertEventually(releasedA.get)
+                    _     <- showsEventually(recorder, Seq("1", "0"), "kyo-mount-error")
+                    gone  <- releasedB.get
+                    shown <- recorder.shown(Seq("1", "0"))
+                yield assert(!gone, s"B was released though nothing removed it, it shows $shown")
+            }
+        yield succeed
+    }
+
+    private def bothReleased(a: AtomicBoolean, b: AtomicBoolean)(using Frame): Boolean < Sync =
+        a.get.map(x => b.get.map(x && _))
+
+    private def reportsNoFailure(errors: ErrorLog)(using Frame, kyo.test.AssertScope): Unit < Async =
+        errors.logged.map(logged => assert(!logged.exists(_.contains("Mounted effect")), s"a release was reported as a failure: $logged"))
+
+    "two keyed mounts that await one promise and are released in one pass report no failure" in {
+        val errors = new ErrorLog
+        Log.let(Log(errors)) {
+            for
+                shared    <- Promise.init[Unit, Any]
+                entered   <- Latch.init(2)
+                releasedA <- AtomicBoolean.init(false)
+                releasedB <- AtomicBoolean.init(false)
+                show      <- Signal.initRef(true)
+                ui = div(show.render(s =>
+                    if s then
+                        div(
+                            UI.mounted(awaiting(shared, entered, releasedA, "A")).keyed("A"),
+                            UI.mounted(awaiting(shared, entered, releasedB, "B")).keyed("B")
+                        )
+                    else span("gone")
+                ))
+                _ <- mount(ui) { (recorder, _) =>
+                    for
+                        _ <- entered.await
+                        _ <- show.set(false)
+                        _ <- showsEventually(recorder, Seq("0"), "gone")
+                        _ <- assertEventually(bothReleased(releasedA, releasedB))
+                        _ <- reportsNoFailure(errors)
+                    yield ()
+                }
+            yield succeed
+        }
+    }
+
+    "two keyless mounts that await one promise and are released in one re-render leave no error view in the snapshot" in {
+        val errors = new ErrorLog
+        Log.let(Log(errors)) {
+            for
+                shared    <- Promise.init[Unit, Any]
+                later     <- Promise.init[Unit, Any]
+                entered   <- Latch.init(2)
+                releasedA <- AtomicBoolean.init(false)
+                releasedB <- AtomicBoolean.init(false)
+                tick      <- Signal.initRef(0)
+                // The instances after the re-render wait on a promise of their own, so the slots keep showing the KeepLatest snapshots.
+                effect = (n: Int, name: String, released: AtomicBoolean) =>
+                    if n == 0 then awaiting(shared, entered, released, name) else later.get.andThen(span(s"$name:later"))
+                ui = div(tick.render(n =>
+                    div(span(s"tick:$n"), UI.mounted(effect(n, "A", releasedA)), UI.mounted(effect(n, "B", releasedB)))
+                ))
+                _ <- mount(ui) { (recorder, _) =>
+                    for
+                        _ <- entered.await
+                        _ <- tick.set(1)
+                        _ <- showsEventually(recorder, Seq("0", "0"), "tick:1")
+                        _ <- assertEventually(bothReleased(releasedA, releasedB))
+                        a <- recorder.shown(Seq("0", "1"))
+                        b <- recorder.shown(Seq("0", "2"))
+                        _ <- reportsNoFailure(errors)
+                    yield assert(
+                        !a.contains("kyo-mount-error") && !b.contains("kyo-mount-error"),
+                        s"a released instance's snapshot shows an error view: A shows $a, B shows $b"
+                    )
+                }
+            yield succeed
+        }
+    }
+
+    "a keyless and a keyed mount that await one promise and are released in one pass report no failure" in {
+        val errors = new ErrorLog
+        Log.let(Log(errors)) {
+            for
+                shared    <- Promise.init[Unit, Any]
+                entered   <- Latch.init(2)
+                releasedA <- AtomicBoolean.init(false)
+                releasedB <- AtomicBoolean.init(false)
+                show      <- Signal.initRef(true)
+                ui = div(show.render(s =>
+                    if s then
+                        div(
+                            UI.mounted(awaiting(shared, entered, releasedA, "A")),
+                            UI.mounted(awaiting(shared, entered, releasedB, "B")).keyed("B")
+                        )
+                    else span("gone")
+                ))
+                // B hears A's release while its region still holds it, so its verdict waits for the pass and the cut that release it.
+                _ <- mountSession(ui) { (recorder, sub) =>
+                    for
+                        _ <- entered.await
+                        _ <- show.set(false)
+                        _ <- showsEventually(recorder, Seq("0"), "gone")
+                        _ <- assertEventually(bothReleased(releasedA, releasedB))
+                        _ <- assertEventually(pendingVerdicts(sub.mountSession).map(_ == 0))
+                        _ <- reportsNoFailure(errors)
+                    yield ()
+                }
+            yield succeed
+        }
+    }
+
+    "a keyed mount that moves while an interrupt from elsewhere ends its effect shows its error view at its new place" in {
+        val errors = new ErrorLog
+        Log.let(Log(errors)) {
+            for
+                shared    <- Promise.init[Unit, Any]
+                entered   <- Latch.init(2)
+                releasedK <- AtomicBoolean.init(false)
+                releasedX <- AtomicBoolean.init(false)
+                where     <- Signal.initRef(1)
+                // One call site, so both regions show the same identity: a write that switches the regions moves the instance.
+                x  = UI.mounted(awaiting(shared, entered, releasedX, "X")).keyed("X")
+                ui = div(
+                    where.render(w =>
+                        if w == 1 then div(UI.mounted(awaiting(shared, entered, releasedK, "K")), x) else span("first empty")
+                    ),
+                    where.render(w => if w == 2 then div(x) else span("second empty"))
+                )
+                _ <- mount(ui) { (recorder, _) =>
+                    for
+                        _     <- entered.await
+                        _     <- where.set(2)
+                        _     <- assertEventually(releasedK.get)
+                        _     <- showsEventually(recorder, Seq("1", "0"), "kyo-mount-error")
+                        gone  <- releasedX.get
+                        shown <- recorder.shown(Seq("1", "0"))
+                        log   <- errors.logged
+                    yield assert(
+                        !gone && log.exists(_.contains("Mounted effect panicked")),
+                        s"X was released: $gone, it shows $shown, logged $log"
+                    )
+                }
+            yield succeed
+        }
+    }
+
+    "a keyed mount that moves after an interrupt from elsewhere ended its effect before the cut keeps its failure until its key changes" in {
+        val errors = new ErrorLog
+        Log.let(Log(errors)) {
+            for
+                shared    <- Promise.init[Unit, Any]
+                entered   <- Latch.init(2)
+                hold      <- Promise.init[Unit, Any]
+                runs      <- AtomicInt.init(0)
+                releasedK <- AtomicBoolean.init(false)
+                releasedX <- AtomicBoolean.init(false)
+                where     <- Signal.initRef(1)
+                // One call site, so both regions show the same identity for key 1: the write to 2 moves the instance, the write to 3
+                // shows key 2 in its place.
+                x = (key: Int) =>
+                    UI.mounted(runs.incrementAndGet.andThen(
+                        if key == 1 then awaiting(shared, entered, releasedX, "X") else span("fresh")
+                    )).keyed(key).onError(e => span(s"error:${e.source}"))
+                ui = div(
+                    where.render(w => if w == 1 then div(UI.mounted(awaiting(shared, entered, releasedK, "K")), x(1)) else span("first")),
+                    where.render(w => if w == 2 then div(x(1)) else if w == 3 then div(x(2)) else span("second empty"))
+                )
+                _ <- mountSession(ui) { (recorder, sub) =>
+                    for
+                        _ <- entered.await
+                        // The move runs in a batch held open, so K's release ends X's effect before the cut that decides the move.
+                        batch  <- Fiber.initUnscoped(sub.mountSession.within(where.set(2).andThen(hold.get)))
+                        _      <- assertEventually(releasedK.get)
+                        _      <- assertEventually(pendingVerdicts(sub.mountSession).map(_ == 1))
+                        before <- recorder.shown(Seq("1", "0"))
+                        _      <- hold.completeUnitDiscard
+                        _      <- batch.get
+                        _      <- showsEventually(recorder, Seq("1", "0"), "error:Panic")
+                        gone   <- releasedX.get
+                        once   <- runs.get
+                        log    <- errors.logged
+                        _ = assert(
+                            !before.contains("error:") && !gone && once == 1 && log.exists(_.contains("Mounted effect panicked")),
+                            s"before the cut: $before, X released: $gone, runs: $once, logged $log"
+                        )
+                        _     <- where.set(3)
+                        _     <- showsEventually(recorder, Seq("1", "0"), "fresh")
+                        _     <- assertEventually(releasedX.get)
+                        twice <- runs.get
+                    yield assert(twice == 2, s"runs after the key changed: $twice")
+                }
+            yield succeed
+        }
+    }
+
+    "a keyless mount whose effect is interrupted by the release of a keyed mount shows its error view" in {
+        for
+            shared    <- Promise.init[Unit, Any]
+            entered   <- Latch.init(2)
+            releasedA <- AtomicBoolean.init(false)
+            releasedB <- AtomicBoolean.init(false)
+            showA     <- Signal.initRef(true)
+            ui = div(
+                showA.render(s => if s then div(UI.mounted(awaiting(shared, entered, releasedA, "A")).keyed("A")) else span("gone")),
+                div(UI.mounted(awaiting(shared, entered, releasedB, "B")))
+            )
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _     <- entered.await
+                    _     <- showA.set(false)
+                    _     <- assertEventually(releasedA.get)
+                    _     <- showsEventually(recorder, Seq("1", "0"), "kyo-mount-error")
+                    gone  <- releasedB.get
+                    shown <- recorder.shown(Seq("1", "0"))
+                yield assert(!gone, s"B was released though nothing removed it, it shows $shown")
+            }
+        yield succeed
+    }
+
+    "a keyless mount in a region nested in a released value reports no failure when its sibling's release reaches it" in {
+        val errors = new ErrorLog
+        Log.let(Log(errors)) {
+            for
+                shared    <- Promise.init[Unit, Any]
+                entered   <- Latch.init(2)
+                releasedA <- AtomicBoolean.init(false)
+                releasedB <- AtomicBoolean.init(false)
+                show      <- Signal.initRef(true)
+                inner     <- Signal.initRef(0)
+                // The nested region's subscription is interrupted with the value around it, so its own value releases on a fiber of
+                // its own that nothing waits for: B can hear A's release before its own has begun.
+                ui = div(show.render(s =>
+                    if s then
+                        div(
+                            UI.mounted(awaiting(shared, entered, releasedA, "A")),
+                            inner.render(n => div(span(s"inner:$n"), UI.mounted(awaiting(shared, entered, releasedB, "B"))))
+                        )
+                    else span("gone")
+                ))
+                _ <- mount(ui) { (recorder, _) =>
+                    for
+                        _ <- entered.await
+                        _ <- show.set(false)
+                        _ <- showsEventually(recorder, Seq("0"), "gone")
+                        _ <- assertEventually(bothReleased(releasedA, releasedB))
+                        _ <- reportsNoFailure(errors)
+                    yield ()
+                }
+            yield succeed
+        }
+    }
+
+    "a mount in a boundary whose effect is interrupted by the release of another mount shows the boundary's error view" in {
+        for
+            shared    <- Promise.init[Unit, Any]
+            entered   <- Latch.init(2)
+            releasedA <- AtomicBoolean.init(false)
+            releasedB <- AtomicBoolean.init(false)
+            showA     <- Signal.initRef(true)
+            caught: PartialFunction[MountError, UI] = { case e => span(s"caught:${e.source}") }
+            ui                                      = div(
+                showA.render(s => if s then div(UI.mounted(awaiting(shared, entered, releasedA, "A")).keyed("A")) else span("gone")),
+                UI.boundary.onError(caught)(div(UI.mounted(awaiting(shared, entered, releasedB, "B")).keyed("B")))
+            )
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _     <- entered.await
+                    _     <- showA.set(false)
+                    _     <- assertEventually(releasedA.get)
+                    _     <- showsEventually(recorder, Seq("1", "0"), "caught:Panic")
+                    gone  <- releasedB.get
+                    shown <- recorder.shown(Seq("1", "0"))
+                yield assert(!gone, s"B was released though nothing removed it, it shows $shown")
+            }
+        yield succeed
+    }
+
+    "a verdict that waits for a cut held back by a batch is settled by the end of the session" in {
+        val errors = new ErrorLog
+        Log.let(Log(errors)) {
+            for
+                shared    <- Promise.init[Unit, Any]
+                entered   <- Latch.init(2)
+                hold      <- Promise.init[Unit, Any]
+                releasedK <- AtomicBoolean.init(false)
+                releasedX <- AtomicBoolean.init(false)
+                show      <- Signal.initRef(true)
+                ui = div(show.render(s =>
+                    if s then
+                        div(
+                            UI.mounted(awaiting(shared, entered, releasedK, "K")),
+                            UI.mounted(awaiting(shared, entered, releasedX, "X")).keyed("X")
+                        )
+                    else span("gone")
+                ))
+                recorder = new Recorder()
+                _    <- recorder.initial(ui)
+                root <- ReactiveUI.normalize(ui, Seq.empty)
+                // The write runs in a batch that stays open, so the cut that would decide X is not taken while the session lives.
+                (session, batch) <- Scope.run {
+                    for
+                        sub   <- ReactiveUI.subscribe(root, recorder)
+                        _     <- entered.await
+                        batch <- Fiber.initUnscoped(sub.mountSession.within(show.set(false).andThen(hold.get)))
+                        _     <- assertEventually(releasedK.get)
+                        _     <- assertEventually(pendingVerdicts(sub.mountSession).map(_ == 1))
+                        gone  <- releasedX.get
+                    yield
+                        assert(!gone, "X was released while the batch held its cut back")
+                        (sub.mountSession, batch)
+                }
+                _ <- assertEventually(releasedX.get)
+                _ <- assertEventually(pendingVerdicts(session).map(_ == 0))
+                _ <- hold.completeUnitDiscard
+                _ <- batch.get
+                _ <- reportsNoFailure(errors)
+            yield succeed
+        }
+    }
+
+    /** How many interrupts that ended a `UI.fork` fiber the session has decided on, silent or reported. */
+    private def forkDecisions(session: kyo.internal.MountSession)(using Frame): Long < Sync =
+        Sync.defer(session.counters.forkInterrupts.get)
+
+    private def reportsNoForkFailure(errors: ErrorLog)(using Frame, kyo.test.AssertScope): Unit < Async =
+        errors.logged.map(logged => assert(!logged.exists(_.contains("background fiber")), s"a cancel was reported as a failure: $logged"))
+
+    "a UI.fork fiber whose work ends on a promise another mount's release interrupted reports its failure to the node" in {
+        for
+            shared    <- Promise.init[Unit, Any]
+            entered   <- Latch.init(2)
+            releasedA <- AtomicBoolean.init(false)
+            showA     <- Signal.initRef(true)
+            reached   <- AtomicBoolean.init(false)
+            // No interrupt reaches the fork fiber: its own work ends with the interrupt the awaited promise took from A's release.
+            effect = UI.fork(entered.release.andThen(shared.get))
+                .map(fiber => fiber.onInterrupt(_ => reached.set(true)))
+                .andThen(span("up"))
+            ui = div(
+                showA.render(s => if s then div(UI.mounted(awaiting(shared, entered, releasedA, "A")).keyed("A")) else span("gone")),
+                div(UI.mounted(effect).onError(e => span(s"error:${e.source}")))
+            )
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _     <- entered.await
+                    _     <- showsEventually(recorder, Seq("1", "0"), "up")
+                    _     <- showA.set(false)
+                    _     <- assertEventually(releasedA.get)
+                    _     <- showsEventually(recorder, Seq("1", "0"), "error:Fork")
+                    there <- reached.get
+                yield assert(!there, "an interrupt reached the fork fiber, though only the promise it awaited took one")
+            }
+        yield succeed
+    }
+
+    "a UI.fork fiber the effect interrupts itself is a cancel and reports nothing" in {
+        val errors = new ErrorLog
+        Log.let(Log(errors)) {
+            for
+                never   <- Promise.init[Unit, Any]
+                reached <- AtomicBoolean.init(false)
+                effect = UI.fork(never.get).map { fiber =>
+                    fiber.onInterrupt(_ => reached.set(true)).andThen(fiber.interrupt).andThen(fiber.getResult)
+                }.andThen(span("up"))
+                ui = div(UI.mounted(effect).onError(e => span(s"error:${e.source}")))
+                _ <- mountSession(ui) { (recorder, sub) =>
+                    for
+                        _     <- showsEventually(recorder, Seq("0"), "up")
+                        _     <- assertEventually(forkDecisions(sub.mountSession).map(_ == 1))
+                        _     <- reportsNoForkFailure(errors)
+                        shown <- recorder.shown(Seq("0"))
+                        there <- reached.get
+                    yield assert(there && !shown.contains("error:"), s"the interrupt reached the fiber: $there, the node shows $shown")
+                }
+            yield succeed
+        }
+    }
+
+    "a UI.fork fiber interrupted through a fiber that awaits it is a cancel and reports nothing" in {
+        val errors = new ErrorLog
+        Log.let(Log(errors)) {
+            for
+                never   <- Promise.init[Unit, Any]
+                reached <- AtomicBoolean.init(false)
+                // The waiter is interrupted only once it waits on the fork fiber, so the interrupt is passed on to it.
+                effect = UI.fork(never.get).map { fiber =>
+                    for
+                        _      <- fiber.onInterrupt(_ => reached.set(true))
+                        before <- fiber.waiters
+                        waiter <- Fiber.initUnscoped(fiber.get)
+                        _      <- assertEventually(fiber.waiters.map(_ > before))
+                        _      <- waiter.interrupt
+                        _      <- fiber.getResult
+                    yield ()
+                }.andThen(span("up"))
+                ui = div(UI.mounted(effect).onError(e => span(s"error:${e.source}")))
+                _ <- mountSession(ui) { (recorder, sub) =>
+                    for
+                        _     <- showsEventually(recorder, Seq("0"), "up")
+                        _     <- assertEventually(forkDecisions(sub.mountSession).map(_ == 1))
+                        _     <- reportsNoForkFailure(errors)
+                        shown <- recorder.shown(Seq("0"))
+                        there <- reached.get
+                    yield assert(there && !shown.contains("error:"), s"the interrupt reached the fiber: $there, the node shows $shown")
+                }
+            yield succeed
+        }
+    }
+
+    "a UI.fork fiber interrupted by the release of its node reports nothing" in {
+        val errors = new ErrorLog
+        Log.let(Log(errors)) {
+            for
+                never   <- Promise.init[Unit, Any]
+                started <- Latch.init(1)
+                show    <- Signal.initRef(true)
+                effect = UI.fork(started.release.andThen(never.get)).andThen(span("up"))
+                ui     = div(show.render(s => if s then div(UI.mounted(effect).keyed("F")) else span("gone")))
+                _ <- mountSession(ui) { (recorder, sub) =>
+                    for
+                        _ <- started.await
+                        _ <- show.set(false)
+                        _ <- showsEventually(recorder, Seq("0"), "gone")
+                        _ <- assertEventually(forkDecisions(sub.mountSession).map(_ == 1))
+                        _ <- reportsNoForkFailure(errors)
+                    yield ()
+                }
+            yield succeed
+        }
+    }
+
+    "an instance released while its effect is pending does not end failed" in {
+        val errors = new ErrorLog
+        Log.let(Log(errors)) {
+            for
+                entered <- Latch.init(1)
+                never   <- Promise.init[Unit, Any]
+                node = UI.mounted(entered.release.andThen(never.get).andThen(span("never")))
+                (table, _) <- kyo.internal.MountTable.root(Seq.empty)
+                instance   <- kyo.internal.MountInstance.start(MountedSpec(node, Seq("0"), Nil), Absent, Nil, table)
+                _          <- entered.await
+                _          <- instance.teardown
+                state      <- instance.cell.current
+                _          <- reportsNoFailure(errors)
+            yield assert(!state.settled, s"the released instance ended as $state")
+        }
+    }
+
     private def draftBox(editing: Boolean, draft: SignalRef[String], b: Signal[String], runs: AtomicInt)(using Frame): UI =
         div(
             if editing then input.value(draft) else span("read only"),
@@ -1849,7 +2345,7 @@ class MountedTest extends kyo.test.Test[Any]:
             gate    <- Promise.init[Unit, Any]
             recorder = new Gated(Seq("1"), entered, gate)
             ui       = div(
-                button("move").onClick(left.getAndUpdate(p => (false, p._2)).andThen(right.set(true)).unit),
+                button("move").onClick(UI.batch(left.getAndUpdate(p => (false, p._2)).andThen(right.set(true))).unit),
                 left.render(p => if p._1 then div(errorBox("left", fail)) else div(span("empty-left"))),
                 right.render(r => if r then div(errorBox("right", fail)) else div(span("empty-right")))
             )
@@ -1945,6 +2441,57 @@ class MountedTest extends kyo.test.Test[Any]:
             assert(regAfter == regBefore + 1, s"a re-render or a new row registered more than the new row's region: ${counts}")
             assert(skippedAfter - skippedBefore >= rows, s"the tick did not reach every row: ${counts}")
         end for
+    }
+
+    // ---- A handler that waits for what its own writes cause ----
+
+    // The shape of an app that stops its running part and waits until it is gone (Runs.stop in the issue tracker's demo shell): the
+    // handler hides a keyed instance and then waits for that instance's release. The release must not wait for the handler.
+    "a click handler that hides a keyed instance and waits for its release finishes" in {
+        for
+            released <- Latch.init(1)
+            done     <- Latch.init(1)
+            show     <- Signal.initRef(true)
+            node = UI.mounted(Scope.ensure(released.release).andThen(span("app"))).keyed("run")
+            ui   = div(
+                button("stop").onClick(show.set(false).andThen(released.await).andThen(done.release)),
+                show.render(s => if s then div(node) else div(span("stopped")))
+            )
+            _ <- mount(ui) { (recorder, handle) =>
+                for
+                    _ <- showsEventually(recorder, Seq("1", "0"), "app")
+                    _ <- Fiber.init(handle(Seq("0"), click("0")))
+                    // The region has dropped the instance: what is left is only its release.
+                    _ <- showsEventually(recorder, Seq("1"), "stopped")
+                    _ <- done.await
+                yield ()
+            }
+        yield succeed
+    }
+
+    // The shape of a mutation handler that stays in flight until the server answers, while the answer is only given once the new
+    // keyed content shows (D17 in the issue tracker's tests): the effect of the instance the handler's write shows must not wait for
+    // the handler.
+    "a click handler in flight does not hold back the effect of the keyed instance its write shows" in {
+        for
+            key     <- Signal.initRef("a")
+            started <- Latch.init(1)
+            answer  <- Latch.init(1)
+            node = (k: String) => UI.mounted((if k == "b" then started.release else Kyo.unit).andThen(span(s"content-$k"))).keyed(k)
+            ui   = div(button("save").onClick(key.set("b").andThen(answer.await)), key.render(k => div(node(k))))
+            _ <- mount(ui) { (recorder, handle) =>
+                for
+                    _      <- showsEventually(recorder, Seq("1", "0"), "content-a")
+                    before <- recorder.paintsAt(Seq("1"))
+                    _      <- Fiber.init(handle(Seq("0"), click("0")))
+                    // The region has rendered the new key while the handler is still in flight, waiting for `answer`.
+                    _ <- assertEventually(recorder.paintsAt(Seq("1")).map(_ > before))
+                    _ <- started.await
+                    _ <- answer.release
+                    _ <- showsEventually(recorder, Seq("1", "0"), "content-b")
+                yield ()
+            }
+        yield succeed
     }
 
     // The issue tracker's tool bar summary: a write takes a region's value away and a second one, made while the region's pass
