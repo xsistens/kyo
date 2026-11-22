@@ -39,7 +39,7 @@ class UIReactiveTypingTest extends kyo.test.Test[Any]:
     "a channel setter returns Self and stays chainable" in {
         val flag            = Signal.initConst(false)
         val text            = Signal.initConst("t")
-        val el: SpanElement = UI.span("x").hidden(flag).title(text).cssClass("c", flag).id("after")
+        val el: SpanElement = UI.span("x").hidden(flag).title(text).when(flag)(_.cssClass("c")).id("after")
         val link: Anchor    = UI.a("l").href(Signal.initConst(UI.Href.Path("/p"))).id("also-after")
         assert(el.attrs.reactiveBoolAttrs.contains("hidden"))
         assert(el.attrs.identifier == Present("after"))

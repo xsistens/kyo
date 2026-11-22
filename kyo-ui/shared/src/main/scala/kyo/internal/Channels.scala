@@ -14,9 +14,10 @@ final private[kyo] case class Channels(
     maybeAttrs: Map[String, Signal[Maybe[String]]],
     bools: Map[String, Signal[Boolean]],
     classes: Map[String, Signal[Boolean]],
+    classNames: Chunk[Signal[Maybe[String]]],
     style: Maybe[Signal[Style]]
 ):
-    def isEmpty: Boolean  = attrs.isEmpty && maybeAttrs.isEmpty && bools.isEmpty && classes.isEmpty && style.isEmpty
+    def isEmpty: Boolean  = attrs.isEmpty && maybeAttrs.isEmpty && bools.isEmpty && classes.isEmpty && classNames.isEmpty && style.isEmpty
     def nonEmpty: Boolean = !isEmpty
 
     /** The values the channels hold now, which the enclosing paint is about to put into the DOM. */
@@ -26,12 +27,13 @@ final private[kyo] case class Channels(
             Channels.currentValues(maybeAttrs),
             Channels.currentValues(bools),
             Channels.currentValues(classes),
+            classNames.map(SignalNow(_)),
             style.map(s => CssStyleRenderer.declarations(SignalNow(s)))
         )
 end Channels
 
 private[kyo] object Channels:
-    val empty: Channels = Channels(Map.empty, Map.empty, Map.empty, Map.empty, Absent)
+    val empty: Channels = Channels(Map.empty, Map.empty, Map.empty, Map.empty, Chunk.empty, Absent)
 
     /** The channels `el` carries, a `Bound.Follow` among them: its `value` as an attribute channel, masked and formatted the way a render
       * writes it, its `checked` as a boolean one.
@@ -41,7 +43,7 @@ private[kyo] object Channels:
         val text  = followedValue(el).fold(attrs.reactiveAttrs)(v => attrs.reactiveAttrs.updated("value", v))
         val bools = followedChecked(el).fold(attrs.reactiveBoolAttrs)(c => attrs.reactiveBoolAttrs.updated("checked", c))
         val maybe = silencedEvents(el).fold(attrs.reactiveMaybeAttrs)(s => attrs.reactiveMaybeAttrs.updated("data-kyo-ev", s))
-        Channels(text, maybe, bools, attrs.reactiveClasses, attrs.reactiveStyle)
+        Channels(text, maybe, bools, attrs.reactiveClasses, attrs.reactiveClassNames, attrs.reactiveStyle)
     end of
 
     /** The `data-kyo-ev` channel of an element that is silent through a signal (see UI.Element.silent): the events it declares while it
@@ -176,8 +178,10 @@ final private[kyo] case class RenderedChannels(
     maybeAttrs: Map[String, Maybe[String]],
     bools: Map[String, Boolean],
     classes: Map[String, Boolean],
+    // The name each class-name channel held, by position in Channels.classNames.
+    classNames: Chunk[Maybe[String]],
     style: Maybe[Seq[(String, String)]]
 )
 
 private[kyo] object RenderedChannels:
-    val empty: RenderedChannels = RenderedChannels(Map.empty, Map.empty, Map.empty, Map.empty, Absent)
+    val empty: RenderedChannels = RenderedChannels(Map.empty, Map.empty, Map.empty, Map.empty, Chunk.empty, Absent)

@@ -41,7 +41,7 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
             for
                 sel <- Signal.initRef(false)
                 rec = new Recording
-                ui  = UI.div(List.fill(fanOut)(UI.span("x").cssClass("hot", sel: Signal[Boolean]))*)
+                ui  = UI.div(List.fill(fanOut)(UI.span("x").when(sel: Signal[Boolean])(_.cssClass("hot")))*)
                 root   <- ReactiveUI.normalize(ui, Seq.empty)
                 _      <- ReactiveUI.subscribe(root, rec.exchange)
                 parked <- sel.waiters
@@ -55,7 +55,7 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
             for
                 sel <- Signal.initRef(false)
                 rec = new Recording
-                ui  = UI.div(List.fill(fanOut)(UI.span("x").cssClass("hot", sel: Signal[Boolean]))*)
+                ui  = UI.div(List.fill(fanOut)(UI.span("x").when(sel: Signal[Boolean])(_.cssClass("hot")))*)
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
                 before = rec.patches
@@ -90,7 +90,7 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
             for
                 sel <- Signal.initRef(false)
                 rec = new Recording
-                ui  = UI.div(List.fill(fanOut)(UI.span("x").cssClass("hot", sel: Signal[Boolean]))*)
+                ui  = UI.div(List.fill(fanOut)(UI.span("x").when(sel: Signal[Boolean])(_.cssClass("hot")))*)
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
                 _    <- sel.set(false)
@@ -105,7 +105,7 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
             for
                 selected <- Signal.initRef(0)
                 rec = new Recording
-                ui  = UI.div((0 until fanOut).map(i => UI.span("x").cssClass("hot", selected.map(_ == i)))*)
+                ui  = UI.div((0 until fanOut).map(i => UI.span("x").when(selected.map(_ == i))(_.cssClass("hot")))*)
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
                 _    <- selected.set(3)
@@ -125,7 +125,7 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
                 sel  <- Signal.initRef(false)
                 rows <- Signal.initRef(Chunk.from(0 until fanOut))
                 rec = new Recording
-                ui  = UI.div(rows.foreachKeyed(_.toString)(_ => UI.span("x").cssClass("hot", sel: Signal[Boolean])))
+                ui  = UI.div(rows.foreachKeyed(_.toString)(_ => UI.span("x").when(sel: Signal[Boolean])(_.cssClass("hot"))))
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
                 _    <- assertEventually(sel.waiters.map(_ == 1))
@@ -143,7 +143,7 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
         for
             sel <- Signal.initRef(false)
             rec = new Recording
-            ui  = UI.div(List.fill(fanOut)(UI.span("x").cssClass("hot", sel: Signal[Boolean]))*)
+            ui  = UI.div(List.fill(fanOut)(UI.span("x").when(sel: Signal[Boolean])(_.cssClass("hot")))*)
             _      <- Scope.run(ReactiveUI.normalize(ui, Seq.empty).map(ReactiveUI.subscribe(_, rec.exchange).unit))
             parked <- sel.waiters
             _      <- sel.set(true)

@@ -182,7 +182,9 @@ object DocsApp:
         val drawerHead =
             UI.div.cssClass("docs-drawer-head")(
                 UI.span.cssClass("docs-drawer-title")("Menu"),
-                UI.button.cssClass("docs-drawer-close").aria("label", "Close the menu").onClick(navOpenRef.updateAndGet(_ => false).unit)(
+                UI.button.cssClass("docs-drawer-close").aria(aria"aria-label" -> "Close the menu").onClick(navOpenRef.updateAndGet(_ =>
+                    false
+                ).unit)(
                     closeGlyph
                 )
             )
@@ -267,7 +269,7 @@ object DocsApp:
     private def mobileMenuFab(navOpenRef: SignalRef[Boolean])(using Frame): UI =
         UI.button
             .cssClass("docs-menu-fab")
-            .aria("label", "Open the documentation menu")
+            .aria(aria"aria-label" -> "Open the documentation menu")
             .onClick(navOpenRef.updateAndGet(_ => true).unit)(
                 menuGlyph,
                 UI.span.cssClass("docs-menu-fab-label")("Menu")
@@ -279,7 +281,8 @@ object DocsApp:
     // viewports. Decorative target, so it is aria-hidden.
     private def drawerBackdrop(navOpenRef: SignalRef[Boolean])(using Frame): UI =
         UI.Ast.Reactive(navOpenRef.map { open =>
-            val base = UI.div.cssClass("docs-drawer-backdrop").aria("hidden", "true").onClick(navOpenRef.updateAndGet(_ => false).unit)
+            val base =
+                UI.div.cssClass("docs-drawer-backdrop").aria(aria"aria-hidden" -> "true").onClick(navOpenRef.updateAndGet(_ => false).unit)
             if open then base.cssClass("docs-drawer-backdrop-open") else base
         })
 

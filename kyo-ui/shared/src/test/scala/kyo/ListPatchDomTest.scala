@@ -105,7 +105,7 @@ class ListPatchDomTest extends UITest:
                 rows     <- Signal.initRef(Chunk("a", "b", "c"))
                 selected <- Signal.initRef("")
             yield UI.div(
-                UI.ul(rows.foreachKeyed(identity)(item => UI.li(item).cssClass("hot", selected.map(_ == item)))),
+                UI.ul(rows.foreachKeyed(identity)(item => UI.li(item).when(selected.map(_ == item))(_.cssClass("hot")))),
                 UI.button("sel").id("sel").onClick(selected.set("a")),
                 UI.button("drop").id("drop").onClick(rows.set(Chunk("a", "c")))
             )

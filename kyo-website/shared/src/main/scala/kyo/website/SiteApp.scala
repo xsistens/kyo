@@ -166,9 +166,9 @@ object SiteApp:
         val currentPrefix: String =
             docsHome.split('/').filter(_.nonEmpty).headOption.getOrElse("latest")
         val overviewHome: String = s"/$currentPrefix/"
-        UI.header.cssClass("site-header").data("section", "header")(
+        UI.header.cssClass("site-header").data(data"data-section" -> "header")(
             UI.div.cssClass("site-header-inner")(
-                UI.a.cssClass("brand").data("role", "logo").href(Href.Path("/"))(
+                UI.a.cssClass("brand").data(data"data-role" -> "logo").href(Href.Path("/"))(
                     // The crisp vector mark (/kyo.svg): the 1000x1000 raster (/kyo.png) downscaled to the
                     // 28px header mark read pixelated and aliased next to the wordmark. The SVG is the same
                     // logo as pure vector art, so it renders sharp at any size.
@@ -208,7 +208,7 @@ object SiteApp:
                     versionSelect(versions, currentPrefix, switchVersion),
                     // Theme toggle: holds both icons; CSS shows the one matching the root data-theme.
                     // onClick flips data-theme + persists (the bundle's effect; a no-op on the SSG).
-                    UI.button.cssClass("theme-toggle").aria("label", "Toggle dark mode").onClick(toggleTheme)(
+                    UI.button.cssClass("theme-toggle").aria(aria"aria-label" -> "Toggle dark mode").onClick(toggleTheme)(
                         UI.span.cssClass("sun")(sunIcon),
                         UI.span.cssClass("moon")(moonIcon)
                     ),

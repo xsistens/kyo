@@ -101,7 +101,7 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
         val ui = UI.div
             .id("drag-node")
             .cssClass("card")
-            .data("kind", "task")
+            .data(data"data-kind" -> "task")
             .dragSource(source)
             .dropTarget(target)
             .onDragStart((_: Drag.Event) => ())

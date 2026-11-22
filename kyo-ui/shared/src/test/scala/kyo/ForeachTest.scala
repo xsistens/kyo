@@ -691,7 +691,7 @@ class ForeachTest extends UITest:
                 items <- Signal.initRef(Chunk(("a", 3), ("b", 3), ("c", 3)))
                 page  <- Signal.initRef(0)
             yield UI.div(
-                items.foreachIndexed((i, row) => UI.span(row._1).id(s"row$i").cssClass("on", page.map(p => p == 0 || row._2 == 2))),
+                items.foreachIndexed((i, row) => UI.span(row._1).id(s"row$i").when(page.map(p => p == 0 || row._2 == 2))(_.cssClass("on"))),
                 UI.button("Next").id("next").onClick(page.set(1)),
                 UI.button("Shrink").id("shrink").onClick(items.set(Chunk(("a", 2), ("b", 2))))
             )

@@ -407,7 +407,7 @@ private[kyo] object ChartLower:
         val withTitle = spec.a11y.title.fold(sized)(t => sized(Svg.title(t)))
         val withDesc  = spec.a11y.desc.fold(withTitle)(d => withTitle(Svg.desc(d)))
         val withRole  = if spec.a11y.title.isDefined then withDesc.role("img") else withDesc
-        spec.a11y.ariaLabel.fold(withRole)(lbl => withRole.aria("label", lbl))
+        spec.a11y.ariaLabel.fold(withRole)(lbl => withRole.aria(Aria.label -> lbl))
     end buildBaseSvg
 
     private def lowerStatic[A](rows: Chunk[A], spec: Chart[A], gradPrefix: String)(using Frame, AllowUnsafe, SignalNow.Locals): Svg.Root =

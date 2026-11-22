@@ -958,26 +958,42 @@ class HtmlRendererTest extends UITest:
         // The PRECEDENCE rule above Element.withReactiveAttr: the channel is the value. Written beside it, the static value is a
         // second attribute of the same name, and the browser's parser keeps the first one, so the page shows the static value
         // until the channel's first patch.
-        def render(ui: UI)(using Frame): String < Sync = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
-        def count(html: String, attr: String): Int     = html.split(s" $attr=", -1).length - 1
-        def held(html: String, attr: String): Boolean  = count(html, attr) == 1 && html.contains(s""" $attr="b"""")
+        given CanEqual[Maybe[String], Maybe[String]]                            = CanEqual.derived
+        def render(ui: UI)(using Frame): String < Sync                          = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
+        def count(html: String, attr: String): Int                              = html.split(s" $attr=", -1).length - 1
+        def held(html: String, attr: String): Boolean                           = count(html, attr) == 1 && html.contains(s""" $attr="b"""")
+        def withRole(el: SpanElement, role: Signal[Maybe[String]]): SpanElement =
+            el.withAttrs(el.attrs.copy(reactiveMaybeAttrs = el.attrs.reactiveMaybeAttrs.updated("role", role)))
         for
-            ref <- Signal.initRef("b")
-            sig = ref: Signal[String]
+            ref  <- Signal.initRef("b")
+            some <- Signal.initRef[Maybe[String]](Present("b"))
+            none <- Signal.initRef[Maybe[String]](Absent)
+            sig   = ref: Signal[String]
+            maybe = some: Signal[Maybe[String]]
+            no    = none: Signal[Maybe[String]]
             input1 <- render(UI.input.placeholder("a").placeholder(sig))
             input2 <- render(UI.input.placeholder(sig).placeholder("a"))
             area   <- render(UI.textarea.placeholder("a").placeholder(sig))
-            aria1  <- render(UI.span("x").aria("label", "a").aria("label", sig))
-            aria2  <- render(UI.span("x").aria("label", sig).aria("label", "a"))
+            aria1  <- render(UI.span("x").aria(Aria.label -> "a").aria(Aria.label -> sig))
+            aria2  <- render(UI.span("x").aria(Aria.label -> sig).aria(Aria.label -> "a"))
+            flag   <- render(UI.span("x").aria(Aria.busy -> no).aria(Aria.busy -> "true"))
+            title1 <- render(UI.span("x").title("a").title(sig))
+            title2 <- render(UI.span("x").title(sig).title("a"))
             frame  <- render(UI.iframe("/f").title("a").title(sig))
-            data1  <- render(UI.span("x").data("k", "a").withReactiveAttr("data-k", sig))
-            data2  <- render(UI.span("x").withReactiveAttr("data-k", sig).data("k", "a"))
+            data1  <- render(UI.span("x").data(data"data-k" -> "a").withReactiveAttr("data-k", sig))
+            data2  <- render(UI.span("x").withReactiveAttr("data-k", sig).data(data"data-k" -> "a"))
+            role1  <- render(withRole(UI.span("x").role("a"), maybe))
+            role2  <- render(withRole(UI.span("x"), maybe).role("a"))
         yield
             assert(held(input1, "placeholder") && held(input2, "placeholder"), s"$input1 | $input2")
             assert(held(area, "placeholder"), area)
             assert(held(aria1, "aria-label") && held(aria2, "aria-label"), s"$aria1 | $aria2")
+            assert(count(flag, "aria-busy") == 0, flag)
+            assert(held(title1, "title") && held(title2, "title"), s"$title1 | $title2")
+            assert(!title1.contains("data-kyo-prop-title") && !title2.contains("data-kyo-prop-title"), s"$title1 | $title2")
             assert(held(frame, "title"), frame)
             assert(held(data1, "data-k") && held(data2, "data-k"), s"$data1 | $data2")
+            assert(held(role1, "role") && held(role2, "role"), s"$role1 | $role2")
         end for
     }
 
