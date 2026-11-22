@@ -47,6 +47,18 @@ class HtmlRendererPathTest extends kyo.test.Test[Any]:
             assert(paths(enter) == Seq("0", "1"))
     }
 
+    "an element whose only channel is its inline style, or whose only hook is onAttached, carries its path" in {
+        // A channel patches its element by path, and an attach reaches the hook by path, so neither works on an element without one.
+        for
+            st     <- Signal.initRef(Style.width(Length.Px(10)))
+            styled <- renderHtml(UI.div(UI.span.inlineStyle(st)))
+            // The typed setter is the Scala.js one (kyo.onAttached); the field is shared.
+            hooked <- renderHtml(UI.div(UI.span.withAttrs(UI.span.attrs.copy(onAttached = Present(_ => Kyo.unit)))))
+        yield
+            assert(paths(styled) == Seq("0"), styled)
+            assert(paths(hooked) == Seq("0"), hooked)
+    }
+
     "a client-side marker set to false is unset: no path, no marker, and a later false takes an earlier true back" in {
         val off: Seq[SpanElement => SpanElement] = Seq(
             _.focusAuto(false),

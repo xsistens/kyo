@@ -1422,12 +1422,11 @@ private[kyo] object HtmlRenderer:
 
     private def addressedByClient(attrs: Attrs): Boolean =
         attrs.identifier.nonEmpty ||
-            attrs.reactiveAttrs.nonEmpty || attrs.reactiveBoolAttrs.nonEmpty || attrs.reactiveClasses.nonEmpty ||
-            attrs.tabIndex.nonEmpty || attrs.focusTrap.nonEmpty || attrs.focusGroup.nonEmpty ||
+            attrs.hasChannels || attrs.tabIndex.nonEmpty || attrs.focusTrap.nonEmpty || attrs.focusGroup.nonEmpty ||
             attrs.focusAuto.nonEmpty || attrs.focusRestore.nonEmpty ||
             attrs.dragSource.nonEmpty || attrs.dropTarget.nonEmpty || attrs.scrollAuto.nonEmpty ||
             attrs.enterTransition.nonEmpty || attrs.leaveTransition.nonEmpty || attrs.portal.nonEmpty ||
-            attrs.jsProps.nonEmpty
+            attrs.jsProps.nonEmpty || attrs.onAttached.nonEmpty
 
     // ---- Helpers ----
 
