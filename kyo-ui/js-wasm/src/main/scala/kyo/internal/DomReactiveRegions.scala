@@ -895,6 +895,9 @@ private[kyo] object DomReactiveRegions:
       */
     private val opened = mutable.ArrayBuffer.empty[DomReactiveRegions]
 
+    /** How many registries are open now: none once every mount on the page has closed. For tests. */
+    private[kyo] def openCount: Int = opened.size
+
     /** Whether `registry` is among the open ones. For tests. */
     private[kyo] def isOpen(registry: DomReactiveRegions): Boolean = opened.exists(_ eq registry)
 

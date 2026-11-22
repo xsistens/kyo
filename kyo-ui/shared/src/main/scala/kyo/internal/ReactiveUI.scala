@@ -721,7 +721,8 @@ private[kyo] object ReactiveUI:
             dispatch <- rui.mountDispatch match
                 case Present(d) => Kyo.lift(d)
                 case Absent     => MountDispatch.init
-            session = new MountSession
+            audited <- MountSession.audited.get
+            session = new MountSession(audited)
             // The session is a group of its own, released before anything it subscribed is.
             _ <- ReleaseGroup.owning { group =>
                 for

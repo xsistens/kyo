@@ -80,6 +80,19 @@ class MountedTest extends kyo.test.Test[Any]:
 
     private def click(path: String*): UIEvent = UIEvent.Click(path, MouseEventData(UI.Modifiers.none, Absent))
 
+    /** Subscribes `root` with its mount tables checking every state they take against their invariants (see `kyo.internal.MountAudit`). */
+    private def subscribeAudited(root: ReactiveUI, exchange: UIExchange)(using Frame): ReactiveUI.Subscription < (Async & Scope) =
+        kyo.internal.MountSession.audited.let(true)(ReactiveUI.subscribe(root, exchange))
+
+    /** Asserts that the mount tables of `sub` checked their states and found every one consistent. */
+    private def assertConsistent(sub: ReactiveUI.Subscription)(using Frame, kyo.test.AssertScope): Unit < Sync =
+        Sync.Unsafe.defer {
+            val audit = sub.mountSession.audit
+            assert(audit.nonEmpty, "the subscription was not audited")
+            val found = audit.get.inconsistencies
+            assert(audit.get.checked.get > 0 && found.isEmpty, s"mount table states against the invariants: ${found.mkString("; ")}")
+        }
+
     private def mount[A](ui: UI, keepsRows: Boolean = false, beforePaint: (Seq[String], String) => Unit < Async = (_, _) => ())(
         f: (Recorder, (Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope)
     )(using Frame, kyo.test.AssertScope): A < Async =
@@ -94,8 +107,9 @@ class MountedTest extends kyo.test.Test[Any]:
             for
                 _    <- recorder.initial(ui)
                 root <- ReactiveUI.normalize(ui, Seq.empty)
-                sub  <- ReactiveUI.subscribe(root, recorder)
+                sub  <- subscribeAudited(root, recorder)
                 a    <- f(recorder, sub)
+                _    <- assertConsistent(sub)
             yield (a, sub.mountSession)
             end for
         }.map((a, session) => assertEventually(pendingVerdicts(session).map(_ == 0)).andThen(a))
@@ -479,7 +493,7 @@ class MountedTest extends kyo.test.Test[Any]:
                 node     = mountedNodes(root).head
                 spec     = node.mounted.get
                 identity = spec.identity.get
-                (table, top) <- kyo.internal.MountTable.root(Seq.empty)
+                (table, top) <- kyo.internal.MountTable.root(Seq.empty, new kyo.internal.MountSession(audited = true))
                 outerFirst   <- top.beginWalk(Seq(root))
                 older = top.child(outerFirst, region)
                 olderPass <- older.beginWalk(region.children)
@@ -498,9 +512,11 @@ class MountedTest extends kyo.test.Test[Any]:
                 againPass <- newer.beginWalk(region.children)
                 again     <- newer.claim(node, identity, spec, againPass).map(liveOf)
                 _         <- newer.endWalk
+                found     <- Sync.Unsafe.defer(table.session.audit.fold(Chunk("not audited"))(_.inconsistencies))
                 _         <- table.evictAll
                 after     <- released.get
             yield
+                assert(found.isEmpty, s"mount table states against the invariants: ${found.mkString("; ")}")
                 def same(a: Maybe[kyo.internal.MountInstance]) = a.nonEmpty && first.exists(_ eq a.get)
                 assert(same(kept), "the newer subscription did not find the kept instance")
                 assert(!gone, "the older subscription released the instance the newer one shows")
@@ -508,6 +524,179 @@ class MountedTest extends kyo.test.Test[Any]:
                 assert(same(again), "the table lost the instance after the older subscription's pass")
                 assert(after, "evicting the table did not release the instance")
         }
+    }
+
+    /** What a closed session left behind: the parts of its root table that are not empty, watches that never ended, verdicts that still
+      * wait, and the mounts and boundaries its dispatch still finds.
+      */
+    private def leftAfterClose(session: kyo.internal.MountSession, dispatch: MountDispatch)(using Frame): Chunk[String] < Sync =
+        for
+            cells <- dispatch.registered
+            gated <- dispatch.gated
+            left  <- Sync.Unsafe.defer(session.root.fold(Chunk("no root table"))(_.leftovers))
+        yield
+            val c = session.counters
+            left ++
+                Chunk(
+                    "unended watches"  -> (c.registered.get - c.unregistered.get),
+                    "pending verdicts" -> c.pendingVerdicts.get,
+                    "dispatch cells"   -> cells.toLong,
+                    "boundary gates"   -> gated.toLong
+                ).filter(_._2 != 0).map((part, n) => s"$part=$n")
+
+    /** Whether a paint after the first `n` shows `text`. */
+    private def paintedSince(recorder: Recorder, n: Int, text: String)(using Frame): Boolean < Sync =
+        recorder.paintsAfter(n).map(_.exists(_._2.contains(text)))
+
+    "a closed page leaves nothing behind in its mount table, its watches or its dispatch" in {
+        for
+            runs     <- AtomicInt.init(0)
+            released <- AtomicInt.init(0)
+            gate     <- Promise.init[Unit, Any]
+            show     <- Signal.initRef(true)
+            items    <- Signal.initRef(Chunk("a", "b", "c"))
+            tick     <- Signal.initRef(0)
+            node = (name: String, waits: Boolean) =>
+                UI.mounted(
+                    Scope.ensure(released.incrementAndGet.unit)
+                        .andThen(runs.incrementAndGet)
+                        .andThen(if waits then gate.get else Kyo.unit)
+                        .andThen(span(s"$name:mounted"))
+                ).keyed(name)
+            ui = div(
+                show.render(on => if on then div(node("top", false)) else span("off")),
+                items.foreachKeyed(identity)(id => div(tick.render(n => div(span(s"$id:$n"), node("row", false))))),
+                div.portal(true)(tick.render(n => div(span(s"portal:$n"), node("portal", false)))),
+                Svg.svg(tick.render(n => Svg.g(Svg.circle.cx(n.toDouble).cy(5).r(3)))),
+                UI.boundary.placeholder(span("skel"))(div(node("late", true)))
+            )
+            recorder = new Recorder(keepsRows = true)
+            _                               <- recorder.initial(ui)
+            root                            <- ReactiveUI.normalize(ui, Seq.empty)
+            (session, cellsOpen, gatesOpen) <- Scope.run {
+                for
+                    sub <- subscribeAudited(root, recorder)
+                    // top, three rows, the portal's and the boundary's, which waits for the gate.
+                    _ <- assertEventually(runs.get.map(_ == 6))
+                    p <- recorder.paintCount
+                    _ <- gate.completeUnitDiscard
+                    _ <- assertEventually(paintedSince(recorder, p, "late:mounted"))
+                    _ <- show.set(false)
+                    _ <- assertEventually(released.get.map(_ == 1))
+                    _ <- show.set(true)
+                    _ <- assertEventually(runs.get.map(_ == 7))
+                    // Row b goes, c moves before a.
+                    _ <- items.set(Chunk("c", "a"))
+                    _ <- assertEventually(released.get.map(_ == 2))
+                    // The list's pass that dropped row b dropped the entries of the regions in it too, though their subscriptions
+                    // ended only as the row closed.
+                    _ <- Sync.Unsafe.defer {
+                        val paths = sub.mountSession.root.fold(Chunk.empty[Seq[String]])(_.regionPaths)
+                        assert(
+                            !paths.exists(_.startsWith(Seq("1", "b"))) && paths.exists(_.startsWith(Seq("1", "a"))),
+                            s"regions after row b went: ${paths.mkString(", ")}"
+                        )
+                    }
+                    p <- recorder.paintCount
+                    _ <- tick.set(1)
+                    _ <-
+                        assertEventually(Kyo.foreach(Chunk("a:1", "c:1", "portal:1"))(paintedSince(recorder, p, _)).map(_.forall(identity)))
+                    _ <- assertConsistent(sub)
+                    // Five instances live: top, rows a and c, the portal's and the boundary's.
+                    cells <- root.mountDispatch.get.registered
+                    gates <- root.mountDispatch.get.gated
+                yield (sub.mountSession, cells, gates)
+            }
+            _ <- assertEventually(
+                leftAfterClose(session, root.mountDispatch.get).map { left =>
+                    assert(left.isEmpty, s"after close: ${left.mkString(", ")}")
+                    true
+                },
+                5.seconds
+            )
+            started <- runs.get
+            ended   <- released.get
+        yield
+            assert(cellsOpen == 5 && gatesOpen >= 1, s"while open: $cellsOpen dispatch cells, $gatesOpen boundary gates")
+            assert(started == 7 && ended == 7, s"$started instances started, $ended released")
+        end for
+    }
+
+    "a region whose watch ends after its table was evicted leaves no decision behind" in {
+        for
+            tick <- Signal.initRef(0)
+            root <- ReactiveUI.normalize(div(tick.render(_ => div(UI.mounted(Kyo.lift(span("held"))).keyed("k")))), Seq.empty)
+            region   = root.children.head
+            node     = mountedNodes(root).head
+            spec     = node.mounted.get
+            identity = spec.identity.get
+            (table, top) <- kyo.internal.MountTable.root(Seq.empty, new kyo.internal.MountSession(audited = true))
+            outer        <- top.beginWalk(Seq(root))
+            inner = top.child(outer, region)
+            _ <- Scope.run {
+                for
+                    watch <- inner.register
+                    pass  <- inner.beginWalk(region.children)
+                    _     <- inner.claim(node, identity, spec, pass)
+                    _     <- inner.endWalk
+                    // The region started a pass that has not recorded its walk, so the cut the next pass asks for is not reached.
+                    source  <- Signal.initRef(0)
+                    started <- Latch.init(1)
+                    _       <- Fiber.init(
+                        source.observeStamped(watch.stamp)(_ =>
+                            started.release
+                        )
+                    )
+                    _ <- started.await
+                    _ <- inner.beginWalk(Seq.empty)
+                    _ <- table.evictAll
+                yield ()
+            }
+            // The scope that registered the watch has closed after the eviction: the watch ended and reported the region caught up.
+            _ <- assertEventually(
+                Sync.Unsafe.defer(table.leftovers).map { left =>
+                    assert(left.isEmpty, s"the evicted table holds ${left.mkString(", ")}")
+                    true
+                },
+                5.seconds
+            )
+            found <- Sync.Unsafe.defer(table.session.audit.fold(Chunk("not audited"))(_.inconsistencies))
+        yield assert(found.isEmpty, s"mount table states against the invariants: ${found.mkString("; ")}")
+        end for
+    }
+
+    "a pass, a claim and a subscription that come after the table was evicted add nothing to it" in {
+        for
+            released <- AtomicBoolean.init(false)
+            tick     <- Signal.initRef(0)
+            root     <- ReactiveUI.normalize(
+                div(tick.render(_ => div(UI.mounted(Scope.ensure(released.set(true)).andThen(span("held"))).keyed("k")))),
+                Seq.empty
+            )
+            region   = root.children.head
+            node     = mountedNodes(root).head
+            spec     = node.mounted.get
+            identity = spec.identity.get
+            (table, top) <- kyo.internal.MountTable.root(Seq.empty, new kyo.internal.MountSession(audited = true))
+            outer        <- top.beginWalk(Seq(root))
+            inner = top.child(outer, region)
+            _           <- table.evictAll
+            (left, ran) <- Scope.run {
+                for
+                    pass <- inner.beginWalk(region.children)
+                    live <- inner.claim(node, identity, spec, pass).map(liveOf)
+                    _    <- inner.endWalk
+                    _    <- table.content(Seq.empty, 0)
+                    _    <- assertEventually(live.fold(Kyo.lift(false))(_.cell.current.map(_.isInstanceOf[kyo.internal.MountState.Ready])))
+                    left <- Sync.Unsafe.defer(table.leftovers)
+                yield (left, live.nonEmpty)
+            }
+            gone <- released.get
+        yield
+            assert(left.isEmpty, s"the evicted table took ${left.mkString(", ")}")
+            assert(ran, "the late claim showed no instance")
+            assert(gone, "the instance of the late claim outlived the scope that showed it")
+        end for
     }
 
     "an event registration that ends leaves a later one at the same path in place" in {
@@ -1165,7 +1354,7 @@ class MountedTest extends kyo.test.Test[Any]:
                 for
                     _    <- recorder.initial(ui)
                     root <- ReactiveUI.normalize(ui, Seq.empty)
-                    _    <- ReactiveUI.subscribe(root, holding(entered, forever))
+                    sub  <- subscribeAudited(root, holding(entered, forever))
                     _    <- assertEventually(Sync.defer(published.get()))
                     _    <- Sync.defer(armed.set(true))
                     _    <- items.set(Chunk(("a", 1)))
@@ -1173,6 +1362,7 @@ class MountedTest extends kyo.test.Test[Any]:
                     _    <- open.set(false)
                     _    <- assertEventually(recorder.shown(Seq("0")).map(_.contains("closed")))
                     _    <- assertEventually(Sync.Unsafe.defer(probe.unsafe.waiters() == 0))
+                    _    <- assertConsistent(sub)
                 yield ()
             }
         yield succeed
@@ -1814,12 +2004,13 @@ class MountedTest extends kyo.test.Test[Any]:
                 // The write runs in a batch that stays open, so the cut that would decide X is not taken while the session lives.
                 (session, batch) <- Scope.run {
                     for
-                        sub   <- ReactiveUI.subscribe(root, recorder)
+                        sub   <- subscribeAudited(root, recorder)
                         _     <- entered.await
                         batch <- Fiber.initUnscoped(sub.mountSession.within(show.set(false).andThen(hold.get)))
                         _     <- assertEventually(releasedK.get)
                         _     <- assertEventually(pendingVerdicts(sub.mountSession).map(_ == 1))
                         gone  <- releasedX.get
+                        _     <- assertConsistent(sub)
                     yield
                         assert(!gone, "X was released while the batch held its cut back")
                         (sub.mountSession, batch)
@@ -2102,13 +2293,14 @@ class MountedTest extends kyo.test.Test[Any]:
 
     private def mountWith[A](recorder: Recorder, ui: UI)(
         f: ((Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope)
-    )(using Frame): A < Async =
+    )(using Frame, kyo.test.AssertScope): A < Async =
         Scope.run {
             for
                 _    <- recorder.initial(ui)
                 root <- ReactiveUI.normalize(ui, Seq.empty)
-                sub  <- ReactiveUI.subscribe(root, recorder)
+                sub  <- subscribeAudited(root, recorder)
                 a    <- f(sub.handle)
+                _    <- assertConsistent(sub)
             yield a
         }
 
@@ -2415,7 +2607,7 @@ class MountedTest extends kyo.test.Test[Any]:
                 for
                     _    <- recorder.initial(ui)
                     root <- ReactiveUI.normalize(ui, Seq.empty)
-                    sub  <- ReactiveUI.subscribe(root, recorder)
+                    sub  <- subscribeAudited(root, recorder)
                     c = sub.mountSession.counters
                     _ <- assertEventually(Sync.defer(c.registered.get == rows + 1))
                     _ <- assertEventually(Sync.defer(c.skipped.get >= rows + 1))
@@ -2427,6 +2619,7 @@ class MountedTest extends kyo.test.Test[Any]:
                     // The new row's region registers as its row subscribes, which may be after the list painted it.
                     _ <- assertEventually(Sync.defer(c.registered.get == before._1 + 1))
                     after = (c.registered.get, c.planned.get, c.scanned.get, c.cuts.get, c.skipped.get)
+                    _ <- assertConsistent(sub)
                 yield (before, after)
             }
         yield
@@ -2440,6 +2633,211 @@ class MountedTest extends kyo.test.Test[Any]:
             assert(scannedAfter == 0 && cutsAfter == 0, s"a cut scanned regions with nothing in transit: ${counts}")
             assert(regAfter == regBefore + 1, s"a re-render or a new row registered more than the new row's region: ${counts}")
             assert(skippedAfter - skippedBefore >= rows, s"the tick did not reach every row: ${counts}")
+        end for
+    }
+
+    /** A keyed list of `rows` rows with a keyed mount in each, two rows swapped, then the first row removed: the live instances the
+      * planned passes examined for whether a region still shows them, for the swap and for the removal, and how often an effect ran and
+      * was released.
+      */
+    private def examinedForMountedRows(rows: Int)(using Frame, kyo.test.AssertScope) =
+        val order   = (0 until rows).map(i => s"r$i").toVector
+        val swapped = order.updated(1, order(rows - 2)).updated(rows - 2, order(1))
+        for
+            runs     <- AtomicInt.init(0)
+            released <- AtomicInt.init(0)
+            items    <- Signal.initRef(Chunk.from(order))
+            row = (id: String) =>
+                UI.mounted(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.andThen(span(id)))).keyed("m")
+            ui       = div(items.foreachKeyed(identity)(id => div(row(id))))
+            recorder = new Recorder(keepsRows = true) // patches the list as the DOM backend does
+            counts <- Scope.run {
+                for
+                    _    <- recorder.initial(ui)
+                    root <- ReactiveUI.normalize(ui, Seq.empty)
+                    sub  <- subscribeAudited(root, recorder)
+                    c = sub.mountSession.counters
+                    _ <- assertEventually(runs.get.map(_ == rows))
+                    examinedBefore = c.examined.get
+                    plannedBefore  = c.planned.get
+                    _ <- items.set(Chunk.from(swapped))
+                    _ <- assertEventually(Sync.defer(c.planned.get > plannedBefore))
+                    examinedSwap = c.examined.get
+                    _ <- items.set(Chunk.from(swapped.drop(1)))
+                    _ <- assertEventually(released.get.map(_ == 1))
+                    examinedRemove = c.examined.get
+                    total <- runs.get
+                    gone  <- released.get
+                    _     <- assertConsistent(sub)
+                yield (examinedSwap - examinedBefore, examinedRemove - examinedSwap, total, gone)
+            }
+        yield counts
+        end for
+    end examinedForMountedRows
+
+    "a swap and a removal in a keyed list with a keyed mount in every row examine as many instances for 500 rows as for 50" in {
+        for
+            small <- examinedForMountedRows(50)
+            large <- examinedForMountedRows(500)
+        yield
+            java.lang.System.out.println(s"MOUNTEXAMINED (swap, remove, runs, released) rows=50 $small rows=500 $large")
+            assert(small._3 == 50 && small._4 == 1 && large._3 == 500 && large._4 == 1, s"runs and releases: $small, $large")
+            assert(
+                small._1 == large._1 && small._2 == large._2,
+                s"instances examined (swap, remove): ${(small._1, small._2)} for 50 rows, ${(large._1, large._2)} for 500 rows"
+            )
+    }
+
+    /** A keyed list of `rows` table rows, each with a region without a mount in one cell and a keyed mount in the other, filled after
+      * the list subscribed, then every row's region re-rendered once: from before the re-render until every row shows it, the regions
+      * the passes looked at for whether one lies inside their own, and how many passes skipped and planned their walk.
+      */
+    private def belowForRegionRows(rows: Int)(using Frame, kyo.test.AssertScope) =
+        for
+            runs  <- AtomicInt.init(0)
+            items <- Signal.initRef(Chunk.empty[String])
+            tick  <- Signal.initRef(0)
+            row = (id: String) =>
+                tr(
+                    td(tick.render(n => span(s"$id:$n"))),
+                    td(UI.mounted(runs.incrementAndGet.andThen(span(id))).keyed("m").placeholder(span("...")))
+                )
+            ui       = div(table(tbody(items.foreachKeyed(identity)(row))))
+            recorder = new Recorder(keepsRows = true) // patches the list as the DOM backend does
+            counts <- Scope.run {
+                for
+                    _    <- recorder.initial(ui)
+                    root <- ReactiveUI.normalize(ui, Seq.empty)
+                    sub  <- subscribeAudited(root, recorder)
+                    c = sub.mountSession.counters
+                    _ <- items.set(Chunk.from((0 until rows).map(i => s"r$i")))
+                    _ <- assertEventually(runs.get.map(_ == rows))
+                    _ <- assertEventually(Sync.defer(c.registered.get == 2 * rows + 1 && c.skipped.get >= rows))
+                    before = (c.below.get, c.skipped.get, c.planned.get)
+                    _ <- tick.set(1)
+                    _ <- Kyo.foreachDiscard(0 until rows)(i => showsEventually(recorder, Seq("0", "0", "0", s"r$i", "0", "0"), s"r$i:1"))
+                    after = (c.below.get, c.skipped.get, c.planned.get)
+                    _ <- assertConsistent(sub)
+                yield (after._1 - before._1, after._2 - before._2, after._3 - before._3)
+            }
+        yield counts
+        end for
+    end belowForRegionRows
+
+    "a region without a mount in every row of a keyed list with mounts looks at one region at most per pass for 50 and for 500 rows" in {
+        for
+            small <- belowForRegionRows(50)
+            large <- belowForRegionRows(500)
+        yield
+            java.lang.System.out.println(s"MOUNTBELOW (regions looked at, passes skipped, planned) rows=50 $small rows=500 $large")
+            assert(small._2 >= 50 && large._2 >= 500, s"the re-render did not skip a pass in every row: $small, $large")
+            assert(
+                small._1 <= small._2 + small._3 && large._1 <= large._2 + large._3,
+                s"regions looked at for one inside, against passes: $small for 50 rows, $large for 500 rows"
+            )
+    }
+
+    /** `steps` states of two keyed lists over the ids `r0` to `r15`, each one step from the one before: two rows swapped, a row removed,
+      * an absent id inserted, a row moved within its list, or a row moved to the other list. Fixed by `seed`; an id is in one list at most.
+      */
+    private def listSteps(seed: Long, steps: Int): Vector[(Vector[String], Vector[String])] =
+        val random                                                   = new scala.util.Random(seed)
+        val pool                                                     = (0 until 16).map(i => s"r$i").toVector
+        def insert(rows: Vector[String], id: String): Vector[String] =
+            val at = random.nextInt(rows.size + 1)
+            (rows.take(at) :+ id) ++ rows.drop(at)
+        def next(lists: (Vector[String], Vector[String])): (Vector[String], Vector[String]) =
+            val (left, right)                                        = lists
+            val toLeft                                               = random.nextBoolean()
+            val (from, to)                                           = if toLeft then (right, left) else (left, right)
+            def pair(changed: Vector[String], other: Vector[String]) = if toLeft then (other, changed) else (changed, other)
+            val absent                                               = pool.filterNot(id => left.contains(id) || right.contains(id))
+            random.nextInt(5) match
+                case 0 if from.size >= 2 =>
+                    val i = random.nextInt(from.size)
+                    val j = (i + 1 + random.nextInt(from.size - 1)) % from.size
+                    pair(from.updated(i, from(j)).updated(j, from(i)), to)
+                case 1 if from.nonEmpty =>
+                    pair(from.patch(random.nextInt(from.size), Nil, 1), to)
+                case 2 if absent.nonEmpty =>
+                    pair(insert(from, absent(random.nextInt(absent.size))), to)
+                case 3 if from.size >= 2 =>
+                    val i = random.nextInt(from.size)
+                    pair(insert(from.patch(i, Nil, 1), from(i)), to)
+                case 4 if from.nonEmpty =>
+                    val i = random.nextInt(from.size)
+                    pair(from.patch(i, Nil, 1), insert(to, from(i)))
+                case _ => next(lists)
+            end match
+        end next
+        Vector.iterate(((0 until 6).map(pool).toVector, (6 until 10).map(pool).toVector), steps + 1)(next)
+    end listSteps
+
+    "random swaps, removals, insertions and moves within and between two keyed lists keep one instance per row and a consistent table" in {
+        val states = listSteps(seed = 20261022L, steps = 60)
+        // Each step starts the ids it adds and releases the ids it takes away; one that moves keeps its instance.
+        val expected = states.sliding(2).foldLeft(Vector((states.head._1 ++ states.head._2).map(_ -> 1).toMap -> Map.empty[String, Int])) {
+            (acc, pair) =>
+                val (runs, released) = acc.last
+                val before           = pair(0)._1 ++ pair(0)._2
+                val after            = pair(1)._1 ++ pair(1)._2
+                val started          = after.filterNot(before.contains)
+                val stopped          = before.filterNot(after.contains)
+                acc :+ (
+                    started.foldLeft(runs)((m, id) => m.updated(id, m.getOrElse(id, 0) + 1)),
+                    stopped.foldLeft(released)((m, id) => m.updated(id, m.getOrElse(id, 0) + 1))
+                )
+        }
+        def order(html: String, list: String): Vector[String] =
+            s"""data-kyo-path="$list\\.([^".]+)"""".r.findAllMatchIn(html).map(_.group(1)).toVector
+        for
+            runs     <- AtomicRef.init(Map.empty[String, Int])
+            released <- AtomicRef.init(Map.empty[String, Int])
+            next     <- AtomicRef.init(states.head)
+            left     <- Signal.initRef(Chunk.from(states.head._1))
+            right    <- Signal.initRef(Chunk.from(states.head._2))
+            row = (id: String) =>
+                UI.mounted(
+                    Scope.ensure(released.updateAndGet(m => m.updated(id, m.getOrElse(id, 0) + 1)).unit)
+                        .andThen(runs.updateAndGet(m => m.updated(id, m.getOrElse(id, 0) + 1)).map(m => span(s"[$id:${m(id)}]")))
+                ).keyed("row")
+            ui = div(
+                // Both lists change in one click, as one change: a row moved between them keeps its instance.
+                button("go").onClick(next.get.map((l, r) => UI.batch(left.set(Chunk.from(l)).andThen(right.set(Chunk.from(r))))).unit),
+                left.foreachKeyed(identity)(id => div(row(id))),
+                right.foreachKeyed(identity)(id => div(row(id)))
+            )
+            _ <- mount(ui) { (recorder, handle) =>
+                def settled(at: Int)(using Frame, kyo.test.AssertScope): Unit < Async =
+                    val ((l, r), (wantRuns, wantReleased)) = (states(at), expected(at))
+                    for
+                        _ <- assertEventually(runs.get.map(_ == wantRuns))
+                        _ <- assertEventually(released.get.map(_ == wantReleased))
+                        _ <- Kyo.foreachDiscard(Seq(("1", l, r), ("2", r, l))) { (list, rows, others) =>
+                            for
+                                _ <- assertEventually(recorder.shown(Seq(list)).map(html => order(html, list) == rows))
+                                _ <- Kyo.foreachDiscard(rows)(id => showsEventually(recorder, Seq(list, id, "0"), s"[$id:${wantRuns(id)}]"))
+                                _ <- Kyo.foreachDiscard(others)(id =>
+                                    assertEventually(recorder.shown(Seq(list, id, "0")).map(html => !html.contains(s"[$id:")))
+                                )
+                            yield ()
+                        }
+                    yield ()
+                    end for
+                end settled
+                for
+                    _ <- settled(0)
+                    _ <- Kyo.foreachDiscard(1 until states.size) { at =>
+                        next.set(states(at)).andThen(handle(Seq("0"), click("0"))).andThen(settled(at))
+                    }
+                    finalRuns     <- runs.get
+                    finalReleased <- released.get
+                yield
+                    assert(finalRuns == expected.last._1, s"runs: $finalRuns")
+                    assert(finalReleased == expected.last._2, s"released: $finalReleased")
+                end for
+            }
+        yield succeed
         end for
     }
 
