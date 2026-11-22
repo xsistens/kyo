@@ -83,9 +83,9 @@ private[kyo] object EventDispatch:
                 // `type="button"` submits nothing in a browser (see ButtonActivation). `Absent` here
                 // means the target is no button at all, which is not the same as "a button that does
                 // not submit".
-                targetButtonSubmits = facts.target match
-                    case Present(b: Button) => Present(ButtonActivation.submits(b.attrs.jsProps.getOrElse("type", "")))
-                    case _                  => Absent
+                targetButtonSubmits <- facts.target match
+                    case Present(b: Button) => buttonSubmits(b).map(Present(_))
+                    case _                  => Kyo.lift(Absent: Maybe[Boolean])
                 // Enter submits a form implicitly from a single-line field or a button, as a browser does; from a textarea it is a
                 // line break, from a select a dropdown interaction, and from anything else nothing at all.
                 targetEnterSubmits = isKeyDown && facts.target.exists { t =>
@@ -154,20 +154,27 @@ private[kyo] object EventDispatch:
       * caller falls back to submitting the form directly, the answer HTML gives a form with no submit
       * button at all.
       */
-    private def defaultSubmitButton(elem: Element, basePath: Seq[String]): Maybe[Seq[String]] =
+    private def defaultSubmitButton(elem: Element, basePath: Seq[String])(using Frame): Maybe[Seq[String]] < Sync =
         val start: Maybe[Seq[String]] = Absent
-        elem.children.toSeq.zipWithIndex.foldLeft(start) { case (found, (child, i)) =>
+        Kyo.foldLeft(elem.children.toSeq.zipWithIndex)(start) { case (found, (child, i)) =>
             if found.isDefined then found
             else
                 val childPath = basePath :+ i.toString
                 child match
-                    case b: Button if ButtonActivation.submits(b.attrs.jsProps.getOrElse("type", "")) =>
-                        Present(childPath)
+                    case b: Button  => buttonSubmits(b).map(yes => if yes then Present(childPath) else defaultSubmitButton(b, childPath))
                     case c: Element => defaultSubmitButton(c, childPath)
                     case _          => Absent
                 end match
         }
     end defaultSubmitButton
+
+    /** Whether activating `b` submits, by its `type` now: the value behind the attribute's channel where it has one (the channel
+      * is the value, see `withReactiveAttr`), else the property it was given.
+      */
+    private def buttonSubmits(b: Button)(using Frame): Boolean < Sync =
+        b.attrs.reactiveAttrs.get("type") match
+            case Some(sig) => sig.current.map(ButtonActivation.submits)
+            case None      => ButtonActivation.submits(b.attrs.jsProps.getOrElse("type", ""))
 
     /** Submit the form itself, HTML's fallback when implicit submission finds no default button to click.
       *
@@ -220,6 +227,7 @@ private[kyo] object EventDispatch:
             case Present(Bound.Const(b))    => b
             case Present(Bound.Ref(ref))    => ref.get
             case Present(Bound.Follow(sig)) => sig.current
+            case Present(Bound.Default(b))  => b
             case _                          => false
 
     /** Toggle checked and auto-set SignalRef if bound. Returns the new value. */
@@ -229,6 +237,7 @@ private[kyo] object EventDispatch:
                 ref.getAndUpdate(!_).map(!_)
             case Present(Bound.Const(b))    => !b
             case Present(Bound.Follow(sig)) => sig.current.map(!_)
+            case Present(Bound.Default(b))  => !b
             case _                          => true
 
     /** Cycle a Select to the next or previous option. Updates SignalRef and fires onChange. */
@@ -241,6 +250,7 @@ private[kyo] object EventDispatch:
                 current <- sel.value match
                     case Present(Bound.Ref(ref))    => ref.get
                     case Present(Bound.Const(s))    => Kyo.lift(s)
+                    case Present(Bound.Default(s))  => Kyo.lift(s)
                     case Present(Bound.Follow(sig)) => sig.current
                     case _                          => Kyo.lift("")
                 currentIdx = values.indexOf(current).max(0)
@@ -505,17 +515,23 @@ private[kyo] object EventDispatch:
     private def keepBubbling(elem: Element, declared: Boolean): Boolean =
         !(declared && elem.attrs.stopPropagation.getOrElse(false))
 
-    /** Where an edit that reached an element following a signal records what puts it back, read by [[ReactiveUI.subscribe]]'s wrapper once
-      * the event has finished bubbling, and after a handler that failed too, since a failure is recovered on the way.
+    /** Set while an edit is dispatched: the target notes in it that it is a bound control (see [[kyo.UI.Bound]]), so the wrapper in
+      * [[ReactiveUI.subscribe]] reads it back once the handlers and the regions they woke have run. Read after a handler that failed too,
+      * since a failure is recovered on the way.
       */
-    private[internal] val followEdit: Local[Maybe[AtomicRef[Maybe[UIExchange => Unit < Async]]]] = Local.init(Absent)
+    private[internal] val controlEdited: Local[Maybe[AtomicBoolean]] = Local.init(Absent)
+
+    /** Set while an edit is dispatched a second time, once its handlers and the regions they woke have run, to read the binding of the
+      * element that then stands at the target's place: the target records what puts it back ([[Channels.putBack]]), and no handler runs.
+      */
+    private[internal] val putBackProbe: Local[Maybe[AtomicRef[Maybe[UIExchange => Unit < Async]]]] = Local.init(Absent)
 
     private def recordEdit(elem: Element, event: UIEvent, isTarget: Boolean, path: Seq[String])(using Frame): Unit < Sync =
-        if !isTarget || !Channels.follows(elem) then Kyo.unit
+        if !isTarget then Kyo.unit
         else
-            followEdit.use {
-                case Present(ref) => Channels.putBack(elem, event, path).fold(Kyo.unit)(send => ref.set(Present(send)))
-                case Absent       => Kyo.unit
+            controlEdited.use {
+                case Present(edited) if Channels.putBack(elem, event, path).nonEmpty => edited.set(true)
+                case _                                                               => Kyo.unit
             }
 
     /** Dispatch event to element. isTarget=true when element is the click target, false on bubble. disabledTarget=true when the original
@@ -545,6 +561,18 @@ private[kyo] object EventDispatch:
         using Frame
     ): Boolean < (Async & Abort[Any]) =
         def run = runHandlers(elem, event, isTarget, selfPath, disabledTarget, submitOrigin, enterSubmits, controlTarget)
+        putBackProbe.use {
+            case Present(probe) =>
+                if !isTarget then Kyo.lift(true)
+                else Channels.putBack(elem, event, selfPath).fold(Kyo.unit)(send => probe.set(Present(send))).andThen(true)
+            case Absent => dispatchLive(elem, event, run)
+        }
+    end dispatchToElement
+
+    /** [[dispatchToElement]] outside a put-back probe: runs the element's handlers unless it is silent. */
+    private def dispatchLive(elem: Element, event: UIEvent, run: => Boolean < (Async & Abort[Any]))(using
+        Frame
+    ): Boolean < (Async & Abort[Any]) =
         event match
             case _: UIEvent.Attach => run
             case _                 =>
@@ -555,7 +583,7 @@ private[kyo] object EventDispatch:
                     else hiddenByPartial(elem, event).flatMap(hidden => if hidden then Kyo.lift(true) else run)
                 }
         end match
-    end dispatchToElement
+    end dispatchLive
 
     /** Whether `elem` is silent right now: disabled (see [[isDisabled]]) or `silent`, each read from its channel where one is
       * bound, else from the constant (UI.Element.silent). Read when the event arrives, so an event the client sent before the patch
@@ -690,6 +718,7 @@ private[kyo] object EventDispatch:
                                     ti.value match
                                         case Present(Bound.Ref(ref))    => ref.get
                                         case Present(Bound.Const(v))    => v
+                                        case Present(Bound.Default(v))  => v
                                         case Present(Bound.Follow(sig)) => sig.current
                                         case _                          => ""
                             held.map(v => ti.onBlurText.get(mouse, v).unit)
@@ -765,9 +794,10 @@ private[kyo] object EventDispatch:
                     if !isTarget && KeyPolicy.submitsImplicitly(e.keyboard.key) && enterSubmits then
                         elem match
                             case f: Form =>
-                                defaultSubmitButton(f, selfPath) match
+                                defaultSubmitButton(f, selfPath).map {
                                     case Present(buttonPath) => recordActivation(buttonPath)
                                     case Absent              => submitDirectly(f)
+                                }
                             case _ => Kyo.lift(())
                     else Kyo.lift(())
                 keyHandler.andThen(activateClick).andThen(activateToggle).andThen(selectCycle).andThen(formSubmit)

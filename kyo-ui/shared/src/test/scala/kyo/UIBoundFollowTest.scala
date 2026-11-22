@@ -132,12 +132,13 @@ class UIBoundFollowTest extends kyo.test.Test[Any]:
     }
 
     "render" - {
-        "follow writes what a constant of the same value writes, and forwards the commit" in {
+        "follow writes what a constant of the same value writes, both forwarding the commit" in {
+            // A constant is a binding too (UI.Bound), so its commit is forwarded for the put-back as a follow's is.
             for
                 ref <- Signal.initRef("v")
                 on  <- HtmlRenderer.render(UI.input.value(ref.readOnly), Seq.empty)
                 off <- HtmlRenderer.render(UI.input.value("v"), Seq.empty)
-            yield assert(on.replace(""" data-kyo-ev="change"""", "") == off, s"$on against $off")
+            yield assert(on == off && on.contains(""" data-kyo-ev="change""""), s"$on against $off")
             end for
         }
 
@@ -148,7 +149,7 @@ class UIBoundFollowTest extends kyo.test.Test[Any]:
                 off <- HtmlRenderer.render(UI.checkbox.checked(true), Seq.empty)
             yield
                 assert(on.contains("data-kyo-bound") && on.contains(" checked"))
-                assert(on.replace(""" data-kyo-ev="change"""", "") == off)
+                assert(on == off, s"$on against $off")
             end for
         }
 
@@ -296,13 +297,23 @@ class UIBoundFollowTest extends kyo.test.Test[Any]:
             end for
         }
 
-        "an element that does not follow is left alone" in {
+        "a field whose text the reader owns is left alone" in {
             val rec = new RecordingExchange
             for
-                ops <- ReactiveUI.subscribed(UI.div(UI.input.value("start").onInput(_ => ())), rec) { sub =>
+                ops <- ReactiveUI.subscribed(UI.div(UI.input.defaultValue("start").onInput(_ => ())), rec) { sub =>
                     sub.handle(at, inputEvent("typed")).andThen(rec.ops)
                 }
             yield assert(ops.isEmpty)
+            end for
+        }
+
+        "a field bound to a constant gets the constant back" in {
+            val rec = new RecordingExchange
+            for
+                ops <- ReactiveUI.subscribed(UI.div(UI.input.value("start").onInput(_ => ())), rec) { sub =>
+                    sub.handle(at, inputEvent("typed")).andThen(rec.attrPatches)
+                }
+            yield assert(ops.map(_.value) == Chunk("start"))
             end for
         }
 

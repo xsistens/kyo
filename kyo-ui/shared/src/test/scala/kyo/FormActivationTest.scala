@@ -94,6 +94,38 @@ class FormActivationTest extends kyo.test.Test[Any]:
         }
     }
 
+    "a type that is a channel decides by its value when the event comes: a click, and Enter in a field beside it" in {
+        for
+            submits <- AtomicInt.init(0)
+            kind    <- Signal.initRef("button")
+            button = UI.button("go").buttonType(kind: Signal[String])
+            form   = UI.form.onSubmit(submits.getAndUpdate(_ + 1).unit)(UI.input.id("t"), button)
+            seen <- withDispatch(form) { dispatch =>
+                for
+                    _       <- dispatch(Seq("1"), click(Seq("1")))
+                    idle    <- submits.get
+                    _       <- kind.set("submit")
+                    _       <- dispatch(Seq("1"), click(Seq("1")))
+                    clicked <- submits.get
+                    // Implicit submission clicks the default button, the first whose type submits: the one beside the field.
+                    _      <- dispatch(Seq("0"), enter(Seq("0")))
+                    viaKey <- submits.get
+                yield (idle, clicked, viaKey)
+            }
+        yield assert(seen == (0, 1, 2), s"(submits as type=button, after a click as submit, after Enter in the field) $seen")
+        end for
+    }
+
+    "a constant type is the property it was, and a signal the attribute's channel" in {
+        for
+            kind <- Signal.initRef("button")
+            fixed = UI.button("go").buttonType("reset")
+            live  = UI.button("go").buttonType(kind: Signal[String])
+        yield
+            assert(fixed.attrs.jsProps.get("type").contains("reset") && fixed.attrs.reactiveAttrs.isEmpty, s"${fixed.attrs}")
+            assert(live.attrs.jsProps.isEmpty && live.attrs.reactiveAttrs.contains("type"), s"${live.attrs}")
+    }
+
     "Enter in a text field is still implicit submission, which has no button to ask" in {
         for
             submits <- AtomicInt.init(0)

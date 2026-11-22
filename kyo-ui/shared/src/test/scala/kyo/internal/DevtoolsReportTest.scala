@@ -29,7 +29,7 @@ class DevtoolsReportTest extends kyo.test.Test[Any]:
       * render changed nothing. The shared layer's job is to carry that from the exchange into the event, and a
       * stub that never reports would leave exactly that untested.
       */
-    final private class Recording(paint: Maybe[(Int, Boolean)] = Absent, textSink: Boolean = false):
+    final private class Recording(paint: Maybe[(Int, Boolean)] = Absent, textSink: Boolean = false, keepsRows: Boolean = false):
         private val events = new AtomicReference(Vector.empty[UI.RenderEvent])
 
         val record: UI.RenderEvent => Unit = e => discard(events.updateAndGet(_ :+ e))
@@ -46,6 +46,7 @@ class DevtoolsReportTest extends kyo.test.Test[Any]:
 
         val exchange = new RecordingExchange(
             synchronous = textSink,
+            keepsRows = keepsRows,
             beforePaint = (_, _) =>
                 paint match
                     case Present((bytes, wasted)) => Devtools.notePaint(bytes, wasted)
@@ -305,6 +306,86 @@ class DevtoolsReportTest extends kyo.test.Test[Any]:
                     painted.head.bytes == 123 && painted.head.wasted,
                     s"the probe did not reach the event: ${painted.head}"
                 )
+        }
+    }
+
+    /** The losses reported, by what and where, without the frame. */
+    private def losses(events: Vector[UI.RenderEvent]): Vector[String] =
+        events.collect {
+            case UI.RenderEvent(_, _, _, UI.RenderKind.Lost(UI.Loss.StatedValue(element, attribute, _)), _, _, _, _) =>
+                s"$element $attribute"
+            case UI.RenderEvent(_, _, _, UI.RenderKind.Lost(UI.Loss.UnkeyedMount(_)), _, _, _, _) => "unkeyed mount"
+        }
+
+    "a region that runs again reports a default it moves and a mount it starts over, never a binding, and its first draw reports nothing" in {
+        Scope.run {
+            for
+                tick    <- Signal.initRef(0)
+                follows <- Signal.initRef("followed")
+                bound   <- Signal.initRef("bound")
+                rec = new Recording
+                ui  = UI.div(tick.render(n =>
+                    UI.div(
+                        UI.span(n.toString),
+                        UI.input.id("plain"),
+                        UI.input.id("start").value("start"),
+                        UI.input.id("follows").value(follows.readOnly),
+                        UI.input.id("bound").value(bound),
+                        UI.textarea.cssClass("note").value("note"),
+                        UI.checkbox.id("box").checked(false),
+                        UI.checkbox.id("free"),
+                        UI.select.id("pick")(UI.option.value("a").selected(true)("a"), UI.option.value("b")("b")),
+                        // Defaults: the reader owns these, so only a run that moves the default takes something from the reader.
+                        UI.input.id("kept").defaultValue("same"),
+                        UI.input.id("moved").defaultValue(s"start $n"),
+                        UI.checkbox.id("ticked").defaultChecked(n % 2 == 1),
+                        UI.select.id("chosen")(UI.option.value("a").defaultSelected(true)("a"), UI.option.value("b")("b")),
+                        UI.mounted(Sync.defer(UI.span("unkeyed"))),
+                        UI.mounted(Sync.defer(UI.span("keyed"))).keyed("k")
+                    )
+                ))
+                seen <- observed(rec, ui, parkedOn(tick)) {
+                    for
+                        first <- Sync.defer(losses(rec.all))
+                        _     <- tick.set(1)
+                        _     <- assertEventually(Sync.defer(rec.signalled.nonEmpty).map(painted => parkedOn(tick).map(painted && _)))
+                    yield (first, losses(rec.all))
+                }
+            yield
+                assert(seen._1.isEmpty, s"the first draw reported ${seen._1}")
+                assert(
+                    seen._2.sorted == Vector("input#moved value", "input#ticked checked", "unkeyed mount"),
+                    s"after one run: ${seen._2}"
+                )
+            end for
+        }
+    }
+
+    /** The losses a keyed list reports when row `a` changes and row `c` is added, on a backend that patches rows or not. */
+    private def listLosses(keepsRows: Boolean)(using Frame, kyo.test.AssertScope): Vector[String] < (Async & Scope) =
+        for
+            rows <- Signal.initRef(Chunk("a" -> "1", "b" -> "1"))
+            rec = new Recording(keepsRows = keepsRows)
+            ui  = UI.ul(rows.foreachKeyed(_._1)((key, text) =>
+                UI.li(UI.input.id(key).defaultValue(text), UI.input.id(s"$key-bound").value(text))
+            ))
+            seen <- observed(rec, ui, parkedOn(rows)) {
+                for
+                    _ <- rows.set(Chunk("a" -> "2", "b" -> "1", "c" -> "1"))
+                    _ <- assertEventually(Sync.defer(rec.signalled.nonEmpty).map(painted => parkedOn(rows).map(painted && _)))
+                yield losses(rec.all)
+            }
+        yield seen
+
+    "a keyed row drawn again for a new value reports the default it moves, and a new row reports none" in {
+        Scope.run {
+            for
+                patched <- listLosses(keepsRows = true)
+                whole   <- listLosses(keepsRows = false)
+            yield
+                assert(patched == Vector("input#a value"), s"a backend that patches rows, after a changed and c added: $patched")
+                // A backend with no row patch paints the whole list, so the unchanged row b is drawn again too, with the default it had.
+                assert(whole == Vector("input#a value"), s"a backend that paints the whole list: $whole")
         }
     }
 
