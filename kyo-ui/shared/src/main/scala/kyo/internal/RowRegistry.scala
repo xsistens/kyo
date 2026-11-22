@@ -181,6 +181,13 @@ final private class RowPlan[T](
             while i < size && keys(i) == prev(i).key do i += 1
             i < size
 
+    /** The keys of the rows this emission keeps as they are. */
+    def retainedRows: Set[String] =
+        val out = Set.newBuilder[String]
+        retainedKeys.forEach(key => discard(out += key))
+        out.result()
+    end retainedRows
+
     def finalRowsSeq: Seq[RowInstance] = scala.collection.immutable.ArraySeq.unsafeWrapArray(finalRows)
 
     def freshRows: Seq[RowInstance] = rebuilt.map(i => finalRows(i)).toSeq
@@ -263,15 +270,16 @@ private[kyo] object RowRegions:
       * loud warning), keeping the painted output identical to the non-reusable path. Unkeyed and *Indexed
       * variants stay on the whole-region path entirely.
       *
-      * The mounts of every row, re-walked or retained, are one pass of the region's mount table, so a retained row's keyed
-      * instances are kept. A row's key is part of every mount identity in it, so no claim in one row can collide with another's.
+      * The mounts of every row, re-walked or retained, are one pass of the region, so a retained row's keyed instances are kept, and
+      * the regions inside a retained row, whose subscriptions carry on, are left as they are. A row's key is part of every mount
+      * identity in it, so no claim in one row can collide with another's.
       */
     private[internal] def subscribeForeachRegion(
         rui: ReactiveUI,
         spec: ForeachSpec,
         exchange: UIExchange,
         signalChangeTime: AtomicRef[Instant],
-        regionMounts: MountTableRef,
+        regionMounts: MountScope,
         dispatch: MountDispatch
     )(using Frame): Unit < (Async & Scope) =
         val path        = rui.path
@@ -287,8 +295,9 @@ private[kyo] object RowRegions:
                 val keyFn = keyFnMaybe.get // reusable guarantees a key function
                 val rows  = spec.rows
                 for
-                    _ <- Scope.ensure(rows.evictAll)
-                    _ <- startOwnedFiber {
+                    _     <- Scope.ensure(rows.evictAll)
+                    watch <- regionMounts.register
+                    _     <- startOwnedFiber {
                         // A row owns a bare Finalizer, not a fiber: the registry closes and awaits it, and
                         // scoped children still die with it, since a nested region's or mount's release is
                         // registered on it. Subscribing inline rather than on a forked fiber makes a row that
@@ -296,7 +305,7 @@ private[kyo] object RowRegions:
                         // The registry always closes and awaits a row, so its finalizers run on the evicting
                         // fiber (initInline) instead of a fiber per row, and its channel releases collect in the
                         // row's scope, which the eviction runs in one pass.
-                        def rowRunner(kids: Seq[ReactiveUI], pass: RegionKeys): RowScope < Async =
+                        def rowRunner(kids: Seq[ReactiveUI], pass: MountPass): RowScope < Async =
                             Sync.Unsafe.defer {
                                 val fin   = Scope.Finalizer.Unsafe.initInline()
                                 val scope = new RowScope(fin)
@@ -320,10 +329,9 @@ private[kyo] object RowRegions:
                         // First emission over the already-painted value: skip render and walk entirely; adopt the
                         // walked initial kids as rows (grouped by their row path segment) and just subscribe them.
                         def seed(items: Chunk[T]): Unit < (Async & Scope) =
-                            val pass    = RegionKeys(initialKids)
                             val grouped = initialKids.groupBy(k => k.path.lift(path.length).getOrElse(""))
                             for
-                                _     <- regionMounts.beginWalk(initialKids, pass)
+                                pass  <- regionMounts.beginWalk(initialKids)
                                 built <- Kyo.foreach(Chunk.from(items.toSeq.zipWithIndex)) { (item, i) =>
                                     val key  = keyFn(item)
                                     val kids = grouped.getOrElse(key, Seq.empty)
@@ -371,13 +379,16 @@ private[kyo] object RowRegions:
                                             svg,
                                             rui.contentContext.child(key),
                                             nestedParentContext(rui.parentContext, rowUI),
-                                            dispatch
+                                            dispatch,
+                                            rui.rows,
+                                            rui.deepRows
                                         )
                                         plan.built(i) = new RowPlan.Built(key, item, rowUI, kids, Present(hdl), Absent)
                                     }
                                 })
-                                pass = RegionKeys(plan.allKids)
-                                _ <- regionMounts.beginWalk(plan.allKids, pass)
+                                // The regions inside a retained row keep their subscriptions, so the pass leaves them as they are.
+                                retained  <- Sync.defer(plan.retainedRows)
+                                firstPass <- regionMounts.beginWalk(plan.allKids, retained)
                                 fragment = Fragment[UI](plan.fragmentChildren)
                                 previous <- Sync.Unsafe.defer(rendered.getAndSet(Present(fragment)))
                                 // A structural command addresses rows by key, so it can say nothing useful
@@ -412,9 +423,10 @@ private[kyo] object RowRegions:
                                 }
                                 // A repaint of the kept rows replaced what their subscriptions had painted into them, a
                                 // mount's content among it: subscribe them again, as a whole-list repaint always did.
-                                _ <-
-                                    if kept then Kyo.unit
-                                    else rows.evictAll.andThen(Sync.defer(plan.rebuildAll()))
+                                // Every row is subscribed again, so a pass covers the regions of all of them.
+                                pass <-
+                                    if kept then Kyo.lift(firstPass)
+                                    else rows.evictAll.andThen(Sync.defer(plan.rebuildAll())).andThen(regionMounts.beginWalk(plan.allKids))
                                 _ <- Kyo.foreachDiscard(plan.rebuilt) { i =>
                                     val b = plan.built(i)
                                     rowRunner(b.kids, pass).map(scope =>
@@ -425,22 +437,13 @@ private[kyo] object RowRegions:
                                 _ <- rows.replaceAll(plan.finalRowsSeq, plan.freshRows)
                             yield ()
 
-                        Abort.run[Throwable] {
-                            var first = true
-                            itemSignal.observe { items =>
+                        var first = true
+                        itemSignal.observeStamped(watch.stamp) {
+                            items =>
                                 val isFirst = first
                                 first = false
                                 if isFirst && spec.renderedItems.exists(_.equals(items)) && distinctKeys(items) then seed(items)
                                 else handle(items)
-                            }
-                        }.map { result =>
-                            result.fold(
-                                _ => (),
-                                err => Log.error(s"Reactive subscription fiber failed at path=${path.mkString(".")}", err),
-                                panic =>
-                                    if panic.isInstanceOf[Interrupted] then ()
-                                    else Log.error(s"Reactive subscription fiber failed at path=${path.mkString(".")}", panic)
-                            )
                         }
                     }
                 yield ()

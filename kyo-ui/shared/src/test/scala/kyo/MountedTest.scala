@@ -4,12 +4,10 @@ import kyo.internal.HtmlRenderer
 import kyo.internal.MountDispatch
 import kyo.internal.MountState
 import kyo.internal.MountSupervision
-import kyo.internal.MountTableRef
 import kyo.internal.MouseEventData
 import kyo.internal.ReactiveRegion
 import kyo.internal.ReactiveUI
 import kyo.internal.RecordingExchange
-import kyo.internal.RegionKeys
 import kyo.internal.UIEvent
 import kyo.internal.UIExchange
 
@@ -319,10 +317,16 @@ class MountedTest extends kyo.test.Test[Any]:
             ui   = div(outer.render(n => div(span(s"outer:$n"), inner.render(_ => div(node)))))
             _ <- mount(ui) { (recorder, _) =>
                 for
-                    _      <- showsEventually(recorder, Seq("0", "1", "0"), "runs:1")
-                    first  <- afterRepaint(recorder, Seq("0", "1", "0"))(outer.set(1))
-                    _      <- inner.set("y")
-                    second <- afterRepaint(recorder, Seq("0", "1", "0"))(outer.set(2))
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "runs:1")
+                    // Each step waits for the repaint of the region it changes, so a late paint of an earlier step is not taken
+                    // for the paint of this one, and then for the instance's content in the repainted range.
+                    _      <- afterRepaint(recorder, Seq("0"))(outer.set(1))
+                    _      <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                    first  <- recorder.shown(Seq("0", "1", "0"))
+                    _      <- afterRepaint(recorder, Seq("0", "1"))(inner.set("y"))
+                    _      <- afterRepaint(recorder, Seq("0"))(outer.set(2))
+                    _      <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                    second <- recorder.shown(Seq("0", "1", "0"))
                     total  <- runs.get
                 yield
                     assert(first.contains("runs:1") && second.contains("runs:1"), s"shown: $first / $second")
@@ -445,40 +449,55 @@ class MountedTest extends kyo.test.Test[Any]:
         Chunk.from(rui.mounted.fold(Seq.empty[ReactiveUI])(_ => Seq(rui)) ++ rui.children.flatMap(mountedNodes))
 
     // An outer re-render stops the old subscription of a region only once the outer value's scope has drained, while the new
-    // subscription of that region already works on the same table. The table follows the newest subscription; the older one, still
-    // running a pass, must neither release nor record anything in it.
-    "a region's newer subscription owns its mount table, and an older one still running leaves the table alone" in {
+    // subscription of that region already works on the same table. The table follows the subscription born in the pass that last
+    // covered the region; the older one, still running a pass, must neither release nor record anything in it.
+    private def liveOf(view: kyo.internal.ClaimView)(using Frame): Maybe[kyo.internal.MountInstance] < Sync =
+        view.state.get.map {
+            case kyo.internal.ClaimState.Live(instance) => Present(instance)
+            case _                                      => Absent
+        }
+
+    "a region's newer subscription owns its entry in the mount table, and an older one still running leaves the table alone" in {
         Scope.run {
             for
                 released <- AtomicBoolean.init(false)
-                root <- ReactiveUI.normalize(div(UI.mounted(Scope.ensure(released.set(true)).andThen(span("held"))).keyed("k")), Seq.empty)
+                tick     <- Signal.initRef(0)
+                root     <- ReactiveUI.normalize(
+                    div(tick.render(_ => div(UI.mounted(Scope.ensure(released.set(true)).andThen(span("held"))).keyed("k")))),
+                    Seq.empty
+                )
+                region   = root.children.head
                 node     = mountedNodes(root).head
                 spec     = node.mounted.get
                 identity = spec.identity.get
-                outer    = MountTableRef.init()
-                pass     = RegionKeys(Seq(root))
-                older <- Sync.Unsafe.defer(outer.child(pass, root))
-                _     <- older.beginWalk(Seq(node), RegionKeys(Seq(node)))
-                first <- older.claim(node, identity, spec)
-                _     <- older.endWalk
-                _     <- assertEventually(first.cell.current.map(_.isInstanceOf[MountState.Ready]))
-                newer <- Sync.Unsafe.defer(outer.child(pass, root))
-                _     <- newer.beginWalk(Seq(node), RegionKeys(Seq(node)))
-                kept  <- newer.claim(node, identity, spec)
-                _     <- older.beginWalk(Seq.empty, RegionKeys.empty)
-                _     <- older.endWalk
-                stale <- older.claim(node, identity, spec)
-                _     <- newer.endWalk
-                gone  <- released.get
-                _     <- newer.beginWalk(Seq(node), RegionKeys(Seq(node)))
-                again <- newer.claim(node, identity, spec)
-                _     <- newer.endWalk
-                _     <- outer.evictAll
+                (table, top) <- kyo.internal.MountTable.root(Seq.empty)
+                outerFirst   <- top.beginWalk(Seq(root))
+                older = top.child(outerFirst, region)
+                olderPass <- older.beginWalk(region.children)
+                first     <- older.claim(node, identity, spec, olderPass).map(liveOf)
+                _         <- older.endWalk
+                _ <- assertEventually(first.fold(Kyo.lift(false))(_.cell.current.map(_.isInstanceOf[kyo.internal.MountState.Ready])))
+                outerNext <- top.beginWalk(Seq(root))
+                newer = top.child(outerNext, region)
+                newerPass <- newer.beginWalk(region.children)
+                kept      <- newer.claim(node, identity, spec, newerPass).map(liveOf)
+                _         <- older.beginWalk(Seq.empty)
+                _         <- older.endWalk
+                stale     <- older.claim(node, identity, spec, olderPass).map(liveOf)
+                _         <- newer.endWalk
+                gone      <- released.get
+                againPass <- newer.beginWalk(region.children)
+                again     <- newer.claim(node, identity, spec, againPass).map(liveOf)
+                _         <- newer.endWalk
+                _         <- table.evictAll
+                after     <- released.get
             yield
-                assert(kept eq first, "the newer subscription did not find the kept instance")
+                def same(a: Maybe[kyo.internal.MountInstance]) = a.nonEmpty && first.exists(_ eq a.get)
+                assert(same(kept), "the newer subscription did not find the kept instance")
                 assert(!gone, "the older subscription released the instance the newer one shows")
-                assert(stale eq first, "the older subscription's claim did not reuse the live instance")
-                assert(again eq first, "the table lost the instance after the older subscription's pass")
+                assert(same(stale), "the older subscription's claim did not reuse the live instance")
+                assert(same(again), "the table lost the instance after the older subscription's pass")
+                assert(after, "evicting the table did not release the instance")
         }
     }
 
@@ -594,7 +613,7 @@ class MountedTest extends kyo.test.Test[Any]:
     private def tile(ref: String, runs: AtomicInt, released: AtomicInt)(using Frame): UI =
         UI.mounted(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(n => span(s"$ref:$n")))).keyed(ref)
 
-    "the same keyed tile shown twice in one region gives each slot its own instance" in {
+    "the same keyed tile shown twice in one region is reported at both places, and a tile shown once keeps its instance" in {
         for
             runs     <- AtomicInt.init(0)
             released <- AtomicInt.init(0)
@@ -602,24 +621,23 @@ class MountedTest extends kyo.test.Test[Any]:
             ui = div(tick.render(_ => UI.Ast.Div(children = Chunk("x", "y", "x").map(tile(_, runs, released)))))
             _ <- mount(ui) { (recorder, _) =>
                 for
-                    _       <- assertEventually(runs.get.map(_ == 3))
-                    _       <- showsEventually(recorder, Seq("0", "0"), "x:")
-                    _       <- showsEventually(recorder, Seq("0", "2"), "x:")
+                    _       <- showsEventually(recorder, Seq("0", "0"), "kyo-mount-error")
+                    _       <- showsEventually(recorder, Seq("0", "1"), "y:1")
+                    _       <- showsEventually(recorder, Seq("0", "2"), "kyo-mount-error")
                     first   <- recorder.shown(Seq("0", "0"))
-                    second  <- recorder.shown(Seq("0", "2"))
                     _       <- afterRepaint(recorder, Seq("0"))(tick.set(1))
-                    _       <- showsEventually(recorder, Seq("0", "0"), first)
-                    _       <- showsEventually(recorder, Seq("0", "2"), second)
+                    _       <- showsEventually(recorder, Seq("0", "1"), "y:1")
+                    _       <- showsEventually(recorder, Seq("0", "0"), "kyo-mount-error")
                     total   <- runs.get
                     dropped <- released.get
                 yield
-                    assert(first != second, s"both slots show $first")
-                    assert(total == 3 && dropped == 0, s"runs: $total, released: $dropped")
+                    assert(first.contains("shown in 2 places") && first.contains("0.0") && first.contains("0.2"), first)
+                    assert(total == 1 && dropped == 0, s"runs: $total, released: $dropped")
             }
         yield succeed
     }
 
-    "a duplicate that goes away leaves the other instances where they are" in {
+    "when one place of a duplicated identity goes away, the other one gets an instance" in {
         for
             runs     <- AtomicInt.init(0)
             released <- AtomicInt.init(0)
@@ -631,20 +649,19 @@ class MountedTest extends kyo.test.Test[Any]:
             })
             _ <- mount(ui) { (recorder, _) =>
                 for
-                    _      <- assertEventually(runs.get.map(_ == 3))
-                    _      <- showsEventually(recorder, Seq("0", "2"), "x:")
-                    before <- recorder.shown(Seq("0", "2"))
-                    _      <- afterRepaint(recorder, Seq("0"))(show.set(false))
-                    _      <- assertEventually(released.get.map(_ == 1))
-                    _      <- showsEventually(recorder, Seq("0", "2"), "x:")
-                    after  <- recorder.shown(Seq("0", "2"))
-                    total  <- runs.get
-                yield assert(after == before && total == 3, s"before: $before, after: $after, runs: $total")
+                    _       <- showsEventually(recorder, Seq("0", "2"), "kyo-mount-error")
+                    _       <- showsEventually(recorder, Seq("0", "1"), "y:1")
+                    _       <- afterRepaint(recorder, Seq("0"))(show.set(false))
+                    _       <- showsEventually(recorder, Seq("0", "2"), "x:2")
+                    _       <- showsEventually(recorder, Seq("0", "1"), "y:1")
+                    total   <- runs.get
+                    dropped <- released.get
+                yield assert(total == 2 && dropped == 0, s"runs: $total, released: $dropped")
             }
         yield succeed
     }
 
-    "duplicates whose places all shift keep their instances" in {
+    "duplicates whose places all shift stay reported, and run nothing" in {
         for
             runs     <- AtomicInt.init(0)
             released <- AtomicInt.init(0)
@@ -655,13 +672,12 @@ class MountedTest extends kyo.test.Test[Any]:
             })
             _ <- mount(ui) { (recorder, _) =>
                 for
-                    _       <- assertEventually(runs.get.map(_ == 2))
-                    _       <- afterRepaint(recorder, Seq("0"))(lead.set(true))
-                    _       <- showsEventually(recorder, Seq("0", "1"), "x:")
-                    _       <- showsEventually(recorder, Seq("0", "2"), "x:")
-                    total   <- runs.get
-                    dropped <- released.get
-                yield assert(total == 2 && dropped == 0, s"runs: $total, released: $dropped")
+                    _     <- showsEventually(recorder, Seq("0", "1"), "kyo-mount-error")
+                    _     <- afterRepaint(recorder, Seq("0"))(lead.set(true))
+                    _     <- showsEventually(recorder, Seq("0", "1"), "kyo-mount-error")
+                    _     <- showsEventually(recorder, Seq("0", "2"), "kyo-mount-error")
+                    total <- runs.get
+                yield assert(total == 0, s"runs: $total")
             }
         yield succeed
     }
@@ -736,7 +752,7 @@ class MountedTest extends kyo.test.Test[Any]:
         rowsKeepTheirInstances(keepsRows = true)
     }
 
-    "the same call site shown twice with one key inside a list row gives each slot its own instance" in {
+    "the same call site shown twice with one key inside a list row is reported in that row" in {
         for
             runs  <- AtomicInt.init(0)
             items <- Signal.initRef(Chunk("a"))
@@ -747,19 +763,18 @@ class MountedTest extends kyo.test.Test[Any]:
             ui = div(items.foreachKeyed(identity)(row))
             _ <- mount(ui, keepsRows = true) { (recorder, _) =>
                 for
-                    _      <- showsEventually(recorder, Seq("0", "a", "1"), "runs:")
+                    _      <- showsEventually(recorder, Seq("0", "a", "1"), "kyo-mount-error")
                     _      <- items.set(Chunk("b", "a"))
-                    _      <- showsEventually(recorder, Seq("0", "b", "0"), "runs:")
-                    _      <- showsEventually(recorder, Seq("0", "b", "1"), "runs:")
-                    first  <- recorder.shown(Seq("0", "b", "0"))
+                    _      <- showsEventually(recorder, Seq("0", "b", "0"), "kyo-mount-error")
+                    _      <- showsEventually(recorder, Seq("0", "b", "1"), "kyo-mount-error")
                     second <- recorder.shown(Seq("0", "b", "1"))
-                yield assert(first != second, s"both slots show $first")
+                yield assert(second.contains("0.b.0") && second.contains("0.b.1") && !second.contains("0.a."), second)
             }
             total <- runs.get
-        yield assert(total == 4, s"runs: $total")
+        yield assert(total == 0, s"runs: $total")
     }
 
-    "the same call site shown twice with one key gives each slot its own instance" in {
+    "the same call site shown twice with one key outside any region is reported at both places" in {
         for
             runs <- AtomicInt.init(0)
             ui = UI.Ast.Div(children =
@@ -767,14 +782,12 @@ class MountedTest extends kyo.test.Test[Any]:
             )
             _ <- mount(ui) { (recorder, _) =>
                 for
-                    _      <- showsEventually(recorder, Seq("0"), "runs:")
-                    _      <- showsEventually(recorder, Seq("1"), "runs:")
-                    first  <- recorder.shown(Seq("0"))
-                    second <- recorder.shown(Seq("1"))
-                yield assert(first != second, s"both slots show $first")
+                    _ <- showsEventually(recorder, Seq("0"), "kyo-mount-error")
+                    _ <- showsEventually(recorder, Seq("1"), "kyo-mount-error")
+                yield ()
             }
             total <- runs.get
-        yield assert(total == 2)
+        yield assert(total == 0, s"runs: $total")
     }
 
     "a key change releases the old instance completely before the new effect starts" in {
@@ -1150,6 +1163,989 @@ class MountedTest extends kyo.test.Test[Any]:
             }
         yield succeed
         end for
+    }
+
+    // ---- Identity without the Frame: a keyed instance is found by its own identity, regions by their place ----
+
+    // A component that takes a `Frame`, as application code does: both regions it builds get the caller's frame.
+    private def twoRegions(show: Boolean, a: Signal[String], b: Signal[String], runs: AtomicInt)(using Frame): UI =
+        div(
+            if show then a.render(x => span(x)) else span("none"),
+            b.render(_ => div(UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box")))
+        )
+
+    "a keyed mount in the second region of a component that takes a Frame survives the first region coming and going" in {
+        for
+            runs  <- AtomicInt.init(0)
+            outer <- Signal.initRef(true)
+            a     <- Signal.initRef("a")
+            b     <- Signal.initRef("b")
+            ui = div(outer.render(show => twoRegions(show, a, b, runs)))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                    _ <- afterRepaint(recorder, Seq("0"))(outer.set(false))
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                    _ <- afterRepaint(recorder, Seq("0"))(outer.set(true))
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                yield ()
+            }
+            total <- runs.get
+        yield assert(total == 1, s"the keyed instance restarted when its neighbour region came and went: $total runs")
+    }
+
+    // A helper without a `Frame` of its own: every region it builds gets the one frame derived inside it.
+    private def panelRegion(sig: Signal[String], key: String, runs: AtomicRef[Map[String, Int]]): UI =
+        sig.render(_ => div(UI.mounted(counted(runs, key)).keyed(key)))
+
+    "two regions from one helper without a Frame keep their keyed instances when the first one goes away" in {
+        for
+            runs  <- AtomicRef.init(Map.empty[String, Int])
+            outer <- Signal.initRef(true)
+            a     <- Signal.initRef("a")
+            b     <- Signal.initRef("b")
+            ui = div(outer.render(show => div(if show then panelRegion(a, "p1", runs) else span("none"), panelRegion(b, "p2", runs))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "0", "0"), "p1:1")
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "p2:1")
+                    _ <- afterRepaint(recorder, Seq("0"))(outer.set(false))
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "p2:")
+                    _ <- afterRepaint(recorder, Seq("0"))(outer.set(true))
+                    _ <- showsEventually(recorder, Seq("0", "0", "0"), "p1:")
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "p2:")
+                yield ()
+            }
+            counts <- runs.get
+        yield assert(counts == Map("p1" -> 2, "p2" -> 1), s"runs per instance: $counts")
+    }
+
+    private def withNeighbour(mode: Int, a: Signal[String], b: Signal[String], runs: AtomicInt)(using Frame): UI =
+        val neighbour: UI = mode match
+            case 0 => a.render(x => span(x))
+            case 1 => span("constant")
+            case _ => UI.mounted(Kyo.lift(span("other mount")))
+        div(neighbour, b.render(_ => div(UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box"))))
+    end withNeighbour
+
+    "an unrelated neighbour that turns from a region into a constant or a mount does not restart a keyed instance" in {
+        for
+            runs <- AtomicInt.init(0)
+            mode <- Signal.initRef(0)
+            a    <- Signal.initRef("a")
+            b    <- Signal.initRef("b")
+            ui = div(mode.render(m => withNeighbour(m, a, b, runs)))
+            // After each change the box shows an instance's content, then the count says whether it was the first instance. Waiting
+            // for "runs:1" instead would wait forever on the restart this test guards against.
+            _ <- mount(ui) { (recorder, _) =>
+                Kyo.foreachDiscard(Seq(1, 2, 0, 2, 1)) { next =>
+                    for
+                        _     <- afterRepaint(recorder, Seq("0"))(mode.set(next))
+                        _     <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                        total <- runs.get
+                        shown <- recorder.shown(Seq("0", "1", "0"))
+                    yield assert(
+                        total == 1,
+                        s"the neighbour turning into mode $next restarted the keyed instance: $total runs, the box shows $shown"
+                    )
+                }
+            }
+            total <- runs.get
+        yield assert(total == 1, s"a neighbour changing kind restarted the keyed instance: $total runs")
+    }
+
+    "a keyed instance that moves from one region to another in one pass keeps its instance" in {
+        for
+            runs <- AtomicInt.init(0)
+            left <- Signal.initRef(true)
+            r1   <- Signal.initRef("r1")
+            r2   <- Signal.initRef("r2")
+            node = UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("moving")
+            ui   = div(left.render(l =>
+                div(
+                    r1.render(_ => if l then div(node) else div(span("empty-1"))),
+                    r2.render(_ => if l then div(span("empty-2")) else div(node))
+                )
+            ))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _     <- showsEventually(recorder, Seq("0", "0", "0"), "runs:1")
+                    _     <- afterRepaint(recorder, Seq("0"))(left.set(false))
+                    _     <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                    moved <- recorder.shown(Seq("0", "1", "0"))
+                    _     <- afterRepaint(recorder, Seq("0"))(left.set(true))
+                    _     <- showsEventually(recorder, Seq("0", "0", "0"), "runs:")
+                    back  <- recorder.shown(Seq("0", "0", "0"))
+                    total <- runs.get
+                yield assert(
+                    moved.contains("runs:1") && back.contains("runs:1") && total == 1,
+                    s"moved: $moved, back: $back, runs: $total"
+                )
+            }
+        yield succeed
+    }
+
+    "the same keyed identity shown twice in one pass is reported at both places and runs no effect" in {
+        for
+            runs <- AtomicInt.init(0)
+            both <- Signal.initRef(true)
+            node = UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("twice")
+            ui   = div(both.render(b => if b then div(node, node) else div(node)))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _      <- showsEventually(recorder, Seq("0", "0"), "kyo-mount-error")
+                    _      <- showsEventually(recorder, Seq("0", "1"), "kyo-mount-error")
+                    first  <- recorder.shown(Seq("0", "0"))
+                    second <- recorder.shown(Seq("0", "1"))
+                    before <- runs.get
+                    _      <- afterRepaint(recorder, Seq("0"))(both.set(false))
+                    _      <- showsEventually(recorder, Seq("0", "0"), "runs:1")
+                yield
+                    assert(before == 0, s"a duplicated identity ran its effect: $before runs")
+                    assert(first.contains("shown in 2 places") && first.contains("0.0") && first.contains("0.1"), first)
+                    assert(second.contains("shown in 2 places"), second)
+            }
+        yield succeed
+    }
+
+    "the same keyed identity twice in a dynamic splice is reported like literal arguments" in {
+        for
+            runs <- AtomicInt.init(0)
+            node = UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("spliced-twice")
+            kids = Seq[UI.Ast.HtmlChildVal](span("lead"), node, node)
+            ui   = div(div(kids*))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "1"), "kyo-mount-error")
+                    _ <- showsEventually(recorder, Seq("0", "2"), "kyo-mount-error")
+                yield ()
+            }
+            total <- runs.get
+        yield assert(total == 0, s"a duplicated identity ran its effect: $total runs")
+    }
+
+    // A splice is a dynamic range: positions in it shift with its length. A keyed instance does not depend on its position, so it
+    // stays; a keyless one is new on every re-render of its region, as anywhere else; a region in the splice keeps its keyed mount.
+    "a dynamic splice whose length changes keeps keyed instances, also inside a region in it, and renews keyless ones" in {
+        for
+            keyedRuns  <- AtomicInt.init(0)
+            nestedRuns <- AtomicInt.init(0)
+            freeRuns   <- AtomicInt.init(0)
+            lead       <- Signal.initRef(0)
+            inner      <- Signal.initRef("x")
+            keyedNode  = UI.mounted(keyedRuns.incrementAndGet.map(r => span(s"keyed:$r"))).keyed("spliced")
+            nestedNode = UI.mounted(nestedRuns.incrementAndGet.map(r => span(s"nested:$r"))).keyed("nested")
+            freeNode   = UI.mounted(freeRuns.incrementAndGet.map(r => span(s"free:$r")))
+            ui         = div(lead.render { n =>
+                val leads = Seq.fill[UI.Ast.HtmlChildVal](n)(span("lead"))
+                div((leads ++ Seq[UI.Ast.HtmlChildVal](keyedNode, inner.render(_ => div(nestedNode)), freeNode))*)
+            })
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "0"), "keyed:1")
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "nested:1")
+                    _ <- showsEventually(recorder, Seq("0", "2"), "free:1")
+                    _ <- afterRepaint(recorder, Seq("0"))(lead.set(2))
+                    _ <- showsEventually(recorder, Seq("0", "2"), "keyed:")
+                    _ <- showsEventually(recorder, Seq("0", "3", "0"), "nested:")
+                    _ <- showsEventually(recorder, Seq("0", "4"), "free:2")
+                    _ <- afterRepaint(recorder, Seq("0"))(lead.set(1))
+                    _ <- showsEventually(recorder, Seq("0", "1"), "keyed:")
+                    _ <- showsEventually(recorder, Seq("0", "2", "0"), "nested:")
+                    _ <- showsEventually(recorder, Seq("0", "3"), "free:3")
+                    k <- recorder.shown(Seq("0", "1"))
+                    m <- recorder.shown(Seq("0", "2", "0"))
+                yield assert(k.contains("keyed:1") && m.contains("nested:1"), s"keyed: $k, nested: $m")
+            }
+            k <- keyedRuns.get
+            m <- nestedRuns.get
+            f <- freeRuns.get
+        yield assert((k, m, f) == (1, 1, 3), s"runs (keyed, nested, keyless): ${(k, m, f)}")
+    }
+
+    "a keyed mount inside a region inside keyed rows is told apart by the row key" in {
+        for
+            runs  <- AtomicRef.init(Map.empty[String, Int])
+            items <- Signal.initRef(Chunk("a", "b"))
+            tick  <- Signal.initRef(0)
+            ui = div(items.foreachKeyed(identity)(id => div(tick.render(_ => div(UI.mounted(counted(runs, id)).keyed("m"))))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "a", "0", "0"), "a:1")
+                    _ <- showsEventually(recorder, Seq("0", "b", "0", "0"), "b:1")
+                    _ <- items.set(Chunk("c", "a", "b"))
+                    _ <- showsEventually(recorder, Seq("0", "c", "0", "0"), "c:1")
+                    _ <- tick.set(1)
+                    _ <- showsEventually(recorder, Seq("0", "a", "0", "0"), "a:1")
+                    _ <- showsEventually(recorder, Seq("0", "b", "0", "0"), "b:1")
+                    _ <- showsEventually(recorder, Seq("0", "c", "0", "0"), "c:1")
+                yield ()
+            }
+            counts <- runs.get
+        yield assert(counts == Map("a" -> 1, "b" -> 1, "c" -> 1), s"runs per row: $counts")
+    }
+
+    "an unkeyed foreach keeps keyed instances by position, as before" in {
+        for
+            runs  <- AtomicRef.init(Map.empty[String, Int])
+            items <- Signal.initRef(Chunk("a", "b"))
+            ui = div(items.foreach(id => div(UI.mounted(counted(runs, id)).keyed("m"))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _      <- showsEventually(recorder, Seq("0", "0", "0"), "a:1")
+                    _      <- showsEventually(recorder, Seq("0", "1", "0"), "b:1")
+                    _      <- items.set(Chunk("c", "a", "b"))
+                    _      <- showsEventually(recorder, Seq("0", "2", "0"), "b:2")
+                    first  <- recorder.shown(Seq("0", "0", "0"))
+                    second <- recorder.shown(Seq("0", "1", "0"))
+                yield assert(first.contains("a:1") && second.contains("b:1"), s"row 0: $first, row 1: $second")
+            }
+            counts <- runs.get
+        yield assert(counts == Map("a" -> 1, "b" -> 2), s"runs: $counts")
+    }
+
+    private def card(issue: String, refresh: Signal[Int], runs: AtomicRef[Map[String, Int]])(using Frame): UI =
+        div(refresh.render(_ => div(UI.mounted(counted(runs, issue)).keyed(issue))))
+
+    // The page takes a `Frame` too, as application code does, so both cards and their regions get the page's caller's frame.
+    private def board(pinned: Boolean, refresh: Signal[Int], runs: AtomicRef[Map[String, Int]])(using Frame): UI =
+        div(if pinned then card("A", refresh, runs) else span("nothing pinned"), card("B", refresh, runs))
+
+    "two cards on a page that takes a Frame keep the second card's instance while the first comes and goes" in {
+        for
+            runs    <- AtomicRef.init(Map.empty[String, Int])
+            pinned  <- Signal.initRef(true)
+            refresh <- Signal.initRef(0)
+            ui = div(pinned.render(p => board(p, refresh, runs)))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "1", "0", "0"), "B:1")
+                    // A's first instance must have run before it is unpinned: one released before its effect runs is never counted.
+                    _ <- showsEventually(recorder, Seq("0", "0", "0", "0"), "A:1")
+                    _ <- afterRepaint(recorder, Seq("0"))(pinned.set(false))
+                    _ <- showsEventually(recorder, Seq("0", "1", "0", "0"), "B:")
+                    _ <- afterRepaint(recorder, Seq("0"))(pinned.set(true))
+                    _ <- showsEventually(recorder, Seq("0", "0", "0", "0"), "A:")
+                    _ <- showsEventually(recorder, Seq("0", "1", "0", "0"), "B:")
+                yield ()
+            }
+            counts <- runs.get
+        yield assert(counts == Map("A" -> 2, "B" -> 1), s"runs per card: $counts")
+    }
+
+    // The first instance of A is still in its effect when A is unpinned: its release interrupts that effect, and the instance that
+    // shows A again once it is pinned runs at once instead of waiting for anything of the one before it.
+    "a keyed instance released while its effect is still pending does not hold back the instance that shows it again" in {
+        for
+            runs     <- AtomicRef.init(Map.empty[String, Int])
+            starts   <- AtomicInt.init(0)
+            entered  <- Latch.init(1)
+            gate     <- Promise.init[Unit, Any]
+            released <- AtomicBoolean.init(false)
+            pinned   <- Signal.initRef(true)
+            refresh  <- Signal.initRef(0)
+            effectA = starts.incrementAndGet.map { n =>
+                if n == 1 then Sync.ensure(released.set(true))(entered.release.andThen(gate.get).andThen(counted(runs, "A")))
+                else counted(runs, "A")
+            }
+            cardA = div(refresh.render(_ => div(UI.mounted(effectA).keyed("A"))))
+            ui    = div(pinned.render(p => div(if p then cardA else span("nothing pinned"), card("B", refresh, runs))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "1", "0", "0"), "B:1")
+                    _ <- entered.await
+                    _ <- afterRepaint(recorder, Seq("0"))(pinned.set(false))
+                    _ <- afterRepaint(recorder, Seq("0"))(pinned.set(true))
+                    _ <- showsEventually(recorder, Seq("0", "0", "0", "0"), "A:1")
+                    _ <- assertEventually(released.get)
+                yield ()
+            }
+            counts <- runs.get
+            total  <- starts.get
+        yield assert(counts == Map("A" -> 1, "B" -> 1) && total == 2, s"runs per card: $counts, effect starts of A: $total")
+    }
+
+    private def draftBox(editing: Boolean, draft: SignalRef[String], b: Signal[String], runs: AtomicInt)(using Frame): UI =
+        div(
+            if editing then input.value(draft) else span("read only"),
+            b.render(_ => div(UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box")))
+        )
+
+    "a bound input appearing before a region does not restart the region's keyed instance" in {
+        for
+            runs    <- AtomicInt.init(0)
+            editing <- Signal.initRef(false)
+            draft   <- Signal.initRef("draft")
+            b       <- Signal.initRef("b")
+            ui = div(editing.render(e => draftBox(e, draft, b, runs)))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                    _ <- afterRepaint(recorder, Seq("0"))(editing.set(true))
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                    _ <- afterRepaint(recorder, Seq("0"))(editing.set(false))
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                yield ()
+            }
+            total <- runs.get
+        yield assert(total == 1, s"a bound input before the region restarted its keyed instance: $total runs")
+    }
+
+    "rows spliced into a fragment whose mounts share a key without data are reported, not paired by position" in {
+        for
+            runs  <- AtomicRef.init(Map.empty[String, Int])
+            order <- Signal.initRef(Chunk("A", "B"))
+            ui = div(order.render(o => ul(fragment(o.toSeq.map(id => li(span(id), UI.mounted(counted(runs, id)).keyed("note")))*))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "0", "0", "1"), "kyo-mount-error")
+                    _ <- showsEventually(recorder, Seq("0", "0", "1", "1"), "kyo-mount-error")
+                    _ <- afterRepaint(recorder, Seq("0"))(order.set(Chunk("B", "A")))
+                    _ <- showsEventually(recorder, Seq("0", "0", "0", "1"), "kyo-mount-error")
+                    // Each row's error paints on its own after the list's repaint: wait for the second row's too before reading it.
+                    _     <- showsEventually(recorder, Seq("0", "0", "1", "1"), "kyo-mount-error")
+                    shown <- recorder.shown(Seq("0", "0", "1", "1"))
+                yield assert(shown.contains("kyo-mount-error") && !shown.contains("A:") && !shown.contains("B:"), shown)
+            }
+            counts <- runs.get
+        yield assert(counts.isEmpty, s"a duplicated identity ran its effect: $counts")
+    }
+
+    "an unkeyed foreach puts the row index into the identity, so a data-keyed mount restarts when its row shifts" in {
+        for
+            runs  <- AtomicRef.init(Map.empty[String, Int])
+            items <- Signal.initRef(Chunk("B"))
+            ui = div(items.foreach(id => div(UI.mounted(counted(runs, id)).keyed(id))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "0", "0"), "B:1")
+                    _ <- items.set(Chunk("A", "B"))
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "B:2")
+                    _ <- showsEventually(recorder, Seq("0", "0", "0"), "A:1")
+                yield ()
+            }
+            counts <- runs.get
+        yield assert(counts == Map("A" -> 1, "B" -> 2), s"runs: $counts")
+    }
+
+    "a keyed mount inside a keyless one restarts with it, inside a keyed one it is kept" in {
+        for
+            runs <- AtomicRef.init(Map.empty[String, Int])
+            tick <- Signal.initRef(0)
+            inner = (name: String) => UI.mounted(counted(runs, name)).keyed("inner")
+            ui    = div(tick.render(n =>
+                div(
+                    span(s"tick:$n"),
+                    UI.mounted(Kyo.lift(div(inner("in-keyless")))),
+                    UI.mounted(Kyo.lift(div(inner("in-keyed")))).keyed("outer")
+                )
+            ))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "in-keyless:1")
+                    _ <- showsEventually(recorder, Seq("0", "2", "0"), "in-keyed:1")
+                    _ <- afterRepaint(recorder, Seq("0"))(tick.set(1))
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "in-keyless:2")
+                    _ <- showsEventually(recorder, Seq("0", "2", "0"), "in-keyed:")
+                yield ()
+            }
+            counts <- runs.get
+        yield assert(counts == Map("in-keyless" -> 2, "in-keyed" -> 1), s"runs: $counts")
+    }
+
+    "a row of nested keyed lists is identified with its group: moving groups restarts it, two groups at once are not a duplicate" in {
+        for
+            runs   <- AtomicRef.init(Map.empty[String, Int])
+            groups <- Signal.initRef(Chunk(("open", Chunk("X")), ("done", Chunk.empty[String])))
+            ui = div(groups.foreachKeyed(_._1)((group, ids) =>
+                div(
+                    span(group),
+                    Signal.initConst(ids).foreachKeyed(identity)(id => div(UI.mounted(counted(runs, s"$id@$group")).keyed("row")))
+                )
+            ))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "open", "1", "X", "0"), "X@open:1")
+                    _ <- groups.set(Chunk(("open", Chunk.empty[String]), ("done", Chunk("X"))))
+                    _ <- showsEventually(recorder, Seq("0", "done", "1", "X", "0"), "X@done:1")
+                    _ <- groups.set(Chunk(("open", Chunk("X")), ("done", Chunk("X"))))
+                    _ <- showsEventually(recorder, Seq("0", "open", "1", "X", "0"), "X@open:2")
+                    _ <- showsEventually(recorder, Seq("0", "done", "1", "X", "0"), "X@done:1")
+                yield ()
+            }
+            counts <- runs.get
+        yield assert(counts == Map("X@open" -> 2, "X@done" -> 1), s"runs: $counts")
+    }
+
+    // ---- Moves between regions that render separately: decided at a cut, never by render order ----
+
+    /** A recorder that, once armed, holds the next paint at `held` until `gate` completes: the region painting there is stuck in the
+      * middle of a pass, so any later value of it waits behind that pass, and the other regions run first.
+      *
+      * The held region must render the value written to hold it (a nonce): its first pass can run after that write, and a pass whose
+      * content equals what the page already shows paints nothing, so a write it does not render would never reach the gate.
+      */
+    private class Gated(held: Seq[String], entered: Promise[Unit, Any], gate: Promise[Unit, Any]) extends Recorder():
+        private val armed = new java.util.concurrent.atomic.AtomicBoolean(false)
+
+        def arm(): Unit = armed.set(true)
+
+        override def onChange(
+            region: ReactiveRegion,
+            path: Seq[String],
+            context: ReactiveRegion.RegionIdentity,
+            parentContext: ReactiveRegion.ParentContext,
+            previous: Maybe[UI],
+            ui: UI
+        )(using Frame): Unit < Async =
+            if path == held && armed.compareAndSet(true, false) then
+                entered.completeUnitDiscard.andThen(gate.get).andThen(super.onChange(region, path, context, parentContext, previous, ui))
+            else super.onChange(region, path, context, parentContext, previous, ui)
+        end onChange
+    end Gated
+
+    private def mountWith[A](recorder: Recorder, ui: UI)(
+        f: ((Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope)
+    )(using Frame): A < Async =
+        Scope.run {
+            for
+                _    <- recorder.initial(ui)
+                root <- ReactiveUI.normalize(ui, Seq.empty)
+                sub  <- ReactiveUI.subscribe(root, recorder)
+                a    <- f(sub.handle)
+            yield a
+        }
+
+    /** A dock: one keyed panel shown either in the left region or in the right one, each region over a signal of its own, both set in
+      * one click handler. The region `held` is stuck in a pass of an unrelated value (its nonce) while the click runs, so the other
+      * region renders the move first; then it is let go.
+      */
+    private def dockMove(holdLoser: Boolean, ticks: Int = 0)(using Frame, kyo.test.AssertScope) =
+        for
+            runs     <- AtomicInt.init(0)
+            released <- AtomicInt.init(0)
+            left     <- Signal.initRef((true, 0))
+            right    <- Signal.initRef((false, 0))
+            tick     <- Signal.initRef(0)
+            entered  <- Promise.init[Unit, Any]
+            gate     <- Promise.init[Unit, Any]
+            held     = if holdLoser then Seq("1") else Seq("2")
+            recorder = new Gated(held, entered, gate)
+            node     = UI.mounted(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(r => span(s"runs:$r"))))
+                .keyed("docked")
+            ui = div(
+                // Two writes on the JVM: one change only inside UI.batch.
+                button("move").onClick(UI.batch(left.getAndUpdate(p => (false, p._2)).andThen(right.getAndUpdate(p => (true, p._2)))).unit),
+                left.render(p => if p._1 then div(node) else div(span(s"empty-left:${p._2}"))),
+                right.render(p => if p._1 then div(node) else div(span(s"empty-right:${p._2}"))),
+                tick.render(n => span(s"tick:$n"))
+            )
+            _ <- mountWith(recorder, ui) { handle =>
+                for
+                    _ <- showsEventually(recorder, Seq("1", "0"), "runs:1")
+                    _ <- Sync.defer(recorder.arm())
+                    _ <- (if holdLoser then left else right).getAndUpdate(p => (p._1, p._2 + 1))
+                    _ <- entered.get
+                    _ <- handle(Seq("0"), click("0"))
+                    // The region that was not held renders the click.
+                    _ <-
+                        if holdLoser then showsEventually(recorder, Seq("2", "0"), "runs:")
+                        else showsEventually(recorder, Seq("1"), "empty-left")
+                    // The waiting place paints the snapshot, then sends its hold: wait for the hold, while the losing region is still held.
+                    _         <- if holdLoser then assertEventually(recorder.holds.map(_.nonEmpty)) else Kyo.unit
+                    contested <- recorder.holds
+                    _         <- Kyo.foreachDiscard(1 to ticks)(n => tick.set(n))
+                    _         <- gate.completeUnitDiscard
+                    _         <- showsEventually(recorder, Seq("1"), "empty-left")
+                    _         <- assertEventually(recorder.holds.map(h => h.size % 2 == 0))
+                    _         <- showsEventually(recorder, Seq("2", "0"), "runs:1")
+                    total     <- runs.get
+                    gone      <- released.get
+                yield
+                    if holdLoser then
+                        assert(
+                            contested.map(_._2) == Chunk(true),
+                            s"the gaining place showed live content while the losing one held it: $contested"
+                        )
+                    end if
+                    assert(total == 1 && gone == 0, s"runs: $total, released: $gone")
+            }
+        yield succeed
+
+    "a panel moved between two separately rendered regions in one handler keeps its instance when the gaining region renders first" in {
+        dockMove(holdLoser = true)
+    }
+
+    "a panel moved between two separately rendered regions in one handler keeps its instance when the losing region renders first" in {
+        dockMove(holdLoser = false)
+    }
+
+    "a move is decided once the held region has caught up, even while another region keeps re-rendering" in {
+        dockMove(holdLoser = false, ticks = 20)
+    }
+
+    "a panel dropped by one region that no other region picks up is released" in {
+        for
+            released <- AtomicBoolean.init(false)
+            left     <- Signal.initRef(true)
+            other    <- Signal.initRef(0)
+            node = UI.mounted(Scope.ensure(released.set(true)).andThen(span("held"))).keyed("dropped")
+            ui   = div(
+                button("hide").onClick(left.set(false)),
+                left.render(l => if l then div(node) else div(span("empty"))),
+                other.render(n => span(s"other:$n"))
+            )
+            _ <- mount(ui) { (recorder, handle) =>
+                for
+                    _ <- showsEventually(recorder, Seq("1", "0"), "held")
+                    _ <- handle(Seq("0"), click("0"))
+                    _ <- showsEventually(recorder, Seq("1"), "empty")
+                    _ <- assertEventually(released.get)
+                yield ()
+            }
+        yield succeed
+    }
+
+    "an identity two separately rendered regions show at once is reported at both, and the one that stays gets an instance" in {
+        for
+            runs     <- AtomicInt.init(0)
+            released <- AtomicInt.init(0)
+            showA    <- Signal.initRef(true)
+            showB    <- Signal.initRef(false)
+            node = UI.mounted(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(r => span(s"runs:$r"))))
+                .keyed("twice-apart")
+            ui = div(
+                button("both").onClick(showB.set(true)),
+                showA.render(a => if a then div(node) else div(span("no a"))),
+                showB.render(b => if b then div(node) else div(span("no b")))
+            )
+            _ <- mount(ui) { (recorder, handle) =>
+                for
+                    _     <- showsEventually(recorder, Seq("1", "0"), "runs:1")
+                    _     <- handle(Seq("0"), click("0"))
+                    _     <- showsEventually(recorder, Seq("1", "0"), "kyo-mount-error")
+                    _     <- showsEventually(recorder, Seq("2", "0"), "kyo-mount-error")
+                    first <- recorder.shown(Seq("1", "0"))
+                    _     <- assertEventually(released.get.map(_ == 1))
+                    _     <- showA.set(false)
+                    _     <- showsEventually(recorder, Seq("2", "0"), "runs:2")
+                yield assert(first.contains("1.0") && first.contains("2.0"), first)
+            }
+        yield succeed
+    }
+
+    // The gaining region is held in a pass and is behind on a write it has not read yet, so the cut cannot be reached: the panel
+    // the losing region dropped is still in transit, undecided, when the session ends.
+    "an instance in transit when the session ends is released" in {
+        for
+            released <- AtomicBoolean.init(false)
+            left     <- Signal.initRef(true)
+            right    <- Signal.initRef((false, 0))
+            entered  <- Promise.init[Unit, Any]
+            gate     <- Promise.init[Unit, Any]
+            recorder = new Gated(Seq("2"), entered, gate)
+            node     = UI.mounted(Scope.ensure(released.set(true)).andThen(span("panel"))).keyed("transit")
+            ui       = div(
+                button("hide").onClick(left.set(false)),
+                left.render(l => if l then div(node) else div(span("empty-left"))),
+                right.render(p => if p._1 then div(node) else div(span(s"empty-right:${p._2}")))
+            )
+            undecided <- mountWith(recorder, ui) { handle =>
+                for
+                    _ <- showsEventually(recorder, Seq("1", "0"), "panel")
+                    _ <- Sync.defer(recorder.arm())
+                    _ <- right.getAndUpdate(p => (p._1, p._2 + 1))
+                    _ <- entered.get
+                    // A write the held region has not read: it is behind until a later pass of it, which never comes.
+                    _ <- right.getAndUpdate(p => (p._1, p._2 + 1))
+                    _ <- handle(Seq("0"), click("0"))
+                    _ <- showsEventually(recorder, Seq("1"), "empty-left")
+                    r <- released.get
+                yield !r
+            }
+            r <- released.get
+        yield
+            assert(undecided, "the panel was released before the session ended: it was not in transit")
+            assert(r, "the instance in transit outlived its session")
+        end for
+    }
+
+    // A cut has started releasing a panel no region shows any more, and the release waits on the panel's own finalizer when the
+    // session closes. The session must not end before the release has: virtual time shows whether its close waited.
+    "closing the session waits for a release a cut has already started" in {
+        val ri = Signal.defaultRepairInterval
+        Clock.withTimeControl { control =>
+            Scope.run {
+                for
+                    _         <- Fiber.init(Loop.forever(control.advance(ri, 1.millis)))
+                    releasing <- Latch.init(1)
+                    gate      <- Latch.init(1)
+                    released  <- AtomicBoolean.init(false)
+                    show      <- Signal.initRef(true)
+                    node = UI.mounted(
+                        Scope.ensure(releasing.release.andThen(gate.await).andThen(released.set(true))).andThen(span("panel"))
+                    ).keyed("slow-release")
+                    ui = div(show.render(s => if s then div(node) else div(span("hidden"))))
+                    bodyDone <- Latch.init(1)
+                    session  <- Fiber.init(mount(ui) { (recorder, _) =>
+                        showsEventually(recorder, Seq("0", "0"), "panel")
+                            .andThen(show.set(false))
+                            .andThen(releasing.await)
+                            .andThen(bodyDone.release)
+                    })
+                    _ <- bodyDone.await
+                    // Only the close is timed: a close that waits for the release cannot end before the gate opens.
+                    closed <- Abort.run[Timeout](Async.timeout(ri * 600)(session.get))
+                    _      <- gate.release
+                    _      <- assertEventually(released.get)
+                yield assert(closed.isFailure, s"the session closed while a release it owned was still running: $closed")
+            }
+        }
+    }
+
+    "an instance in transit when the mount that owns its table goes away is released" in {
+        for
+            released <- AtomicBoolean.init(false)
+            outer    <- Signal.initRef(0)
+            left     <- Signal.initRef(true)
+            right    <- Signal.initRef((false, 0))
+            entered  <- Promise.init[Unit, Any]
+            gate     <- Promise.init[Unit, Any]
+            recorder = new Gated(Seq("1", "0", "1"), entered, gate)
+            inner    = UI.mounted(Scope.ensure(released.set(true)).andThen(span("inner"))).keyed("inner-transit")
+            owner    = UI.mounted(Kyo.lift(div(
+                left.render(l => if l then div(inner) else div(span("empty-left"))),
+                right.render(p => if p._1 then div(inner) else div(span(s"empty-right:${p._2}")))
+            )))
+            ui = div(button("hide").onClick(left.set(false)), outer.render(n => if n == 0 then div(owner) else div(span("owner gone"))))
+            _ <- mountWith(recorder, ui) { handle =>
+                for
+                    _ <- showsEventually(recorder, Seq("1", "0", "0", "0"), "inner")
+                    _ <- Sync.defer(recorder.arm())
+                    _ <- right.getAndUpdate(p => (p._1, p._2 + 1))
+                    _ <- entered.get
+                    _ <- handle(Seq("0"), click("0"))
+                    _ <- showsEventually(recorder, Seq("1", "0", "0"), "empty-left")
+                    _ <- outer.set(1)
+                    _ <- showsEventually(recorder, Seq("1"), "owner gone")
+                    _ <- assertEventually(released.get)
+                    _ <- gate.completeUnitDiscard
+                yield ()
+            }
+        yield succeed
+    }
+
+    private def errorBox(label: String, fail: Promise[Unit, Any])(using Frame): UI =
+        UI.mounted(UI.fork(fail.get.andThen(Abort.fail(new Exception("feed died")))).andThen(span("box")))
+            .onError(e => span(s"$label-error:${e.message}"))
+            .keyed("error-box")
+
+    "a failure while an instance is in transit shows in the error view of the node that adopts it" in {
+        for
+            fail    <- Promise.init[Unit, Any]
+            left    <- Signal.initRef((true, 0))
+            right   <- Signal.initRef(false)
+            entered <- Promise.init[Unit, Any]
+            gate    <- Promise.init[Unit, Any]
+            recorder = new Gated(Seq("1"), entered, gate)
+            ui       = div(
+                button("move").onClick(left.getAndUpdate(p => (false, p._2)).andThen(right.set(true)).unit),
+                left.render(p => if p._1 then div(errorBox("left", fail)) else div(span("empty-left"))),
+                right.render(r => if r then div(errorBox("right", fail)) else div(span("empty-right")))
+            )
+            _ <- mountWith(recorder, ui) { handle =>
+                for
+                    _ <- showsEventually(recorder, Seq("1", "0"), "box")
+                    _ <- Sync.defer(recorder.arm())
+                    _ <- left.getAndUpdate(p => (p._1, p._2 + 1))
+                    _ <- entered.get
+                    _ <- handle(Seq("0"), click("0"))
+                    _ <- assertEventually(recorder.paintsAt(Seq("2")).map(_ >= 1))
+                    _ <- fail.completeUnitDiscard
+                    _ <- gate.completeUnitDiscard
+                    _ <- showsEventually(recorder, Seq("2", "0"), "right-error:feed died")
+                yield ()
+            }
+        yield succeed
+    }
+
+    private def writerDock(batched: Boolean)(using Frame, kyo.test.AssertScope) =
+        for
+            runs    <- AtomicInt.init(0)
+            left    <- Signal.initRef(true)
+            right   <- Signal.initRef(false)
+            trigger <- Promise.init[Unit, Any]
+            between <- Promise.init[Unit, Any]
+            node = UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("written")
+            move = left.set(false).andThen(between.get).andThen(right.set(true))
+            // The writer is a fiber the effect of another mount forked: its writes are no event handler's.
+            writer = UI.mounted(UI.fork(trigger.get.andThen(if batched then UI.batch(move) else move)).andThen(span("writer")))
+            ui     = div(
+                writer,
+                left.render(l => if l then div(node) else div(span("empty-left"))),
+                right.render(r => if r then div(node) else div(span("empty-right")))
+            )
+            total <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("1", "0"), "runs:1")
+                    _ <- trigger.completeUnitDiscard
+                    // The losing region renders while the writer is between its two writes.
+                    _ <- showsEventually(recorder, Seq("1"), "empty-left")
+                    _ <- between.completeUnitDiscard
+                    _ <- showsEventually(recorder, Seq("2", "0"), "runs:")
+                    n <- runs.get
+                yield n
+            }
+        yield total
+
+    "a move a background fiber writes in two steps inside UI.batch keeps its instance" in {
+        writerDock(batched = true).map(total => assert(total == 1, s"runs: $total"))
+    }
+
+    // Two writes with time between them and no batch are two changes: the first is decided before the second is made. This pins the
+    // documented behaviour, not a guarantee to keep.
+    "a move a background fiber writes in two steps without UI.batch is two changes: released, then started again" in {
+        writerDock(batched = false).map(total => assert(total == 2, s"runs: $total"))
+    }
+
+    "a large keyed list of regions without mounts records nothing and scans nothing per pass" in {
+        val rows = 2000
+        for
+            items <- Signal.initRef(Chunk.from((1 to rows).map(_.toString)))
+            tick  <- Signal.initRef(0)
+            ui       = div(items.foreachKeyed(identity)(id => div(tick.render(n => span(s"$id:$n")))))
+            recorder = new Recorder(keepsRows = true) // patches the list as the DOM backend does
+            counts <- Scope.run {
+                for
+                    _    <- recorder.initial(ui)
+                    root <- ReactiveUI.normalize(ui, Seq.empty)
+                    sub  <- ReactiveUI.subscribe(root, recorder)
+                    c = sub.mountSession.counters
+                    _ <- assertEventually(Sync.defer(c.registered.get == rows + 1))
+                    _ <- assertEventually(Sync.defer(c.skipped.get >= rows + 1))
+                    before = (c.registered.get, c.planned.get, c.scanned.get, c.cuts.get, c.skipped.get)
+                    _ <- tick.set(1)
+                    _ <- assertEventually(Sync.defer(c.skipped.get >= before._5 + rows))
+                    _ <- items.set(Chunk.from((1 to rows).map(_.toString)) :+ "new")
+                    _ <- showsEventually(recorder, Seq("0", "new", "0"), "new:1")
+                    // The new row's region registers as its row subscribes, which may be after the list painted it.
+                    _ <- assertEventually(Sync.defer(c.registered.get == before._1 + 1))
+                    after = (c.registered.get, c.planned.get, c.scanned.get, c.cuts.get, c.skipped.get)
+                yield (before, after)
+            }
+        yield
+            val (
+                (regBefore, plannedBefore, scannedBefore, cutsBefore, skippedBefore),
+                (regAfter, plannedAfter, scannedAfter, cutsAfter, skippedAfter)
+            ) =
+                counts
+            java.lang.System.out.println(s"MOUNTCOST rows=$rows before=${counts._1} after=${counts._2}")
+            assert(plannedBefore == 0 && plannedAfter == 0, s"a pass without mounts planned: ${counts}")
+            assert(scannedAfter == 0 && cutsAfter == 0, s"a cut scanned regions with nothing in transit: ${counts}")
+            assert(regAfter == regBefore + 1, s"a re-render or a new row registered more than the new row's region: ${counts}")
+            assert(skippedAfter - skippedBefore >= rows, s"the tick did not reach every row: ${counts}")
+        end for
+    }
+
+    // The issue tracker's tool bar summary: a write takes a region's value away and a second one, made while the region's pass
+    // closes, takes it back, so the region runs no pass for it. A cut must still see that region as current, or a release elsewhere
+    // waits for good.
+    "a region whose value comes back while its pass closes does not hold back a release elsewhere" in {
+        for
+            released <- Latch.init(1)
+            reverted <- Latch.init(1)
+            armed    <- AtomicBoolean.init(false)
+            value    <- Signal.initRef(0)
+            show     <- Signal.initRef(true)
+            // A keyless mount is released as its region's pass closes: its finalizer writes the value back then.
+            keyless = UI.mounted(
+                Scope.ensure(armed.compareAndSet(true, false).map(go => if go then value.set(0).andThen(reverted.release) else Kyo.unit))
+                    .andThen(span("keyless"))
+            )
+            node = UI.mounted(Scope.ensure(released.release).andThen(span("panel"))).keyed("panel")
+            ui   = div(
+                value.render(n => div(span(s"value:$n"), keyless)),
+                show.render(s => if s then div(node) else div(span("hidden")))
+            )
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("1", "0"), "panel")
+                    // The value region has run its first pass and waits for the next write, and its keyless mount's effect has run, so its
+                    // finalizer is registered: the write and its revert are meant for that pass, not for a first pass that would read them
+                    // both at once, and the revert only happens if the finalizer exists when the pass closes.
+                    _ <- showsEventually(recorder, Seq("0", "1"), "keyless")
+                    _ <- assertEventually(Sync.Unsafe.defer(value.unsafe.waiters() == 1))
+                    _ <- armed.set(true)
+                    _ <- value.set(1)
+                    _ <- reverted.await
+                    _ <- show.set(false)
+                    _ <- showsEventually(recorder, Seq("1"), "hidden")
+                    _ <- released.await
+                yield ()
+            }
+        yield succeed
+    }
+
+    // ---- Regions the cut cannot read exactly, and a superseded subscription ----
+
+    // A region over a signal built with `Signal.initRaw` is observed through the repairing loop: it has no exact read, so whether a
+    // write landed since its pass cannot be told. A cut counts it as behind until its next re-read, which the repair timer brings
+    // at the latest. Virtual time drives that timer.
+    "a panel moved into a region over an initRaw signal keeps its instance when the losing region renders first" in {
+        val ri = Signal.defaultRepairInterval
+        Clock.withTimeControl { control =>
+            Scope.run {
+                for
+                    _        <- Fiber.init(Loop.forever(control.advance(ri, 1.millis)))
+                    runs     <- AtomicInt.init(0)
+                    released <- AtomicInt.init(0)
+                    left     <- Signal.initRef(true)
+                    right    <- Signal.initRef((false, 0))
+                    entered  <- Promise.init[Unit, Any]
+                    gate     <- Promise.init[Unit, Any]
+                    recorder = new Gated(Seq("2"), entered, gate)
+                    rawRight = Signal.initRaw[(Boolean, Int)](
+                        [B, S] => (f: ((Boolean, Int)) => B < S) => right.currentWith(f),
+                        [B, S] => (f: ((Boolean, Int)) => B < S) => right.nextWith(f)
+                    )
+                    node = UI.mounted(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(r => span(s"runs:$r"))))
+                        .keyed("raw-docked")
+                    ui = div(
+                        button("move").onClick(UI.batch(left.set(false).andThen(right.getAndUpdate(p => (true, p._2)))).unit),
+                        left.render(l => if l then div(node) else div(span("empty-left"))),
+                        rawRight.render(p => if p._1 then div(node) else div(span(s"empty-right:${p._2}")))
+                    )
+                    _ <- mountWith(recorder, ui) { handle =>
+                        for
+                            _ <- showsEventually(recorder, Seq("1", "0"), "runs:1")
+                            // The gaining region is held in a pass of an unrelated value, so the losing one renders the move first.
+                            _     <- Sync.defer(recorder.arm())
+                            _     <- right.getAndUpdate(p => (p._1, p._2 + 1))
+                            _     <- entered.get
+                            _     <- handle(Seq("0"), click("0"))
+                            _     <- showsEventually(recorder, Seq("1"), "empty-left")
+                            _     <- gate.completeUnitDiscard
+                            _     <- showsEventually(recorder, Seq("2", "0"), "runs:")
+                            total <- runs.get
+                            gone  <- released.get
+                        yield assert(total == 1 && gone == 0, s"runs: $total, released: $gone")
+                    }
+                yield succeed
+            }
+        }
+    }
+
+    // A region without a mount has no entry in its table, so nothing records which of its subscriptions is current. Here the old
+    // subscription of such a region is in the middle of a pass that gains the region's first keyed mount, held in its paint, when
+    // its parent re-renders and subscribes the region again.
+    "a superseded region that gains its first keyed mount while its parent re-renders starts no instance of its own" in {
+        for
+            runs     <- AtomicInt.init(0)
+            released <- AtomicInt.init(0)
+            outer    <- Signal.initRef(0)
+            inner    <- Signal.initRef(false)
+            entered  <- Promise.init[Unit, Any]
+            gate     <- Promise.init[Unit, Any]
+            recorder = new Gated(Seq("0", "1"), entered, gate)
+            node     = UI.mounted(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(r => span(s"runs:$r"))))
+                .keyed("first-mount")
+            ui = div(outer.render(n => div(span(s"outer:$n"), inner.render(v => if v then div(node) else div(span("no mount"))))))
+            _ <- mountWith(recorder, ui) { _ =>
+                for
+                    // Both regions have run their first pass and observe their signals: the inner one is the subscription that will
+                    // be superseded.
+                    _ <- assertEventually(Sync.Unsafe.defer(outer.unsafe.waiters() == 1 && inner.unsafe.waiters() == 1))
+                    _ <- Sync.defer(recorder.arm())
+                    _ <- inner.set(true)
+                    // The old subscription has recorded its walk and is held in its paint.
+                    _ <- entered.get
+                    _ <- outer.set(1)
+                    _ <- showsEventually(recorder, Seq("0"), "outer:1")
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                    _ <- gate.completeUnitDiscard
+                    // Only the new subscription of the inner region still observes it once the old one is gone.
+                    _     <- assertEventually(Sync.Unsafe.defer(inner.unsafe.waiters() == 1))
+                    shown <- recorder.shown(Seq("0", "1", "0"))
+                    total <- runs.get
+                    gone  <- released.get
+                yield assert(
+                    total == 1 && gone == 0 && shown.contains("runs:1"),
+                    s"runs: $total, released: $gone, shown: $shown"
+                )
+            }
+        yield succeed
+    }
+
+    // The second place's claim is held in its paint, so the cut that finds the identity in two regions runs before that claim is
+    // filed. The report still names both places: they come from what the regions' passes recorded, not from the claims filed so far.
+    "a duplicate found across separate regions names every place, also one whose claim is not filed yet" in {
+        for
+            showA   <- Signal.initRef(true)
+            showB   <- Signal.initRef(false)
+            entered <- Promise.init[Unit, Any]
+            gate    <- Promise.init[Unit, Any]
+            recorder = new Gated(Seq("2"), entered, gate)
+            node     = UI.mounted(Kyo.lift(span("panel"))).keyed("named-twice")
+            ui       = div(
+                button("both").onClick(showB.set(true)),
+                showA.render(a => if a then div(node) else div(span("no a"))),
+                showB.render(b => if b then div(node) else div(span("no b")))
+            )
+            _ <- mountWith(recorder, ui) { handle =>
+                for
+                    _     <- showsEventually(recorder, Seq("1", "0"), "panel")
+                    _     <- Sync.defer(recorder.arm())
+                    _     <- handle(Seq("0"), click("0"))
+                    _     <- entered.get
+                    _     <- showsEventually(recorder, Seq("1", "0"), "kyo-mount-error")
+                    shown <- recorder.shown(Seq("1", "0"))
+                    _     <- gate.completeUnitDiscard
+                yield assert(shown.contains("shown in 2 places at once: 1.0, 2.0"), shown)
+            }
+        yield succeed
+    }
+
+    // A cut's decision is taken the moment the last region has caught up, not when the table's settling fiber gets to it. Here that
+    // fiber is busy, held in the release of another instance, while a keyed node is hidden (a change of its own, decided at once) and
+    // shown again: it is a new instance, made but not run until the release before it is done, never the hidden one adopted back.
+    "a keyed node hidden and shown again while an earlier release still runs gets a new instance" in {
+        for
+            xReleasing <- Latch.init(1)
+            xGate      <- Latch.init(1)
+            runs       <- AtomicInt.init(0)
+            kReleased  <- AtomicBoolean.init(false)
+            showX      <- Signal.initRef(true)
+            showK      <- Signal.initRef(true)
+            nodeX = UI.mounted(Scope.ensure(xReleasing.release.andThen(xGate.await)).andThen(span("x-content"))).keyed("slow")
+            nodeK = UI.mounted(Scope.ensure(kReleased.set(true)).andThen(runs.incrementAndGet.map(r => span(s"k:$r"))))
+                .placeholder(span("k-pending"))
+                .whilePending(PendingPolicy.Placeholder)
+                .keyed("again")
+            ui = div(
+                showX.render(s => if s then div(nodeX) else div(span("no x"))),
+                showK.render(s => if s then div(nodeK) else div(span("no k")))
+            )
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "0"), "x-content")
+                    _ <- showsEventually(recorder, Seq("1", "0"), "k:1")
+                    // The settling fiber is now held in the release of the first panel.
+                    _ <- showX.set(false)
+                    _ <- xReleasing.await
+                    _ <- afterRepaint(recorder, Seq("1"))(showK.set(false))
+                    _ <- afterRepaint(recorder, Seq("1"))(showK.set(true))
+                    // The region's pass, its claim included, has ended: it waits for its next value.
+                    _ <- assertEventually(Sync.Unsafe.defer(showK.unsafe.waiters() == 1))
+                    _ <- xGate.release
+                    // Once the releases have run, the node shows an instance's content: the new one's, never the hidden one's.
+                    _     <- showsEventually(recorder, Seq("1", "0"), "k:")
+                    shown <- recorder.shown(Seq("1", "0"))
+                    _ = assert(shown.contains("k:2"), s"the hidden instance was adopted back instead of a new one: $shown")
+                    _     <- assertEventually(kReleased.get)
+                    total <- runs.get
+                yield assert(total == 2, s"runs: $total")
+            }
+        yield succeed
     }
 
 end MountedTest
