@@ -60,7 +60,7 @@ private[kyo] trait UIExchange:
     def stylePatcherNow: Maybe[(Seq[String], Seq[(String, String)], Seq[String]) => Unit] = Absent
 
     /** Synchronous sink for a region whose content is exactly one text node: a `Signal[String]` lifted into a
-      * child position. Same contract as the sinks above: it runs on the writer's stack and must not suspend. It has no
+      * child position. Same contract as the three above: it runs on the writer's stack and must not suspend. It has no
       * effectful twin because a region repaint with the new `Text` already is one, on every transport.
       */
     def textPatcherNow: Maybe[(Seq[String], String) => Unit] = Absent

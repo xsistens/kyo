@@ -1,6 +1,6 @@
 package kyo.internal
 
-import MountRegions.*
+import DragSessions.*
 import ReactiveUI.*
 import kyo.*
 import kyo.UI.*

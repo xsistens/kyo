@@ -239,6 +239,62 @@ final private[kyo] class DomReactiveRegions private (
         end if
     end replaceContent
 
+    /** Brings the registry in line with a range that was reconciled in place rather than replaced.
+      *
+      * The reconciliation keeps nested ranges in place, so which markers ended up in the range is a property of the DOM
+      * rather than of the payload: `incoming` describes comments that were cloned or dropped, never the live ones.
+      * `live` is therefore read off the DOM, by a rescan of the range or by the [[DomReactiveRegions.PatchScope]] a row
+      * patch reports to, and `removed` names the entries the reconciliation may have invalidated.
+      *
+      * A nested range still waiting for its first value now holds its incoming markup, kept or cloned, so that markup is
+      * what its first value is compared against (see [[replaceWith]]). One whose first value already arrived has no entry
+      * and gets none; one that is gone takes its entry with it.
+      */
+    private def adoptLive(
+        removed: Set[String],
+        live: mutable.HashMap[String, DomReactiveRegions.Endpoints],
+        incomingMarkup: Seq[(String, String)]
+    ): Unit =
+        removed.foreach(ranges.remove)
+        removed.foreach(id => if !live.contains(id) then discard(inserted.remove(id)))
+        ranges.addAll(live)
+        incomingMarkup.foreach { (id, markup) =>
+            if live.contains(id) && (!removed.contains(id) || inserted.contains(id)) then inserted(id) = markup
+        }
+    end adoptLive
+
+    /** Write `value` as the whole content of the range that owns `path`; `false` when no range owns it.
+      *
+      * A text node holds literal characters, so the string is written as-is: no escaping, no parser, and no
+      * repaint of the surrounding region. The common shape (the range holds exactly one text node) assigns
+      * that node's data, which keeps its identity and every DOM-local thing hanging off it; any other shape
+      * is replaced by a single fresh text node.
+      */
+    private[kyo] def setTextAt(path: Seq[String], value: String): Boolean =
+        // The innermost range of the path: only a leaf region binds its text, and writing through an outer range
+        // would take the inner one's markers for content and delete them.
+        ranges.innermostAt(path) match
+            case Absent             => false
+            case Present(endpoints) =>
+                val first = DomReactiveRegions.next(endpoints.start)
+                first match
+                    case Present(node: dom.Text) if DomReactiveRegions.next(node).exists(_ eq endpoints.end) =>
+                        if node.data != value then node.data = value
+                    case _ =>
+                        DomReactiveRegions.parent(endpoints.start).foreach { parent =>
+                            var current = DomReactiveRegions.next(endpoints.start)
+                            while current.nonEmpty && (current.get ne endpoints.end) do
+                                val next = DomReactiveRegions.next(current.get)
+                                discard(parent.removeChild(current.get))
+                                current = next
+                            end while
+                            discard(parent.insertBefore(document.createTextNode(value), endpoints.end))
+                        }
+                end match
+                true
+        end match
+    end setTextAt
+
     private def sameContent(endpoints: DomReactiveRegions.Endpoints, content: dom.Node)(using AllowUnsafe): Boolean =
         @scala.annotation.tailrec
         def loop(left: Maybe[dom.Node], right: Maybe[dom.Node]): Boolean =
@@ -290,61 +346,6 @@ final private[kyo] class DomReactiveRegions private (
                 case _ => true
         end if
     end sameElementState
-
-    /** Brings the registry in line with a range that was reconciled in place rather than replaced.
-      *
-      * The reconciliation keeps nested ranges in place, so which markers ended up in the range is a property of the DOM
-      * rather than of the payload: `incoming` describes comments that were cloned or dropped, never the live ones.
-      * `live` is therefore read off the DOM, by a rescan of the range or by the [[DomReactiveRegions.PatchScope]] a row
-      * patch reports to, and `removed` names the entries the reconciliation may have invalidated.
-      *
-      * A nested range still waiting for its first value now holds its incoming markup, kept or cloned, so that markup is
-      * what its first value is compared against (see [[replaceWith]]). One whose first value already arrived has no entry
-      * and gets none; one that is gone takes its entry with it.
-      */
-    private def adoptLive(
-        removed: Set[String],
-        live: mutable.HashMap[String, DomReactiveRegions.Endpoints],
-        incomingMarkup: Seq[(String, String)]
-    ): Unit =
-        removed.foreach(ranges.remove)
-        removed.foreach(id => if !live.contains(id) then discard(inserted.remove(id)))
-        ranges.addAll(live)
-        incomingMarkup.foreach { (id, markup) =>
-            if live.contains(id) && (!removed.contains(id) || inserted.contains(id)) then inserted(id) = markup
-        }
-    end adoptLive
-
-    /** Write `value` as the whole content of the range that owns `path`; `false` when no range owns it.
-      *
-      * A text node holds literal characters, so the string is written as-is: no escaping, no parser, and no
-      * repaint of the surrounding region. The common shape (the range holds exactly one text node) assigns
-      * that node's data, which keeps its identity and every DOM-local thing hanging off it; any other shape
-      * is replaced by a single fresh text node.
-      */
-    private[kyo] def setTextAt(path: Seq[String], value: String): Boolean =
-        // The innermost range of the path: only a leaf region binds its text, and writing through an outer range
-        // would take the inner one's markers for content and delete them.
-        ranges.innermostAt(path) match
-            case Absent             => false
-            case Present(endpoints) =>
-                DomReactiveRegions.next(endpoints.start) match
-                    case Present(node: dom.Text) if DomReactiveRegions.next(node).exists(_ eq endpoints.end) =>
-                        if node.data != value then node.data = value
-                    case _ =>
-                        DomReactiveRegions.parent(endpoints.start).foreach { parent =>
-                            var current = DomReactiveRegions.next(endpoints.start)
-                            while current.nonEmpty && (current.get ne endpoints.end) do
-                                val next = DomReactiveRegions.next(current.get)
-                                discard(parent.removeChild(current.get))
-                                current = next
-                            end while
-                            discard(parent.insertBefore(document.createTextNode(value), endpoints.end))
-                        }
-                end match
-                true
-        end match
-    end setTextAt
 
     private[kyo] def size(using Frame): Int < Sync =
         Sync.defer(ranges.size)
@@ -615,6 +616,73 @@ private[kyo] object DomReactiveRegions:
 
     final private[kyo] case class Endpoints(start: dom.Comment, end: dom.Comment)
 
+    /** The live ranges by id, and the ids of each path.
+      *
+      * A range id encodes its path ([[ReactiveRegion.htmlId]]), so the range of a path is found by ENCODING the path
+      * once and reading the table. Decoding every held id to compare paths costs the size of the registry times the
+      * length of an id, per lookup: a bound text write in a thousand-row table spent 4.4 million hex-digit decodes
+      * finding its one text node.
+      *
+      * One path can own several ranges: a region nested transparently in another shares its path and differs only
+      * in the depth suffix. `byBase` keeps those together under the depth-less id, in no particular order; the
+      * depth is read off the id when one is picked. Every mutation goes through here so the two maps cannot drift.
+      */
+    final private class RangeTable private (byId: mutable.HashMap[String, Endpoints]):
+
+        private val byBase = mutable.HashMap.empty[String, mutable.ArrayBuffer[String]]
+        byId.keysIterator.foreach(index)
+
+        private def index(id: String): Unit =
+            val ids = byBase.getOrElseUpdate(ReactiveRegion.baseIdOf(id), mutable.ArrayBuffer.empty[String])
+            if !ids.contains(id) then ids += id
+
+        def indexedPaths: Int                            = byBase.size
+        def size: Int                                    = byId.size
+        def contains(id: String): Boolean                = byId.contains(id)
+        def get(id: String): Option[Endpoints]           = byId.get(id)
+        def apply(id: String): Endpoints                 = byId(id)
+        def getOrElse(id: String, default: => Endpoints) = byId.getOrElse(id, default)
+        def iterator: Iterator[(String, Endpoints)]      = byId.iterator
+
+        def addAll(ranges: mutable.HashMap[String, Endpoints]): Unit =
+            ranges.foreachEntry { (id, endpoints) =>
+                byId.update(id, endpoints)
+                index(id)
+            }
+
+        def remove(id: String): Unit =
+            if byId.remove(id).nonEmpty then
+                val base = ReactiveRegion.baseIdOf(id)
+                byBase.get(base).foreach { ids =>
+                    ids -= id
+                    if ids.isEmpty then discard(byBase.remove(base))
+                }
+
+        def clear(): Unit =
+            byId.clear()
+            byBase.clear()
+
+        /** The most deeply nested range that owns `path`. */
+        def innermostAt(path: Seq[String]): Maybe[Endpoints] =
+            byBase.get(ReactiveRegion.htmlId(path)) match
+                case None      => Absent
+                case Some(ids) =>
+                    var best = ids(0)
+                    var i    = 1
+                    while i < ids.length do
+                        // The depth suffix is decimal and the bare id is a prefix of every suffixed one, so a deeper
+                        // range has the longer id, and of two ids of one length the greater lies deeper.
+                        val id = ids(i)
+                        if id.length > best.length || (id.length == best.length && id > best) then best = id
+                        i += 1
+                    end while
+                    Present(byId(best))
+        end innermostAt
+    end RangeTable
+
+    private object RangeTable:
+        def apply(ranges: mutable.HashMap[String, Endpoints]): RangeTable = new RangeTable(ranges)
+
     /** What a row-level patch tells the registry, so the registry follows the patch instead of re-reading the list.
       *
       * `retire` must be called before the patch mutates a logical child it is about to repaint or remove: a morph
@@ -708,73 +776,6 @@ private[kyo] object DomReactiveRegions:
             node = following
         end while
     end eachSpanNode
-
-    /** The live ranges by id, and the ids of each path.
-      *
-      * A range id encodes its path ([[ReactiveRegion.htmlId]]), so the range of a path is found by ENCODING the path
-      * once and reading the table. Decoding every held id to compare paths costs the size of the registry times the
-      * length of an id, per lookup: a bound text write in a thousand-row table spent 4.4 million hex-digit decodes
-      * finding its one text node.
-      *
-      * One path can own several ranges: a region nested transparently in another shares its path and differs only
-      * in the depth suffix. `byBase` keeps those together under the depth-less id, in no particular order; the
-      * depth is read off the id when one is picked. Every mutation goes through here so the two maps cannot drift.
-      */
-    final private class RangeTable private (byId: mutable.HashMap[String, Endpoints]):
-
-        private val byBase = mutable.HashMap.empty[String, mutable.ArrayBuffer[String]]
-        byId.keysIterator.foreach(index)
-
-        private def index(id: String): Unit =
-            val ids = byBase.getOrElseUpdate(ReactiveRegion.baseIdOf(id), mutable.ArrayBuffer.empty[String])
-            if !ids.contains(id) then ids += id
-
-        def indexedPaths: Int                            = byBase.size
-        def size: Int                                    = byId.size
-        def contains(id: String): Boolean                = byId.contains(id)
-        def get(id: String): Option[Endpoints]           = byId.get(id)
-        def apply(id: String): Endpoints                 = byId(id)
-        def getOrElse(id: String, default: => Endpoints) = byId.getOrElse(id, default)
-        def iterator: Iterator[(String, Endpoints)]      = byId.iterator
-
-        def addAll(ranges: mutable.HashMap[String, Endpoints]): Unit =
-            ranges.foreachEntry { (id, endpoints) =>
-                byId.update(id, endpoints)
-                index(id)
-            }
-
-        def remove(id: String): Unit =
-            if byId.remove(id).nonEmpty then
-                val base = ReactiveRegion.baseIdOf(id)
-                byBase.get(base).foreach { ids =>
-                    ids -= id
-                    if ids.isEmpty then discard(byBase.remove(base))
-                }
-
-        def clear(): Unit =
-            byId.clear()
-            byBase.clear()
-
-        /** The most deeply nested range that owns `path`. */
-        def innermostAt(path: Seq[String]): Maybe[Endpoints] =
-            byBase.get(ReactiveRegion.htmlId(path)) match
-                case None      => Absent
-                case Some(ids) =>
-                    var best = ids(0)
-                    var i    = 1
-                    while i < ids.length do
-                        // The depth suffix is decimal and the bare id is a prefix of every suffixed one, so a deeper
-                        // range has the longer id, and of two ids of one length the greater lies deeper.
-                        val id = ids(i)
-                        if id.length > best.length || (id.length == best.length && id > best) then best = id
-                        i += 1
-                    end while
-                    Present(byId(best))
-        end innermostAt
-    end RangeTable
-
-    private object RangeTable:
-        def apply(ranges: mutable.HashMap[String, Endpoints]): RangeTable = new RangeTable(ranges)
 
     /** Everything a range morph reconciles against.
       *

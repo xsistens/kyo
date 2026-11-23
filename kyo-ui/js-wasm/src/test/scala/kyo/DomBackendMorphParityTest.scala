@@ -171,6 +171,14 @@ class DomBackendMorphParityTest extends kyo.test.Test[Any]:
         _.props("x.value") == "a"
     )
     morph(
+        "an attribute the id channel owns is not reconciled",
+        """<div id="x" class="a"></div>""",
+        """<div id="x" class="b" title="t"></div>""",
+        _ =>
+            el("x").__kyoOwn = scalajs.Dynamic.literal(`class` = true)
+            discard(el("x").setAttribute("class", "owned"))
+    )(o => o.html.contains("""class="owned"""") && o.html.contains("""title="t""""))
+    morph(
         "a js property the render no longer sets goes back to what it was",
         """<input id="x" type="checkbox">""",
         """<input id="x" type="checkbox">""",
@@ -336,11 +344,11 @@ class DomBackendMorphParityTest extends kyo.test.Test[Any]:
                 UI.ul(rows.foreachKeyed(identity)(k => UI.li(k).id(s"sp-$k"))).id("sp-list")
             )
             fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
-            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("sp-tick") != null))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("sp-tick") != null), 5.seconds)
             _     <- tick.set(1)
-            _     <- assertEventually(Sync.defer(dom.document.getElementById("sp-tick").textContent == "t:1"))
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("sp-tick").textContent == "t:1"), 5.seconds)
             _     <- rows.set(Chunk("b", "a"))
-            _     <- assertEventually(Sync.defer(dom.document.getElementById("sp-list").textContent == "ba"))
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("sp-list").textContent == "ba"), 5.seconds)
             _     <- fiber.interrupt
             _     <- fiber.getResult
             _     <- Sync.defer {

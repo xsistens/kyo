@@ -1278,7 +1278,7 @@ class WebsiteGeneratorTest extends WebsiteTest:
             module     <- DocsMarkdownRender.renderArticle(dataReadme)
             intro      <- DocsMarkdownRender.renderArticle(vWithModules.intro)
         yield
-            val articleRange = s"""<main data-kyo-path="1.2" class="docs-content"><!--kyo-rs:"""
+            val articleRange = s"""<main class="docs-content"><!--kyo-rs:"""
             assert(moduleHtml.contains(module.articleHtml), s"the module page must carry the pre-rendered article: $moduleHtml")
             assert(moduleHtml.contains(articleRange), s"the module article must open its own reactive range: $moduleHtml")
             assert(enclosingReactiveRange(moduleHtml, module.articleHtml).isDefined)

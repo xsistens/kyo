@@ -1,6 +1,8 @@
 package kyo.internal
 
 import kyo.*
+import kyo.internal.DomReactiveRegions.eachSpanNode
+import kyo.internal.DomReactiveRegions.spanClose
 import org.scalajs.dom
 import org.scalajs.dom.document
 import scala.annotation.tailrec
@@ -134,7 +136,7 @@ private[kyo] object DomBackend:
         scope: DomReactiveRegions.PatchScope,
         path: Seq[String],
         rows: Seq[ListRow]
-    ): Boolean =
+    )(using Frame): Boolean =
         val pathAttr = path.mkString(".")
         val keys     = js.Array[String]()
         val changed  = js.Array[Boolean]()
@@ -350,9 +352,9 @@ private[kyo] object DomBackend:
     end Attachments
 
     private def mountInto(ui: UI, container: dom.Element, diagnostics: MountDiagnostics)(using Frame): Unit < (Async & Scope) =
+        val session     = new LocalSession
         val attachments = new Attachments(container)
         val listeners   = new BodyListeners
-        val session     = new LocalSession
         for
             _        <- Sync.defer(discard(morphScript))
             _        <- DomStyleSheet.injectBase()
@@ -806,9 +808,10 @@ private[kyo] object DomBackend:
         ): Unit < Async =
             Sync.defer(stylePatchNow(path, set, removed))
 
-        // A bound text region: the value goes into the text node as-is. It receives the string itself, not rendered html,
-        // and a text node holds literal characters, so every string is writable here with no escaping and no parser. An
-        // unpainted path is a silent no-op, exactly as for the attribute patches above.
+        // A bound text region: the value goes into the text node as-is. Unlike patchLoneText, which receives
+        // rendered html and must therefore refuse payloads carrying `<` or `&`, this receives the string itself,
+        // and a text node holds literal characters, so every string is writable here with no escaping and no
+        // parser. An unpainted path is a silent no-op, exactly as for the attribute patches above.
         private def textPatchNow(path: Seq[String], value: String): Unit =
             discard(regions.setTextAt(path, value))
 
