@@ -841,11 +841,11 @@ private[kyo] object HtmlRenderer:
         attrs.portal.foreach(v => if v then w(sb, """ data-kyo-portal="1""""))
         val css = inlineCss(attrs.uiStyle, pseudoClass.nonEmpty, channelStyle)
         if css.nonEmpty then w(sb, s""" style="${esc(css)}"""")
+        // The emptiness gates match reactiveTrueClasses below: sorting for deterministic output costs a
+        // Seq copy and a sort per element, and on a plain element every one of these maps is empty.
         // A static value is left out where a channel of the same name is bound: the channel is the value (see
         // renderElementAttrs on precedence). The name is only built when the element has a channel at all.
         val channelled = attrs.reactiveAttrs.nonEmpty
-        // The emptiness gates match reactiveTrueClasses below: sorting for deterministic output costs a
-        // Seq copy and a sort per element, and on a plain element every one of these maps is empty.
         if attrs.ariaAttrs.nonEmpty then
             attrs.ariaAttrs.toSeq.sortBy(_._1).foreach { case (name, value) =>
                 if !channelled || !ownsAttr(attrs, s"aria-$name") then w(sb, s""" aria-$name="${esc(value)}"""")
@@ -1561,104 +1561,9 @@ private[kyo] object HtmlRenderer:
           |  var sid=__kyoSpanId(node);if(sid!==null)into.push(sid);
           |  for(var child=node.firstChild;child;child=child.nextSibling)__kyoCollectStartIds(child,into);
           |}
-          |// Reconcile a list region against a row order rather than a rendered document: the payload holds only the
-          |// rows that changed, every other row is named by key and stays where it is. The walk is the same
-          |// two-ended keyed pass __kyoMorphRun uses, with the order standing in for the `to` side. Twin of
-          |// applyListPatch in DomBackend; keep the two in lockstep.
-          |//
-          |// ReactiveUI refused the emission already if the rows are not addressable by key, so there is nothing to
-          |// check and nothing to fall back to: a frame that left the untouched rows out gives us nothing to rebuild
-          |// them from. A row the live range does not hold is therefore a protocol error, not a repaint trigger.
-          |function __kyoApplyList(id,keys,changedHtml){
-          |  if(!kyoRangeId(id))kyoRangeFail("malformed replacement id: "+id);
-          |  if(!__kyoRanges)kyoRangeFail("registry is closed");
-          |  var endpoints=__kyoRanges.get(id);
-          |  if(!endpoints)kyoRangeFail("unknown id: "+id);
-          |  if(kyoRangeMarker(endpoints.start,"kyo-rs:")!==id||endpoints.end.data!=="kyo-re:"+id)kyoRangeFail("markers are corrupted: "+id);
-          |  var parent=endpoints.start.parentNode;
-          |  if(!parent||parent!==endpoints.end.parentNode)kyoRangeFail("anchors are no longer siblings: "+id);
-          |  var range=document.createRange();range.setStartAfter(endpoints.start);range.setEndBefore(endpoints.end);
-          |  var fragment=changedHtml.length?range.createContextualFragment(changedHtml):null;
-          |  var parsedKeyed={},parsed=fragment?fragment.firstChild:null;
-          |  while(parsed){var pk=__kyoLogicalKey(parsed);if(pk!==null)parsedKeyed[pk]=parsed;parsed=__kyoLogicalNext(parsed);}
-          |  var fromNodes=[],fromKeys=[];
-          |  __kyoCollectLogical(endpoints.start.nextSibling,endpoints.end,fromNodes,fromKeys);
-          |  var fromKeyed={},i;
-          |  for(i=0;i<fromKeys.length;i++)if(fromKeys[i]!==null)fromKeyed[fromKeys[i]]=fromNodes[i];
-          |  var prefix=__kyoRangeIdPath(id);if(prefix===null)prefix="";
-          |  var toKeys=[],toNodes=[],targetKeys={};
-          |  for(i=0;i<keys.length;i++){
-          |    var full=prefix.length?prefix+"."+keys[i]:keys[i];
-          |    toKeys.push(full);targetKeys[full]=true;
-          |    toNodes.push(parsedKeyed[full]||null);
-          |  }
-          |  // Focus spans the whole region: a retained row keeps its DOM, but moving it is a remove and an insert,
-          |  // which blurs whatever it holds, so a pure reorder is precisely the case this must survive.
-          |  var oldRoots=kyoRangeRoots(endpoints.start,endpoints.end),active=document.activeElement;
-          |  var inside=active&&active!==document.body&&kyoRangeContains(oldRoots,active);
-          |  var activeLocator=inside?kyoRangeFocusLocator(oldRoots,active):null;
-          |  var ss=inside&&typeof active.selectionStart==="number"?active.selectionStart:null;
-          |  var se=inside&&typeof active.selectionEnd==="number"?active.selectionEnd:null;
-          |  var disturbed=[],repainted=[];
-          |  for(i=0;i<fromKeys.length;i++){
-          |    var fk=fromKeys[i];
-          |    if(fk===null||!Object.prototype.hasOwnProperty.call(targetKeys,fk))disturbed.push(fromNodes[i]);
-          |  }
-          |  for(i=0;i<toKeys.length;i++)if(toNodes[i]){var lv=fromKeyed[toKeys[i]];if(lv){repainted.push(lv);disturbed.push(lv);}}
-          |  var survivors=fragment?kyoLeavePathsRoots(kyoRangeFragmentRoots(fragment)):{};
-          |  var oldEnter=kyoEnterPathsRoots(__kyoLogicalElements(repainted));
-          |  var oldFocus=kyoFocusPathsRoots(__kyoLogicalElements(repainted));
-          |  var ghosts=kyoLeavePrepareRoots(__kyoLogicalElements(disturbed),survivors);
-          |  var touched=[];
-          |  // Patches a row in place or replaces it, and answers the node that now starts it.
-          |  function place(from,ti){var to=toNodes[ti];if(!to)return from;var at=__kyoPatchLogical(parent,from,to);
-          |    if(at!==from){var els=__kyoLogicalElements([at]);for(var q=0;q<els.length;q++)touched.push(els[q]);}
-          |    else if(from.nodeType===1)touched.push(from);
-          |    return at;}
-          |  var head=0,tail=fromNodes.length-1,toHead=0,toTail=toKeys.length-1,tailBoundary=endpoints.end,scanning=true;
-          |  while(scanning&&head<=tail&&toHead<=toTail){
-          |    if(fromKeys[head]===null||fromKeys[tail]===null)scanning=false;
-          |    else if(fromKeys[head]===toKeys[toHead]){place(fromNodes[head],toHead);head++;toHead++;}
-          |    else if(fromKeys[tail]===toKeys[toTail]){tailBoundary=place(fromNodes[tail],toTail);tail--;toTail--;}
-          |    else if(fromKeys[head]===toKeys[toTail]){
-          |      if(head!==tail)__kyoMoveLogicalBefore(parent,fromNodes[head],tailBoundary);
-          |      tailBoundary=place(fromNodes[head],toTail);head++;toTail--;}
-          |    else if(fromKeys[tail]===toKeys[toHead]){
-          |      if(tail!==head)__kyoMoveLogicalBefore(parent,fromNodes[tail],fromNodes[head]);
-          |      place(fromNodes[tail],toHead);tail--;toHead++;}
-          |    else scanning=false;
-          |  }
-          |  var cursor=head<=tail?fromNodes[head]:tailBoundary;
-          |  for(i=toHead;i<=toTail;i++){
-          |    var key=toKeys[i],live2=fromKeyed[key];
-          |    if(live2){if(live2!==cursor)__kyoMoveLogicalBefore(parent,live2,cursor);else cursor=__kyoLogicalNext(cursor);
-          |      place(live2,i);}
-          |    else if(toNodes[i]){
-          |      var ins=__kyoLogicalElements([__kyoInsertLogicalClone(parent,toNodes[i],cursor)]);for(var q=0;q<ins.length;q++)touched.push(ins[q]);}
-          |    else kyoRangeFail("row is neither retained nor rendered: "+key);
-          |  }
-          |  for(i=0;i<fromKeys.length;i++){
-          |    var lk=fromKeys[i];
-          |    if((lk===null||!Object.prototype.hasOwnProperty.call(targetKeys,lk))&&document.contains(fromNodes[i]))
-          |      __kyoRemoveLogical(parent,fromNodes[i]);
-          |  }
-          |  var finalRoots=kyoRangeRoots(endpoints.start,endpoints.end);
-          |  for(i=0;i<finalRoots.length;i++)applyJsProps(finalRoots[i]);
-          |  var restored=kyoRangeResolveFocus(finalRoots,activeLocator);
-          |  if(restored){restored.focus({preventScroll:true});if(ss!==null)kyoSetCaret(restored,ss,se);}
-          |  kyoSeedEnterRoots(touched,oldEnter);kyoSeedFocusRoots(touched,oldFocus);kyoSpawnGhosts(ghosts);
-          |  for(i=0;i<touched.length;i++)__kyoAdoptPortals(touched[i]);
-          |  __kyoRetireOrphanTwins();sweepFocusAuto();sweepScrollAuto(true);
-          |}
-          |// The elements of a set of logical children, each span contributing the elements it brackets.
-          |function __kyoLogicalElements(nodes){
-          |  var out=[];
-          |  for(var i=0;i<nodes.length;i++)__kyoEachSpanNode(nodes[i],function(n){if(n.nodeType===1)out.push(n);});
-          |  return out;
-          |}
-          |// The server's list patch: the registry lookup and its account of the patch around the walk in MorphScript. ReactiveUI refused the emission already if the rows
-          |// are not addressable by key, so there is nothing to fall back to: a frame that left the untouched rows out gives us nothing to
-          |// rebuild them from, and a row the live range does not hold is a protocol error.
+          |// The server's list patch: the registry lookup and its account of the patch around the walk in MorphScript. ReactiveUI refused the
+          |// emission already if the rows are not addressable by key, so there is nothing to fall back to: a frame that left the untouched
+          |// rows out gives us nothing to rebuild them from, and a row the live range does not hold is a protocol error.
           |function __kyoApplyList(id,keys,changedHtml){
           |  if(!kyoRangeId(id))kyoRangeFail("malformed replacement id: "+id);
           |  if(!__kyoRanges)kyoRangeFail("registry is closed");
@@ -1727,6 +1632,17 @@ private[kyo] object HtmlRenderer:
           |  var s=pn.closest("select");if(s&&s.__kyoProps&&s.__kyoProps.value&&s.value!==s.__kyoProps.value.value)
           |    s.value=s.__kyoProps.value.value;
           |}
+          |// The ids of the registered ranges inside the range, nested at any depth, read off the comments between its
+          |// anchors: the cost is the size of the range, not of the registry. An id counts only when its entry opens at
+          |// the marker found. Twin of nestedIn in DomReactiveRegions.
+          |function kyoRangeNested(endpoints){
+          |  var found=new Set(),walker=document.createTreeWalker(endpoints.start.parentNode,128,null,false);
+          |  walker.currentNode=endpoints.start;
+          |  for(var node=walker.nextNode();node&&node!==endpoints.end;node=walker.nextNode()){
+          |    var key=__kyoSpanId(node);if(key===null)continue;
+          |    var pair=__kyoRanges.get(key);if(pair&&pair.start===node)found.add(key);}
+          |  return found;
+          |}
           |// Markup equality alone misses dirty form properties. An unapplied property carrier still needs the insertion hooks.
           |function kyoRangeSameElementState(a,b){
           |  for(var i=0;i<a.attributes.length;i++)if(a.attributes[i].name.indexOf("data-kyo-prop-")===0)return false;
@@ -1750,17 +1666,6 @@ private[kyo] object HtmlRenderer:
           |  var a=start.nextSibling,b=fragment.firstChild;
           |  while(a!==end&&b){if(!kyoRangeSameNode(a,b))return false;a=a.nextSibling;b=b.nextSibling;}
           |  return a===end&&b===null;
-          |}
-          |// The ids of the registered ranges inside the range, nested at any depth, read off the comments between its
-          |// anchors: the cost is the size of the range, not of the registry. An id counts only when its entry opens at
-          |// the marker found. Twin of nestedIn in DomReactiveRegions.
-          |function kyoRangeNested(endpoints){
-          |  var found=new Set(),walker=document.createTreeWalker(endpoints.start.parentNode,128,null,false);
-          |  walker.currentNode=endpoints.start;
-          |  for(var node=walker.nextNode();node&&node!==endpoints.end;node=walker.nextNode()){
-          |    var key=__kyoSpanId(node);if(key===null)continue;
-          |    var pair=__kyoRanges.get(key);if(pair&&pair.start===node)found.add(key);}
-          |  return found;
           |}
           |function kyoRangeReplace(id,html){
           |  if(!kyoRangeId(id))kyoRangeFail("malformed replacement id: "+id);
@@ -1854,6 +1759,9 @@ private[kyo] object HtmlRenderer:
     private val jsImplicitSubmit   = KeyPolicy.jsKeyTest(KeyPolicy.implicitSubmissionKeys)
     private val jsMayActivate      = KeyPolicy.jsKeyTest(KeyPolicy.anyActivationKeys)
 
+    /** The server-push client script. `private[kyo]` so KeyPolicyTest can hold the two copies of the
+      * keyboard rules against each other; nothing outside this module builds it.
+      */
     /** The client's transport, registry and path helpers. A template of its own, with no arguments, because
       * `clientJs` is one interpolated template and the JVM keeps a template's literal text as a single constant of
       * at most 64 KB; an `s` template like the outer one, so the escapes it holds read the same way there and here.
@@ -2067,9 +1975,6 @@ private[kyo] object HtmlRenderer:
            |function __kyoPathSel(p){return __kyoAttrSel('data-kyo-path',p);}
            |""".stripMargin
 
-    /** The server-push client script. `private[kyo]` so KeyPolicyTest can hold the two copies of the
-      * keyboard rules against each other; nothing outside this module builds it.
-      */
     /** The server-push client script for a page under `basePath`.
       *
       * Built once. The template is rendered with a placeholder for the base path and its comment lines are dropped: they explain

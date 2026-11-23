@@ -6,7 +6,6 @@ import MountRegions.*
 import kyo.*
 import kyo.Svg
 import kyo.UI.*
-import kyo.kernel.ContextEffect
 
 /** Normalized reactive UI node. */
 private[kyo] case class ReactiveUI(
@@ -559,6 +558,8 @@ private[kyo] object ReactiveUI:
                         if targetPath.size > basePath.size then
                             val segment = targetPath(basePath.size)
                             val idx     = Maybe.fromOption(keyMap.get(segment)).orElse(Maybe.fromOption(segment.toIntOption))
+                            // Every child has a handle, so a segment matching none names a child that has left the page
+                            // since the client sent the event; like a missing child of an element, it reaches nothing.
                             idx.filter(i => i >= 0 && i < allHandles.length).map(allHandles(_))
                                 .fold(false: Boolean < Async)(h => h(targetPath, event))
                         else true
@@ -794,7 +795,6 @@ private[kyo] object ReactiveUI:
                             dispatch
                         )
                 }
-            end if
         }
     end subscribeScoped
 
@@ -888,6 +888,25 @@ private[kyo] object ReactiveUI:
             .andThen(channels.style.fold(Kyo.unit: Unit < (Async & Scope))(bindStyle(path, _, rendered.style, exchange, releases)))
     end forkChannelObservers
 
+    /** Bind one channel to its synchronous sink. A signal with a callback path runs the write inside the writer's own `set` and
+      * registers its release (see registerRelease); one without goes through `Signal.onChange`, which runs it on a fiber of the
+      * current Scope.
+      */
+    private def bindChannel[A](sig: Signal[A], rendered: Maybe[A], write: A => Unit, releases: Maybe[RowScope])(
+        using
+        CanEqual[A, A],
+        Frame
+    ): Unit < (Sync & Scope) =
+        Log.use { log =>
+            Sync.Unsafe.defer {
+                // A failing write is logged to the Log bound here, as `onChange` logs one: the write runs inside the writer's `set`.
+                val report: Throwable => Unit = ex => log.unsafe.error("kyo-ui: channel binding failed", ex)
+                sig.unsafeObserveProjected[A](identity, rendered, write, report) match
+                    case Present(release) => registerRelease(release, releases)
+                    case Absent           => sig.onChange(rendered)(v => Sync.defer(write(v)))
+            }
+        }
+
     /** Where a callback binding's release goes: into the row's scope when one is collecting, else onto the Scope. */
     private def registerRelease(release: () => Unit, releases: Maybe[RowScope])(using Frame): Unit < (Sync & Scope) =
         releases match
@@ -914,8 +933,6 @@ private[kyo] object ReactiveUI:
             regionMounts.beginWalk(kids, keys)
                 .andThen(subscribeWalked(kids, keys, regionMounts, exchange, signalChangeTime, dispatch))
         end subscribeKids
-        // Per-value setup, run inside each value's fresh Scope: render the region and fork its children into that scope, so the next
-        // value (or an interrupt) tears them down by cascade.
         def renderValue(current: UI): Unit < (Async & Scope) =
             for
                 now      <- Clock.now
@@ -1010,25 +1027,6 @@ private[kyo] object ReactiveUI:
                 )).unit
         end match
     end bindStyle
-
-    /** Binds a channel's synchronous `write` as a callback on `sig`: inside the writer's `set` where the signal provides that path, through
-      * `onChange` where it does not. The Log is read here, where the subscription is made: a write runs inside somebody else's `set`, where
-      * none can be read, so a failing write is logged to the Log bound at the subscription. A callback's release goes to the row that
-      * collects it, or onto the Scope (see registerRelease).
-      */
-    private def bindChannel[A](sig: Signal[A], rendered: Maybe[A], write: A => Unit, releases: Maybe[RowScope])(using
-        CanEqual[A, A],
-        Frame
-    ): Unit < (Sync & Scope) =
-        Log.use { log =>
-            Sync.Unsafe.defer {
-                val report: Throwable => Unit = ex => log.unsafe.error("kyo-ui: channel binding failed", ex)
-                sig.unsafeObserveProjected[A](identity, rendered, write, report) match
-                    case Present(release) => registerRelease(release, releases)
-                    case Absent           => sig.onChange(rendered)(v => Sync.defer(write(v)))
-            }
-        }
-    end bindChannel
 
     // ---- Shared UI tree utilities (used by both backends) ----
 

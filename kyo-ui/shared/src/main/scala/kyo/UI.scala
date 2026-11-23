@@ -1,7 +1,6 @@
 package kyo
 
 import kyo.internal.HtmlRenderer
-import kyo.internal.MountSupervision
 import kyo.internal.ReactiveRegion
 import kyo.internal.ReactiveUI
 import kyo.internal.Reducible
@@ -366,7 +365,7 @@ object UI:
         reduce: Reducible[Abort[E]],
         frame: Frame
     ): Fiber[A, reduce.SReduced & S2] < (Sync & S & Scope) =
-        MountSupervision.local.use {
+        kyo.internal.MountSupervision.local.use {
             case Absent               => Fiber.init[E, A, S, S2](v)
             case Present(supervision) =>
                 Fiber.init[E, A, S, S2](v).map(fiber => fiber.onComplete(supervision.report(_)).andThen(fiber))
@@ -677,8 +676,8 @@ object UI:
         end observeViewportById
 
         /** Sends `op`, which addresses an element by id. From a `UI.mounted` effect, or a fiber it forked, it goes out once the content
-          * that mount shows is on the page, behind the paints that bring it there, and is dropped with that content if it never shows.
-          * From anywhere else it goes out at once.
+          * that mount shows is on the page, behind the paints that bring it there, and is dropped with that content if it never shows;
+          * `missing` then answers it the way a page without the element would. From anywhere else it goes out at once.
           */
         private def sendAbout(op: internal.HtmlOp)(using Frame): Unit < Async =
             sendWhenShown(internal.HeldCommand(emit(op), Kyo.unit))
@@ -692,7 +691,7 @@ object UI:
             ))
 
         private def sendWhenShown(command: internal.HeldCommand)(using Frame): Unit < Async =
-            MountSupervision.local.use {
+            internal.MountSupervision.local.use {
                 case Present(supervision) => supervision.afterShown.send(command)
                 case Absent               => command.send
             }

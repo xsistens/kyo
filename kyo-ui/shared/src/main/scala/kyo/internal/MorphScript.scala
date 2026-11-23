@@ -2,12 +2,12 @@ package kyo.internal
 
 /** The one implementation of the range morph and the list patch, as JavaScript text both clients run.
   *
-  * A morph is a walk over the DOM with its decisions in the walk, so it cannot be data, and no translation from Scala to JavaScript exists in
-  * this build. The text is the single source: the body of a factory over `h`, the client's hooks, which answers what a
+  * A morph is a walk over the DOM with its decisions in the walk, so it cannot be data the way [[KeyPolicy]] is, and no translation from Scala
+  * to JavaScript exists in this build. The text is the single source: the body of a factory over `h`, the client's hooks, which answers what a
   * client calls. The server-push page installs it in its script; the browser mount builds it with `Function`. What differs between the
   * clients is only behind `h`: how a field's property is written, where a portal's twin is, how a rewrite tells the registry, how an
-  * animation starts, whether an element's
-  * content can be an attach hook's, and what a list patch reads before it moves anything and does after. The hooks are written where their client lives, in [[HtmlRenderer]] and `DomBackend`.
+  * animation starts, whether an element's content can be an attach hook's, and what a list patch reads before it moves anything and does
+  * after. The hooks are written where their client lives, in [[HtmlRenderer]] and `DomBackend`.
   *
   * `DomBackendMorphParityTest` holds a table of cases to the answers both clients have to give.
   */
@@ -132,6 +132,7 @@ private[kyo] object MorphScript:
           |  while(!stop&&n){var next=n.nextSibling;stop=n===last;f(n);n=next;}
           |}
           |function __kyoRemoveLogical(parent,node){__kyoEachSpanNode(node,function(n){parent.removeChild(n);});}
+          |// Returns the first node it inserted, the live counterpart of toNode.
           |function __kyoInsertLogicalClone(parent,toNode,ref){
           |  // SMIL animations only start on a node this pass actually inserted; a reused one is already running.
           |  var first=null;
@@ -337,6 +338,6 @@ private[kyo] object MorphScript:
           |  return true;
           |}
           |return {run:__kyoMorphRun,adoptSlots:__kyoAdoptSlots,applyList:__kyoApplyListTo,spanId:__kyoSpanId,logicalNext:__kyoLogicalNext,eachSpanNode:__kyoEachSpanNode};
-""".stripMargin
+          |""".stripMargin
 
 end MorphScript

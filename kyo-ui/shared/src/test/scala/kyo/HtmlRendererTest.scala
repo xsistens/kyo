@@ -935,6 +935,13 @@ class HtmlRendererTest extends UITest:
         }
     }
 
+    "the client script a page ships carries no comment lines, and its own base path" in {
+        val js = kyo.internal.HtmlRenderer.clientJs("/app\\u002fx")
+        assert(!js.linesIterator.exists(_.trim.startsWith("//")))
+        assert(js.contains("var base=\"/app\\u002fx\";"))
+        assert(kyo.internal.HtmlRenderer.clientJs("/other").contains("var base=\"/other\";"))
+    }
+
     "where a channel holds an attribute, the static value of the same name is not written, in either setter order" in {
         // The PRECEDENCE rule above Element.withReactiveAttr: the channel is the value. Written beside it, the static value is a
         // second attribute of the same name, and the browser's parser keeps the first one, so the page shows the static value
@@ -960,13 +967,6 @@ class HtmlRendererTest extends UITest:
             assert(held(frame, "title"), frame)
             assert(held(data1, "data-k") && held(data2, "data-k"), s"$data1 | $data2")
         end for
-    }
-
-    "the client script a page ships carries no comment lines, and its own base path" in {
-        val js = kyo.internal.HtmlRenderer.clientJs("/app\\u002fx")
-        assert(!js.linesIterator.exists(_.trim.startsWith("//")))
-        assert(js.contains("var base=\"/app\\u002fx\";"))
-        assert(kyo.internal.HtmlRenderer.clientJs("/other").contains("var base=\"/other\";"))
     }
 
     "a signal over a Local" - {

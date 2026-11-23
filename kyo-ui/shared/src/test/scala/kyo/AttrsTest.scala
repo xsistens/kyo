@@ -105,8 +105,8 @@ class AttrsTest extends UITest:
             over     <- html(UI.img(ImgSrc.Path("a.png"), "old").alt(alt))
         yield
             val fixed = UI.img(ImgSrc.Path("a.png"), "photo")
-            assert(constant.contains("""src="a.png" alt="photo""""), s"constant $constant")
-            assert(fixed.attrs.reactiveAttrs.isEmpty, "a constant binds no channel")
+            assert(constant.contains("""<img src="a.png" alt="photo" />"""), s"constant $constant")
+            assert(!fixed.attrs.hasChannels, "a constant binds no channel")
             assert(UI.img(src, alt).attrs.reactiveAttrs.keySet == Set("src", "alt"), "each signal is its attribute's channel")
             assert(signaled.contains("""src="a.png"""") && signaled.contains("""alt="photo""""), s"signals written: $signaled")
             // The channel is the value: a constant alt set before it is not written beside it.

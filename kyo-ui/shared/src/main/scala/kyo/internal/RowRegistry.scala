@@ -1,5 +1,6 @@
 package kyo.internal
 
+import DragSessions.*
 import EventDispatch.*
 import ReactiveUI.*
 import kyo.*
@@ -30,7 +31,7 @@ final private[kyo] class RowInstance(
   * region's fiber, a mount), which for a plain row is nothing.
   */
 final private[kyo] class RowScope(val finalizer: Scope.Finalizer):
-    private var releases: List[() => Unit] = Nil
+    private[internal] var releases: List[() => Unit] = Nil
 
     def add(release: () => Unit)(using AllowUnsafe): Unit = releases = release :: releases
 

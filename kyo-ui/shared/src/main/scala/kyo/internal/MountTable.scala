@@ -1,8 +1,10 @@
 package kyo.internal
 
+import DragSessions.*
 import EventDispatch.*
 import MountRegions.*
 import ReactiveUI.*
+import RowRegions.*
 import kyo.*
 import kyo.UI.*
 import kyo.UI.Ast.*
@@ -530,8 +532,8 @@ end MountTable
 
 private[kyo] object MountRegions:
 
-    /** A hash of a call site that reads at most its first 64 characters, where the file, line and column sit. A frame is a long string,
-      * and Scala.js does not cache string hashes, so a full hash would cost its whole length on every use.
+    /** The nodes one render pass of a region owns: its reactive children, and through a constant child (an element that only
+      * carries reactive attributes) that child's own, which the constant node subscribes in the same pass and the same table.
       */
     private[internal] def siteHash(frame: Frame): Int =
         val s   = frame.toString
@@ -566,7 +568,7 @@ private[kyo] object MountRegions:
       * the placeholder its enclosing region just rendered without a visible gap; then a region over the cell follows it. Live content
       * gets its regions and nested mounts subscribed; a snapshot is only painted.
       */
-    private[internal] def subscribeMountContent(
+    private def subscribeMountContent(
         rui: ReactiveUI,
         spec: MountedSpec,
         instance: MountInstance,

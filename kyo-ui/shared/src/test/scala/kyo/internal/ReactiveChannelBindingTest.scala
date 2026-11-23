@@ -113,19 +113,12 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
 
     /** Records the last value each attribute channel patched, by path and name. */
     final private class LastValues:
-        val values   = new java.util.concurrent.ConcurrentHashMap[(Seq[String], String), String]()
-        val exchange = new UIExchange:
-            def onChange(
-                region: ReactiveRegion,
-                path: Seq[String],
-                contentContext: ReactiveRegion.RegionIdentity,
-                parentContext: ReactiveRegion.ParentContext,
-                previous: Maybe[UI],
-                changed: UI
-            )(using Frame): Unit < Async                                                                        = Kyo.unit
-            override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
-                Sync.defer(discard(values.put((path, name), value)))
-        def at(path: Seq[String], name: String): Maybe[String] = Maybe(values.get((path, name)))
+        val exchange                                           = new RecordingExchange
+        def at(path: Seq[String], name: String): Maybe[String] =
+            exchange.recorded.foldLeft(Maybe.empty[String]) {
+                case (_, op: Op.Attr) if op.path == path && op.name == name => Present(op.value)
+                case (last, _)                                              => last
+            }
     end LastValues
 
     "a channel on the root a region painted first still patches" in {

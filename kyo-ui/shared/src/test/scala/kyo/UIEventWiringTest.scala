@@ -6,6 +6,7 @@ import kyo.internal.HtmlRenderer
 import kyo.internal.MouseEventData
 import kyo.internal.ReactiveRegion
 import kyo.internal.ReactiveUI
+import kyo.internal.RecordingExchange
 import kyo.internal.UIEvent
 import kyo.internal.UIExchange
 
@@ -1425,20 +1426,13 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
             for
                 html    <- HtmlRenderer.render(ui, Seq.empty)
                 painted <- Channel.init[Unit](8)
-                exchange = new UIExchange:
-                    def onChange(
-                        region: ReactiveRegion,
-                        path: Seq[String],
-                        context: ReactiveRegion.RegionIdentity,
-                        parentContext: ReactiveRegion.ParentContext,
-                        previous: Maybe[UI],
-                        changed: UI
-                    )(using Frame): Unit < Async = Abort.run[Closed](painted.put(())).unit
+                exchange = new RecordingExchange(beforePaint = (_, _) => Abort.run[Closed](painted.put(())).unit)
                 root   <- ReactiveUI.normalize(ui, Seq.empty)
                 sub    <- ReactiveUI.subscribe(root, exchange)
                 _      <- change
                 _      <- painted.take
                 counts <- Kyo.foreach(Chunk.from(ids)) { id =>
+                    // The address the client clicks an element by: the `data-kyo-path` of the tag carrying the id.
                     val tag  = ("""<[^>]*\bid="""" + id + """"[^>]*>""").r.findFirstIn(html).get
                     val path = """data-kyo-path="([^"]*)"""".r.findFirstMatchIn(tag).get.group(1).split('.').toSeq
                     sub.handle(path, UIEvent.Click(path, MouseEventData(UI.Modifiers.none, Absent))).andThen(count)
